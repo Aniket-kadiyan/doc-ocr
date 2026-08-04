@@ -194,8 +194,8 @@ def round_for_json(value: float, digits: int = 6) -> int | float:
 
 
 def contains_angle_symbols(text: str) -> bool:
-    """Angle specifications stay text inputs rather than numeric ranges."""
-    return any(symbol in text for symbol in ["°", "'", '"'])
+    """Return whether text contains degree, minute, or second markers."""
+    return any(symbol in text for symbol in ["°", "'", '"', "′", "″"])
 
 
 def first_number(text: str) -> float | None:
@@ -206,19 +206,56 @@ def first_number(text: str) -> float | None:
     return float(match.group(0)) if match else None
 
 
+def nominal_value_for_range(value_text: str) -> float | None:
+    """Return a decimal-degree nominal for angles, or the first normal number.
+
+    Valid degree/minute/second forms preserve readable minutes and seconds.
+    If anything after the degree marker is malformed, only the degree value is
+    used. The original OCR/display text is never changed.
+    """
+    text = str(value_text or "").strip()
+    if not text:
+        return None
+
+    angle_match = re.search(r"([-+]?\d+(?:\.\d+)?)\s*°", text)
+    if angle_match is None:
+        return first_number(text)
+
+    degrees = float(angle_match.group(1))
+    remainder = text[angle_match.end():].strip()
+    if not remainder:
+        return degrees
+
+    dms_match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*['′]"
+        r'(?:\s*(\d+(?:\.\d+)?)\s*["″])?',
+        remainder,
+    )
+    if dms_match is None:
+        return degrees
+
+    minutes = float(dms_match.group(1))
+    seconds = float(dms_match.group(2) or 0)
+    if not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        return degrees
+
+    fraction = minutes / 60 + seconds / 3600
+    return degrees - fraction if degrees < 0 else degrees + fraction
+
+
 def parse_tolerance_text(tolerance_text: str) -> tuple[float, float] | None:
     """Return (lower, upper), rejecting non-empty malformed expressions."""
     text = str(tolerance_text or "").strip()
     if not text:
         return None
 
-    plain_match = re.fullmatch(rf"({_TOLERANCE_NUMBER})", text)
+    plain_match = re.fullmatch(rf"({_TOLERANCE_NUMBER})\s*°?", text)
     if plain_match:
         tolerance = float(plain_match.group(1))
         return tolerance, tolerance
 
     plus_minus_match = re.fullmatch(
-        rf"±\s*({_TOLERANCE_NUMBER})",
+        rf"±\s*({_TOLERANCE_NUMBER})\s*°?",
         text,
     )
     if plus_minus_match:
@@ -226,7 +263,8 @@ def parse_tolerance_text(tolerance_text: str) -> tuple[float, float] | None:
         return tolerance, tolerance
 
     asymmetric_match = re.fullmatch(
-        rf"\+\s*({_TOLERANCE_NUMBER})\s*,?\s*-\s*({_TOLERANCE_NUMBER})",
+        rf"\+\s*({_TOLERANCE_NUMBER})\s*°?\s*,?\s*"
+        rf"-\s*({_TOLERANCE_NUMBER})\s*°?",
         text,
     )
     if asymmetric_match:
@@ -336,11 +374,7 @@ def parse_range(
     value_text = str(value_text or "").strip()
     tolerance_text = str(tolerance_text or "").strip()
 
-    # Angle handling remains deliberately unchanged for the next milestone.
-    if contains_angle_symbols(value_text):
-        return None
-
-    nominal = first_number(value_text)
+    nominal = nominal_value_for_range(value_text)
     parsed_tolerance = parse_tolerance_text(tolerance_text)
     if nominal is not None and parsed_tolerance is not None:
         lower_tolerance, upper_tolerance = parsed_tolerance
