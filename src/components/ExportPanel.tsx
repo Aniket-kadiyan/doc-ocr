@@ -7,6 +7,7 @@ import {
   exportInspectionJSON,
   exportXML,
   downloadFile,
+  findMalformedToleranceAnnotations,
 } from "@/lib/export";
 import { saveChecksheetTemplate } from "@/lib/checksheetClient";
 import {
@@ -50,6 +51,22 @@ export function ExportPanel() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [menuOpen]);
 
+  const validateToleranceExpressions = (): boolean => {
+    const malformed = findMalformedToleranceAnnotations(annotations);
+    if (malformed.length === 0) return true;
+
+    const numbers = malformed.map((annotation) => annotation.number).join(", ");
+    setMenuOpen(false);
+    setActionStatus({
+      kind: "error",
+      message:
+        `Balloon${malformed.length === 1 ? "" : "s"} ${numbers} ` +
+        `contain${malformed.length === 1 ? "s" : ""} a malformed value or ` +
+        "tolerance expression. Please correct it before saving or exporting.",
+    });
+    return false;
+  };
+
   // Ask for extra inspector-filled columns: first how many, then their names.
   // Returns the list of names ([] for none), or null if the user cancels.
   const askExtraColumns = (minimum = 0): string[] | null => {
@@ -81,6 +98,7 @@ export function ExportPanel() {
   // annotations to IndexedDB first so the tab loads current data, then pass the
   // project id and the inspector's extra columns through the URL.
   const handleLegacyWebView = async () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
@@ -101,6 +119,7 @@ export function ExportPanel() {
   // index.json registration and Digital Checksheet navigation are intentionally
   // deferred to their own milestones.
   const handleTemplateWebView = async () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns(1);
     if (extraColumns === null) return;
@@ -141,6 +160,7 @@ export function ExportPanel() {
   };
 
   const handleJSON = () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
@@ -152,6 +172,7 @@ export function ExportPanel() {
   };
 
   const handleInspectionCSV = () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
@@ -163,6 +184,7 @@ export function ExportPanel() {
   };
 
   const handleXML = () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     downloadFile(
       exportXML(annotations),
@@ -172,6 +194,7 @@ export function ExportPanel() {
   };
 
   const handleVerify = async () => {
+    if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
