@@ -1,0 +1,23 @@
+# Runtime target: CPython 3.13 x64
+
+# HTTP API
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+python-multipart>=0.0.12,<1.0
+
+# Image processing
+Pillow>=11,<13
+
+# PaddleX 3.7.2 requires NumPy >=1.24,<2.4.
+# Pinning prevents pip from installing the incompatible NumPy 2.5.x release.
+numpy==2.3.5
+
+# PaddleX OCR installs and expects this exact OpenCV distribution.
+# Do not also install opencv-python-headless because both provide `cv2`.
+opencv-contrib-python==4.10.0.84
+
+# OCR compatibility set validated on the Windows POC.
+# PaddlePaddle 3.3.1 caused the oneDNN PIR inference failure.
+paddlepaddle==3.2.2
+paddleocr==3.7.0
+paddlex[ocr-core]==3.7.2

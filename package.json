@@ -1,0 +1,38 @@
+{
+  "name": "doc-ocr-box",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "dotenv -e .env.local -- next dev --turbopack",
+    "build": "next build",
+    "start": "dotenv -e .env.local -- next start",
+    "lint": "next lint",
+    "ocr-api": "node scripts/run-ocr.mjs",
+    "ocr-api:debug": "node scripts/run-ocr.mjs --debug",
+    "ocr-api:debug:force": "node scripts/run-ocr.mjs --force"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "konva": "^9.3.20",
+    "next": "^15.3.3",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-konva": "^19.0.5",
+    "uuid": "^11.1.0",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "@types/uuid": "^10.0.0",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.3",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3"
+  }
+}

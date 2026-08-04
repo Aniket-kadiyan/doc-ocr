@@ -1,0 +1,76 @@
+{
+  "data": [
+    {
+      "S.no": "1",
+      "Label": "D3",
+      "Value": "167.90±0.25",
+      "Tolerance": "+0.25, -0.25",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "Method": "",
+      "Tool": "Vernier Caliper"
+    },
+    {
+      "S.no": "2",
+      "Label": "D1",
+      "Value": "144.60±0.25",
+      "Tolerance": "+0.25, -0.25",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "Method": "",
+      "Tool": "Micrometer"
+    },
+    {
+      "S.no": "3",
+      "Label": "D2",
+      "Value": "80",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "Method": "",
+      "Tool": "Height Gauge"
+    },
+    {
+      "S.no": "4",
+      "Label": "D4",
+      "Value": "4.345",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "Method": "",
+      "Tool": "Height Gauge"
+    },
+    {
+      "S.no": "5",
+      "Label": "D5",
+      "Value": "16.00±0.25",
+      "Tolerance": "+0.25, -0.25",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "Method": "",
+      "Tool": "Pressure Gauge"
+    }
+  ],
+  "extra_columns": [
+    "part1",
+    "part2",
+    "part3",
+    "part4",
+    "part5"
+  ]
+}

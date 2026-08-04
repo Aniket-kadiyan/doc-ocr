@@ -1,0 +1,51 @@
+VOICEOVER SCRIPT FOR DIGITAL INSPECTION PLATFORM Video Duration: 1
+Minute 49 Seconds
+
+0:00 – 0:10 Engineering drawings are transformed into a digital
+inspection format. Critical dimensions are identified and organized for
+easy data collection.
+
+0:10 – 0:22 Inspection characteristics are directly linked to the
+drawing, providing complete traceability and quick access to measurement
+information.
+
+0:22 – 0:35 Operators can select any characteristic and capture
+measurement data through a simple and intuitive workflow.
+
+0:35 – 0:48 Values can be entered manually, or transferred automatically
+from Bluetooth measuring instruments.
+
+0:48 – 1:01 Additional information, remarks, and inspection status can
+also be recorded digitally, making documentation faster and more
+reliable.
+
+1:01 – 1:14 The system validates captured values and stores the
+information securely within the digital inspection sheet.
+
+1:14 – 1:27 Measurement records remain connected to their corresponding
+dimensions, ensuring complete visibility throughout the inspection
+process.
+
+1:27 – 1:40 Inspection results are automatically organized, reducing
+paperwork and improving overall efficiency.
+
+1:40 – 1:49 All captured data can be securely stored on the cloud or
+local servers, supporting future analysis and reporting.
+
+Closing Line A smarter approach to digital inspection, delivering
+accuracy, traceability, and seamless data management.
+
+TOOLS TO USE
+
+1.  ElevenLabs https://elevenlabs.io Generate the voiceover MP3 using
+    voice Josh, Adam, or Rachel.
+
+2.  CapCut https://www.capcut.com Import your video and MP3 voiceover
+    and synchronize them.
+
+3.  DaVinci Resolve
+    https://www.blackmagicdesign.com/products/davinciresolve
+    Professional video editing and audio synchronization.
+
+Recommended ElevenLabs Settings Model: Eleven v3 Speed: 0.90x Stability:
+55% Similarity: 85% Speaker Boost: ON Style Exaggeration: 10–15%

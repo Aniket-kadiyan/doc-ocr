@@ -1,0 +1,58 @@
+{
+  "data": [
+    {
+      "S.no": "1",
+      "Label": "B",
+      "Value": "Ø203.20",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "",
+      "Tool": "Micrometer"
+    },
+    {
+      "S.no": "2",
+      "Label": "A",
+      "Value": "Ø174.07±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "",
+      "Tool": "Micrometer"
+    },
+    {
+      "S.no": "3",
+      "Label": "c",
+      "Value": "Ø215.37±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "",
+      "Tool": "Height Gauge"
+    },
+    {
+      "S.no": "4",
+      "Label": "D",
+      "Value": "322°0'40\"",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "",
+      "Tool": "Pressure Gauge"
+    }
+  ],
+  "extra_columns": [
+    "part1",
+    "part2",
+    "part3",
+    "part4"
+  ]
+}

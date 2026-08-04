@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "S.no": "1",
+      "Label": "B",
+      "Value": "32°20'40\"",
+      "Tolerance": "",
+      "Method": "",
+      "Tool": "Vernier Caliper"
+    },
+    {
+      "S.no": "2",
+      "Label": "D",
+      "Value": "Ø174.07±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "Method": "",
+      "Tool": "Micrometer"
+    }
+  ],
+  "extra_columns": [
+    "part1",
+    "part2",
+    "pat3"
+  ]
+}

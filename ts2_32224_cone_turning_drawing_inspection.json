@@ -1,0 +1,82 @@
+{
+  "data": [
+    {
+      "S.no": "1",
+      "Label": "DETAIL",
+      "Value": "58.21±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "part6": "",
+      "Method": "",
+      "Tool": "Height Gauge"
+    },
+    {
+      "S.no": "2",
+      "Label": "SCALE",
+      "Value": "Ø153.45±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "part6": "",
+      "Method": "",
+      "Tool": "Micrometer"
+    },
+    {
+      "S.no": "3",
+      "Label": "SURFACE",
+      "Value": "Ø141.55±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "part6": "",
+      "Method": "",
+      "Tool": "Vernier Caliper"
+    },
+    {
+      "S.no": "4",
+      "Label": "WEIGHT",
+      "Value": "24°31'16\"",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "part6": "",
+      "Method": "",
+      "Tool": "Vernier Caliper"
+    },
+    {
+      "S.no": "5",
+      "Label": "MATERIAL",
+      "Value": "Ø158.09±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "part5": "",
+      "part6": "",
+      "Method": "",
+      "Tool": "Height Gauge"
+    }
+  ],
+  "extra_columns": [
+    "part1",
+    "part2",
+    "part3",
+    "part4",
+    "part5",
+    "part6"
+  ]
+}

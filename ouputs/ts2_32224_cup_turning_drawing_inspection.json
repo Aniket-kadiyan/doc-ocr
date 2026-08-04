@@ -1,0 +1,41 @@
+{
+  "projectName": "TS2 32224 CUP TURNING DRAWING",
+  "columns": [
+    "S.no",
+    "Label",
+    "Value",
+    "Tolerance",
+    "part1",
+    "part2",
+    "part3",
+    "part4",
+    "Method",
+    "Tool"
+  ],
+  "rows": [
+    {
+      "S.no": "1",
+      "Label": "A",
+      "Value": "50,22±0.05",
+      "Tolerance": "+0.05, -0.05",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "Vi",
+      "Tool": "Micrometer"
+    },
+    {
+      "S.no": "2",
+      "Label": "B",
+      "Value": "Ø175.32",
+      "Tolerance": "",
+      "part1": "",
+      "part2": "",
+      "part3": "",
+      "part4": "",
+      "Method": "Fin",
+      "Tool": "Height Gauge"
+    }
+  ]
+}
