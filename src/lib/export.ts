@@ -1,6 +1,46 @@
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
 
+const TOLERANCE_NUMBER = String.raw`(?:\\d+(?:\\.\\d+)?|\\.\\d+)`;
+const VALID_TOLERANCE = new RegExp(
+  String.raw`^(?:${TOLERANCE_NUMBER}|±\\s*${TOLERANCE_NUMBER}|\\+\\s*${TOLERANCE_NUMBER}\\s*,?\\s*-\\s*${TOLERANCE_NUMBER})import type { Annotation } from "@/types/annotation";
+import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
+
+
+);
+const VALID_EMBEDDED_TOLERANCE = new RegExp(
+  String.raw`^[-+]?\\d+(?:\\.\\d+)?\\s*(?:±\\s*${TOLERANCE_NUMBER}|\\+\\s*${TOLERANCE_NUMBER}\\s*,?\\s*-\\s*${TOLERANCE_NUMBER})import type { Annotation } from "@/types/annotation";
+import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
+
+
+);
+
+/**
+ * Return dimensions containing tolerance-like text that cannot be interpreted.
+ * The annotations remain untouched and editable; callers use this only to
+ * prevent saving/exporting an ambiguous checksheet.
+ */
+export function findMalformedToleranceAnnotations(
+  annotations: Annotation[]
+): Annotation[] {
+  return annotations.filter((annotation) => {
+    if ((annotation.kind ?? "dimension") !== "dimension") return false;
+
+    const tolerance = (annotation.range ?? "").trim();
+    if (tolerance) return !VALID_TOLERANCE.test(tolerance);
+
+    const value = annotation.value.trim();
+    const nominal = value.match(/[-+]?\\d+(?:\\.\\d+)?/);
+    if (!nominal || nominal.index == null) {
+      return /[±+-]/.test(value);
+    }
+
+    const remainder = value.slice(nominal.index + nominal[0].length);
+    const hasToleranceIntent = /[±+-]/.test(remainder);
+    return hasToleranceIntent && !VALID_EMBEDDED_TOLERANCE.test(value);
+  });
+}
+
 /** In-memory form of the values-only inspection JSON export. */
 export interface InspectionJSON {
   data: Array<Record<string, string>>;
