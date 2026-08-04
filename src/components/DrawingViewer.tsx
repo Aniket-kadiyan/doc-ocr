@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -14,7 +13,6 @@ import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
 import { runOCR, runSegment, preloadOcr } from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
-import { suggestLabel } from "@/lib/labelSuggestions";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
@@ -30,6 +28,7 @@ import {
 } from "@/lib/db";
 import {
   buildProjectBundle,
+  normalizeLegacyAnnotations,
   parseProjectBundle,
   fileToDataUrl,
   dataUrlToFile,
@@ -40,11 +39,20 @@ import { Balloon } from "@/components/Balloon";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
-import { LabelEditor } from "@/components/LabelEditor";
+import { ValueEditor } from "@/components/ValueEditor";
 import type { Annotation, BBox } from "@/types/annotation";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
+
+const legacyMigrationWarning = (orphanLabelCount: number) =>
+  orphanLabelCount > 0
+    ? `${orphanLabelCount} legacy label${
+        orphanLabelCount === 1 ? "" : "s"
+      } had no associated value and ${
+        orphanLabelCount === 1 ? "was" : "were"
+      } not imported.`
+    : null;
 
 // PDFs are rasterized once at this fixed resolution; this canvas is the base
 // coordinate system every bbox is stored in. Zoom is applied as a Konva Stage
@@ -84,42 +92,22 @@ export function DrawingViewer() {
   const setTotalPages = useAnnotationStore((s) => s.setTotalPages);
   const scale = useAnnotationStore((s) => s.scale);
   const setScale = useAnnotationStore((s) => s.setScale);
-  const addValueLabelId = useAnnotationStore((s) => s.addValueLabelId);
-  const setAddValueLabelId = useAnnotationStore((s) => s.setAddValueLabelId);
-  const editingLabelId = useAnnotationStore((s) => s.editingLabelId);
-  const setEditingLabelId = useAnnotationStore((s) => s.setEditingLabelId);
+  const isDrawingValue = useAnnotationStore((s) => s.isDrawingValue);
+  const setIsDrawingValue = useAnnotationStore((s) => s.setIsDrawingValue);
+  const editingValueId = useAnnotationStore((s) => s.editingValueId);
+  const setEditingValueId = useAnnotationStore((s) => s.setEditingValueId);
   const isSegmenting = useAnnotationStore((s) => s.isSegmenting);
   const setIsSegmenting = useAnnotationStore((s) => s.setIsSegmenting);
-  const isLabeling = useAnnotationStore((s) => s.isLabeling);
-  const setIsLabeling = useAnnotationStore((s) => s.setIsLabeling);
-  const labelInputMode = useAnnotationStore((s) => s.labelInputMode);
-  const setLabelInputMode = useAnnotationStore((s) => s.setLabelInputMode);
   const isProcessing = useAnnotationStore((s) => s.isProcessing);
   const setIsProcessing = useAnnotationStore((s) => s.setIsProcessing);
   const setProjectName = useAnnotationStore((s) => s.setProjectName);
   const projectName = useAnnotationStore((s) => s.projectName);
   const setStoreProjectId = useAnnotationStore((s) => s.setProjectId);
 
-  const pageAnnotations = annotations.filter((a) => a.page === currentPage);
-
-  // The selected annotation plus its mapped partner(s): a dimension maps to its
-  // label via labelId; a label maps to every dimension that points at it. Both
-  // sides stay highlighted (not dimmed) when either is selected.
-  const relatedIds = useMemo(() => {
-    const set = new Set<string>();
-    if (!selectedId) return set;
-    set.add(selectedId);
-    const sel = annotations.find((a) => a.id === selectedId);
-    if (!sel) return set;
-    if (sel.kind === "label") {
-      annotations.forEach((a) => {
-        if (a.labelId === sel.id) set.add(a.id);
-      });
-    } else if (sel.labelId) {
-      set.add(sel.labelId);
-    }
-    return set;
-  }, [selectedId, annotations]);
+  const pageAnnotations = annotations.filter(
+    (annotation) =>
+      annotation.page === currentPage && annotation.kind !== "label"
+  );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
     const img = new window.Image();
@@ -178,7 +166,7 @@ export function DrawingViewer() {
     channel.onmessage = (e) => {
       const msg = e.data as { projectId?: string; annotations?: Annotation[] };
       if (msg?.projectId === projectId && Array.isArray(msg.annotations)) {
-        setAnnotations(msg.annotations);
+        setAnnotations(normalizeLegacyAnnotations(msg.annotations).annotations);
       }
     };
     return () => channel.close();
@@ -231,7 +219,13 @@ export function DrawingViewer() {
       dataUrl: await fileToDataUrl(file),
     };
     await loadSource(file);
-    setAnnotations(await loadAnnotations(recent.id));
+    const migration = normalizeLegacyAnnotations(
+      await loadAnnotations(recent.id)
+    );
+    setAnnotations(migration.annotations);
+    await saveAnnotations(recent.id, migration.annotations);
+    const warning = legacyMigrationWarning(migration.orphanLabelCount);
+    if (warning) setSelectionError(warning);
   }, [loadSource, setAnnotations, setProjectName]);
 
   useEffect(() => {
@@ -246,6 +240,9 @@ export function DrawingViewer() {
     setProjectId(id);
     setAnnotations([]);
     setSelectedId(null);
+    setEditingValueId(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = file.type === "application/pdf" ? "pdf" : "image";
     sourceFileRef.current = {
@@ -296,6 +293,9 @@ export function DrawingViewer() {
     sourceFileRef.current = null;
     setAnnotations([]);
     setSelectedId(null);
+    setEditingValueId(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
     setPending(null);
     setSelectionError(null);
     setCurrentPage(1);
@@ -320,7 +320,11 @@ export function DrawingViewer() {
       );
       await loadSource(srcFile);
       setSelectedId(null);
-      setAnnotations(bundle.annotations);
+      setEditingValueId(null);
+      const migration = normalizeLegacyAnnotations(bundle.annotations);
+      setAnnotations(migration.annotations);
+      const warning = legacyMigrationWarning(migration.orphanLabelCount);
+      if (warning) setSelectionError(warning);
       // Persist so the loaded project reopens on the next visit too.
       await saveProject({
         id,
@@ -331,7 +335,7 @@ export function DrawingViewer() {
         fileBlob: srcFile,
         updatedAt: Date.now(),
       });
-      await saveAnnotations(id, bundle.annotations);
+      await saveAnnotations(id, migration.annotations);
     } catch (err) {
       setSelectionError(
         err instanceof Error ? err.message : "Could not open project file."
@@ -350,13 +354,30 @@ export function DrawingViewer() {
     [annotations, currentPage, setCurrentPage]
   );
 
-  // Read a value box (drawn via a label's "Add value" action) and open the
-  // popup. labelId binds the value one-to-one to the label it was added from.
+  // Clear the local selection with the deleted value so the remaining balloons
+  // do not stay dimmed against an id that no longer exists.
+  const handleDelete = useCallback(
+    (id: string) => {
+      removeAnnotation(id);
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+      setSelectedId((current) => (current === id ? null : current));
+      if (editingValueId === id) setEditingValueId(null);
+    },
+    [editingValueId, projectId, removeAnnotation, setEditingValueId]
+  );
+
+  // Read one drawn value and open the value/tolerance confirmation popup.
   const finishBox = useCallback(
-    async (bbox: BBox, labelId?: string) => {
+    async (bbox: BBox) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
       const source = sourceCanvasRef.current;
-      if (!source) return;
+      if (!source) {
+        setIsDrawingValue(false);
+        return;
+      }
 
       setIsProcessing(true);
       setSelectionError(null);
@@ -376,8 +397,6 @@ export function DrawingViewer() {
           bbox,
           page: currentPage,
           ocrResult,
-          kind: "dimension",
-          labelId,
         });
       } catch (err) {
         const message =
@@ -386,8 +405,6 @@ export function DrawingViewer() {
         setPending({
           bbox,
           page: currentPage,
-          kind: "dimension",
-          labelId,
           ocrResult: {
             text: "",
             confidence: 0,
@@ -399,81 +416,10 @@ export function DrawingViewer() {
         });
       } finally {
         setIsProcessing(false);
-        setAddValueLabelId(null);
+        setIsDrawingValue(false);
       }
     },
-    [currentPage, setPending, setIsProcessing, setAddValueLabelId]
-  );
-
-  // Finish an Add Label box. "manual" skips OCR and opens an empty label form;
-  // "ocr" reads the box and pre-fills the label text. Either way the result is a
-  // label-kind annotation (its own color + numbering).
-  const finishLabelBox = useCallback(
-    async (bbox: BBox, mode: typeof labelInputMode) => {
-      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) {
-        setIsLabeling(false);
-        return;
-      }
-      const source = sourceCanvasRef.current;
-      if (!source) {
-        setIsLabeling(false);
-        return;
-      }
-      setSelectionError(null);
-
-      const emptyOcr = {
-        text: "",
-        confidence: 0,
-        rotation: 0,
-        orientation: "horizontal" as const,
-        words: [],
-        engine: "paddleocr" as const,
-      };
-
-      if (mode === "manual") {
-        setPending({
-          bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "manual",
-          ocrResult: emptyOcr,
-        });
-        setIsLabeling(false);
-        return;
-      }
-
-      setIsProcessing(true);
-      try {
-        const ocrResult = await runOCR(source, bbox, 1);
-        if (!ocrResult.text.trim()) {
-          setSelectionError(
-            "No label text detected — type it in or draw a tighter box."
-          );
-        }
-        setPending({
-          bbox: ocrResult.valueBox ?? bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "ocr",
-          ocrResult,
-        });
-      } catch (err) {
-        setSelectionError(
-          err instanceof Error ? err.message : "Label OCR failed unexpectedly"
-        );
-        setPending({
-          bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "ocr",
-          ocrResult: emptyOcr,
-        });
-      } finally {
-        setIsProcessing(false);
-        setIsLabeling(false);
-      }
-    },
-    [currentPage, setPending, setIsProcessing, setIsLabeling]
+    [currentPage, setPending, setIsDrawingValue, setIsProcessing]
   );
 
   const finishSegmentBox = useCallback(
@@ -501,7 +447,7 @@ export function DrawingViewer() {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
-              label: suggestLabel(type, r.text),
+              label: "",
               value: r.text.trim(),
               type,
               confidence: r.confidence,
@@ -509,6 +455,7 @@ export function DrawingViewer() {
               rotation: r.rotation,
               page: currentPage,
               createdAt: now,
+              kind: "dimension",
               needsReview: r.needsReview,
             };
           });
@@ -531,7 +478,7 @@ export function DrawingViewer() {
 
   const isCompletingDraw = useRef(false);
 
-  const drawingActive = addValueLabelId !== null || isSegmenting || isLabeling;
+  const drawingActive = isDrawingValue || isSegmenting;
 
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     if (!drawingActive) return;
@@ -563,19 +510,15 @@ export function DrawingViewer() {
     isCompletingDraw.current = true;
     const box = { ...currentBoxRef.current };
     const segmenting = isSegmenting;
-    const labeling = isLabeling;
-    const valueLabelId = addValueLabelId;
-    const mode = labelInputMode;
+    const drawingValue = isDrawingValue;
     drawStartRef.current = null;
     currentBoxRef.current = null;
     setCurrentBox(null);
     try {
-      if (labeling) {
-        await finishLabelBox(box, mode);
-      } else if (segmenting) {
+      if (segmenting) {
         await finishSegmentBox(box);
-      } else if (valueLabelId) {
-        await finishBox(box, valueLabelId);
+      } else if (drawingValue) {
+        await finishBox(box);
       }
     } finally {
       isCompletingDraw.current = false;
@@ -583,11 +526,8 @@ export function DrawingViewer() {
   }, [
     finishBox,
     finishSegmentBox,
-    finishLabelBox,
     isSegmenting,
-    isLabeling,
-    addValueLabelId,
-    labelInputMode,
+    isDrawingValue,
   ]);
 
   useEffect(() => {
@@ -649,32 +589,15 @@ export function DrawingViewer() {
           OCR debug: {lastDebugDump}
         </div>
       )}
-      {isLabeling && (
-        <div className="flex items-center justify-center gap-3 bg-indigo-50 px-4 py-1.5 text-center text-xs text-indigo-900">
-          <span>
-            {labelInputMode === "manual"
-              ? "Draw a box where the label goes, then type it."
-              : "Draw a box around the label text — OCR will read it."}
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsLabeling(false)}
-            className="rounded border border-indigo-300 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-      {addValueLabelId && (
+      {isDrawingValue && (
         <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
-            ✏️ Now drag a box on the drawing around the value for “
-            {annotations.find((a) => a.id === addValueLabelId)?.value ?? "label"}
-            ” — OCR will read it.
+            ✏️ Drag a box around one value. OCR will read it and open the
+            value/tolerance confirmation.
           </span>
           <button
             type="button"
-            onClick={() => setAddValueLabelId(null)}
+            onClick={() => setIsDrawingValue(false)}
             className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
           >
             Cancel
@@ -684,21 +607,18 @@ export function DrawingViewer() {
 
       <Toolbar
         isSegmenting={isSegmenting}
-        isLabeling={isLabeling}
+        isDrawingValue={isDrawingValue}
         isProcessing={isProcessing}
         currentPage={currentPage}
         totalPages={totalPages}
         scale={scale}
         onToggleSegment={() => {
-          setAddValueLabelId(null);
-          setIsLabeling(false);
+          setIsDrawingValue(false);
           setIsSegmenting(!isSegmenting);
         }}
-        onStartLabel={(mode) => {
-          setAddValueLabelId(null);
+        onToggleDrawValue={() => {
           setIsSegmenting(false);
-          setLabelInputMode(mode);
-          setIsLabeling(true);
+          setIsDrawingValue(!isDrawingValue);
         }}
         onZoomIn={() => setScale(Math.min(scale + 0.25, 4))}
         onZoomOut={() => setScale(Math.max(scale - 0.25, 0.5))}
@@ -753,17 +673,8 @@ export function DrawingViewer() {
                     />
 
                     {pageAnnotations.map((ann) => {
-                      const isLabel = ann.kind === "label";
-                      // Highlight the selection AND its mapped partner.
-                      const highlighted = relatedIds.has(ann.id);
-                      // Labels read indigo, dimensions red; highlight brightens.
-                      const stroke = highlighted
-                        ? isLabel
-                          ? "#4f46e5"
-                          : "#2563eb"
-                        : isLabel
-                          ? "#7c3aed"
-                          : "#dc2626";
+                      const highlighted = selectedId === ann.id;
+                      const stroke = highlighted ? "#2563eb" : "#dc2626";
                       return (
                         <Rect
                           key={ann.id}
@@ -775,9 +686,8 @@ export function DrawingViewer() {
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.
                           strokeWidth={(highlighted ? 3 : 2) / scale}
-                          dash={(isLabel ? [3, 3] : [6, 4]).map((d) => d / scale)}
-                          // When something is selected, fade everything that
-                          // isn't the selection or its mapped partner.
+                          dash={[6 / scale, 4 / scale]}
+                          // When something is selected, fade the other values.
                           opacity={selectedId && !highlighted ? 0.15 : 1}
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
@@ -802,8 +712,8 @@ export function DrawingViewer() {
                         key={`balloon-${ann.id}`}
                         annotation={ann}
                         scale={scale}
-                        selected={relatedIds.has(ann.id)}
-                        dimmed={!!selectedId && !relatedIds.has(ann.id)}
+                        selected={selectedId === ann.id}
+                        dimmed={!!selectedId && selectedId !== ann.id}
                         listening={!drawingActive}
                         onSelect={handleSelect}
                       />
@@ -818,18 +728,11 @@ export function DrawingViewer() {
         <Sidebar
           annotations={annotations}
           selectedId={selectedId}
-          highlightedIds={relatedIds}
-          onSelect={handleSelect}
-          onUpdate={updateAnnotation}
-          onDelete={removeAnnotation}
-          onAddValue={(labelId) => {
-            setIsSegmenting(false);
-            setIsLabeling(false);
-            setAddValueLabelId(labelId);
-          }}
-          onEditLabel={(labelId) => {
-            setSelectedId(labelId);
-            setEditingLabelId(labelId);
+          onSelect={(id) => handleSelect(id)}
+          onDelete={handleDelete}
+          onEdit={(id) => {
+            handleSelect(id);
+            setEditingValueId(id);
           }}
         />
       </div>
@@ -837,27 +740,17 @@ export function DrawingViewer() {
       <AnnotationPopup />
 
       {(() => {
-        const editingLabel = annotations.find(
-          (a) => a.id === editingLabelId && a.kind === "label"
-        );
-        if (!editingLabel) return null;
         const editingValue = annotations.find(
-          (a) =>
-            (a.kind ?? "dimension") === "dimension" &&
-            a.labelId === editingLabel.id
+          (annotation) =>
+            annotation.id === editingValueId && annotation.kind !== "label"
         );
+        if (!editingValue) return null;
         return (
-          <LabelEditor
-            label={editingLabel}
-            value={editingValue}
+          <ValueEditor
+            annotation={editingValue}
             onUpdate={updateAnnotation}
-            onDeleteValue={removeAnnotation}
-            onAddValue={(labelId) => {
-              setIsSegmenting(false);
-              setIsLabeling(false);
-              setAddValueLabelId(labelId);
-            }}
-            onClose={() => setEditingLabelId(null)}
+            onDelete={handleDelete}
+            onClose={() => setEditingValueId(null)}
           />
         );
       })()}

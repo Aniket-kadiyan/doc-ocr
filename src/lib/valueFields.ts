@@ -1,6 +1,6 @@
 /**
  * Shared helpers for editing a dimension value's fields — used by the
- * create-time popup (AnnotationPopup) and the click-to-edit modal (LabelEditor).
+ * create-time popup (AnnotationPopup) and the value metadata editor.
  */
 
 /** Engineering/GD&T symbols often missed by OCR — click to insert into the value. */

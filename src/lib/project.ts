@@ -60,6 +60,65 @@ export function valueWithRange(a: Annotation): string {
   return a.range ? `${a.value} ${a.range}` : a.value;
 }
 
+/** New projects contain value annotations only. Older projects may still have
+ * separate label annotations, which are merged into their mapped value here. */
+export interface LegacyAnnotationMigration {
+  annotations: Annotation[];
+  orphanLabelCount: number;
+}
+
+export function normalizeLegacyAnnotations(
+  annotations: Annotation[]
+): LegacyAnnotationMigration {
+  const legacyLabels = new Map(
+    annotations
+      .filter((annotation) => annotation.kind === "label")
+      .map((annotation) => [annotation.id, annotation])
+  );
+  const values = annotations.filter(
+    (annotation) => annotation.kind !== "label"
+  );
+  const usedLabelIds = new Set(
+    values
+      .map((annotation) => annotation.labelId)
+      .filter((id): id is string => Boolean(id && legacyLabels.has(id)))
+  );
+
+  const normalized = values.map((annotation) => {
+    const parent = annotation.labelId
+      ? legacyLabels.get(annotation.labelId)
+      : undefined;
+    const {
+      labelId: _labelId,
+      labelSource: _labelSource,
+      ...valueAnnotation
+    } = annotation;
+    void _labelId;
+    void _labelSource;
+
+    return {
+      ...valueAnnotation,
+      kind: "dimension" as const,
+      // The old parent was the editable source of truth for label text.
+      label: parent ? parent.value : annotation.label ?? "",
+      method: annotation.method || parent?.method || undefined,
+      tool: annotation.tool || parent?.tool || undefined,
+    };
+  });
+
+  return {
+    annotations: normalized,
+    orphanLabelCount: [...legacyLabels.keys()].filter(
+      (id) => !usedLabelIds.has(id)
+    ).length,
+  };
+}
+
+/** Values only, including old records where kind was omitted. */
+export function valueAnnotations(annotations: Annotation[]): Annotation[] {
+  return normalizeLegacyAnnotations(annotations).annotations;
+}
+
 /** Build the inspection table. Columns: S.no, Label, Value, Tolerance, then any
  * inspector-filled `extraColumns` (left blank), then Method and Tool. One row
  * per value (dimension). */
@@ -76,23 +135,16 @@ export function buildInspectionSheet(
     "Method",
     "Tool",
   ];
-  const parentLabel = (a: Annotation) =>
-    annotations.find((x) => x.id === a.labelId);
-  const labelText = (a: Annotation) => parentLabel(a)?.value ?? a.label ?? "";
-  // Method / tool can be set on the value or inherited from its label.
-  const methodOf = (a: Annotation) => a.method || parentLabel(a)?.method || "";
-  const toolOf = (a: Annotation) => a.tool || parentLabel(a)?.tool || "";
-  const rows = annotations
-    .filter((a) => (a.kind ?? "dimension") === "dimension")
+  const rows = valueAnnotations(annotations)
     .sort((a, b) => a.number - b.number)
     .map((a) => [
       String(a.number),
-      labelText(a),
+      a.label ?? "",
       a.value,
       a.range ?? "",
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),
-      methodOf(a),
-      toolOf(a),
+      a.method ?? "",
+      a.tool ?? "",
     ]);
   return { extraColumns, headers, rows };
 }
@@ -124,16 +176,16 @@ export function buildVerificationPayload(
     ...(extraColumns != null
       ? { sheet: buildInspectionSheet(annotations, extraColumns) }
       : {}),
-    items: annotations.map((a) => ({
+    items: valueAnnotations(annotations).map((a) => ({
       number: a.number,
-      label: a.label,
+      label: a.label ?? "",
       value: a.value,
       type: a.type,
-      kind: a.kind ?? "dimension",
+      kind: "dimension",
       method: a.method ?? "",
       tool: a.tool ?? "",
       range: a.range ?? "",
-      labelId: a.labelId ?? "",
+      labelId: "",
       page: a.page,
       confidence: a.confidence,
       bbox: a.bbox,
@@ -159,7 +211,7 @@ export function buildProjectBundle(args: {
     projectName: args.projectName,
     savedAt: args.savedAt,
     source: args.source,
-    annotations: args.annotations,
+    annotations: normalizeLegacyAnnotations(args.annotations).annotations,
   };
   return JSON.stringify(bundle, null, 2);
 }

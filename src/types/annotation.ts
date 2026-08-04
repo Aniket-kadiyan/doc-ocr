@@ -14,14 +14,12 @@ export interface BBox {
   height: number;
 }
 
-/** How a label's text was produced: typed by hand or OCR'd from the drawing. */
+/** Legacy label metadata retained only so older saved projects can be read. */
 export type LabelSource = "manual" | "ocr";
 
 /**
- * Two kinds of annotation share the canvas:
- *  - "dimension": a value read from the drawing (Draw Box / Auto-Segment).
- *  - "label": a free callout added with the Add Label tool. Labels are drawn in
- *    a different color and numbered in their own 1,2,3… sequence.
+ * New annotations are always dimensions/values. The "label" kind remains in
+ * the type only for automatic migration of older label-first project files.
  */
 export type AnnotationKind = "dimension" | "label";
 
@@ -39,6 +37,7 @@ export type ToolOption = (typeof TOOL_OPTIONS)[number];
 export interface Annotation {
   id: string;
   number: number;
+  /** Optional checksheet metadata; an empty string means no label is assigned. */
   label: string;
   value: string;
   type: DimensionType;
@@ -47,18 +46,17 @@ export interface Annotation {
   rotation: number;
   page: number;
   createdAt: number;
-  /** "dimension" (default) or "label". Drives color + numbering sequence. */
+  /** New records use "dimension". "label" is accepted only during migration. */
   kind?: AnnotationKind;
   /** Backend flagged the OCR read as uncertain. */
   needsReview?: boolean;
-  /** For labels: whether the text was typed manually or OCR'd from the drawing. */
+  /** Legacy label-first project field. */
   labelSource?: LabelSource;
-  /** Inspection method (free text) — dimensions only. */
+  /** Optional inspection method associated directly with this value. */
   method?: string;
-  /** Inspection tool chosen from TOOL_OPTIONS — dimensions only. */
+  /** Optional inspection tool associated directly with this value. */
   tool?: string;
-  /** id of the label-kind annotation this dimension maps to. Selecting either
-   * highlights both on the drawing and in the sidebar. */
+  /** Legacy parent-label id, removed when an older project is normalized. */
   labelId?: string;
   /** Tolerance after a ± in the value, formatted "+x, -x" — dimensions only. */
   range?: string;
@@ -100,14 +98,4 @@ export interface PendingSelection {
   bbox: BBox;
   page: number;
   ocrResult: OCRResult;
-  /** "dimension" (a value) or "label" (Add Label). Defaults to dimension. */
-  kind?: AnnotationKind;
-  /** For label pending: whether the user chose to type it or OCR the box. */
-  labelSource?: LabelSource;
-  /** When adding a value to a specific label, the id of that label. The popup
-   * binds the value to it one-to-one instead of showing a label picker. */
-  labelId?: string;
 }
-
-/** Which way the Add Label tool is capturing a label: typed or OCR'd. */
-export type LabelInputMode = "manual" | "ocr";

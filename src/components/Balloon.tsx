@@ -22,7 +22,6 @@ export function Balloon({
   onSelect,
 }: BalloonProps) {
   const { bbox, number } = annotation;
-  const isLabel = annotation.kind === "label";
   const cx = bbox.x + bbox.width / 2;
   const cy = bbox.y - 28 / scale;
   const anchorX = bbox.x + bbox.width / 2;
@@ -30,11 +29,9 @@ export function Balloon({
   const radius = 14 / scale;
   const fontSize = 12 / scale;
 
-  // Labels are indigo, dimensions red. Selection swaps to a filled blue/indigo.
-  const accent = isLabel ? "#7c3aed" : "#dc2626";
-  const accentStrong = isLabel ? "#4f46e5" : "#dc2626";
-  const selectedFill = isLabel ? "#4f46e5" : "#2563eb";
-  const selectedStroke = isLabel ? "#4338ca" : "#1d4ed8";
+  const accent = "#dc2626";
+  const selectedFill = "#2563eb";
+  const selectedStroke = "#1d4ed8";
 
   return (
     <Group
@@ -53,7 +50,7 @@ export function Balloon({
         y={cy}
         radius={radius}
         fill={selected ? selectedFill : "#ffffff"}
-        stroke={selected ? selectedStroke : accentStrong}
+        stroke={selected ? selectedStroke : accent}
         strokeWidth={2 / scale}
       />
       <Text
@@ -62,7 +59,7 @@ export function Balloon({
         text={String(number)}
         fontSize={fontSize}
         fontStyle="bold"
-        fill={selected ? "#ffffff" : accentStrong}
+        fill={selected ? "#ffffff" : accent}
         align="center"
         verticalAlign="middle"
         offsetX={fontSize * 0.35}

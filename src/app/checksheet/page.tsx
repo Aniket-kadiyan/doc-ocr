@@ -5,10 +5,12 @@ import { classifyDimension } from "@/lib/dimensionClassifier";
 import { TOOL_OPTIONS, type Annotation } from "@/types/annotation";
 import { db, loadAnnotations, saveAnnotations } from "@/lib/db";
 import { inspectionSheetCSV } from "@/lib/export";
-import { buildInspectionSheet } from "@/lib/project";
+import {
+  buildInspectionSheet,
+  normalizeLegacyAnnotations,
+} from "@/lib/project";
 
 const CHANNEL = "doc-ocr-box:checksheet";
-const kindOf = (a: Annotation) => a.kind ?? "dimension";
 
 /** Read the project id and extra-column list straight off the URL (no Suspense
  * boundary needed, unlike useSearchParams). */
@@ -49,7 +51,7 @@ export default function ChecksheetPage() {
         setProjectName(
           (project?.name ?? "Drawing").replace(/\.[^.]+$/, "")
         );
-        setAnnos(list);
+        setAnnos(normalizeLegacyAnnotations(list).annotations);
       } finally {
         setLoaded(true);
       }
@@ -81,39 +83,29 @@ export default function ChecksheetPage() {
     return [...urlCols, ...fromData];
   }, [urlCols, annos]);
 
-  // Dimension rows in balloon order, with the label resolved from its parent.
+  // One checksheet row per ballooned value, using its own optional metadata.
   const rows = useMemo(() => {
-    const parentOf = (a: Annotation) =>
-      annos.find((x) => x.id === a.labelId);
     return annos
-      .filter((a) => kindOf(a) === "dimension")
+      .filter((a) => a.kind !== "label")
       .sort((a, b) => a.number - b.number)
-      .map((a) => {
-        const parent = parentOf(a);
-        return {
-          a,
-          labelId: parent?.id,
-          label: parent?.value ?? a.label ?? "",
-          method: a.method || parent?.method || "",
-          tool: a.tool || parent?.tool || "",
-        };
-      });
+      .map((a) => ({
+        a,
+        label: a.label ?? "",
+        method: a.method ?? "",
+        tool: a.tool ?? "",
+      }));
   }, [annos]);
 
-  // Patch a dimension (and, for the label cell, its parent label) in place.
+  // Patch the value or its optional metadata in place.
   const setField = useCallback(
     (
       id: string,
-      labelId: string | undefined,
       field: "label" | "value" | "range" | "method" | "tool",
       val: string
     ) => {
       setStatus("idle");
       setAnnos((prev) =>
         prev.map((a) => {
-          if (field === "label" && labelId && a.id === labelId) {
-            return { ...a, value: val };
-          }
           if (a.id !== id) return a;
           if (field === "label") return { ...a, label: val };
           if (field === "value")
@@ -254,7 +246,7 @@ export default function ChecksheetPage() {
                       <input
                         value={r.label}
                         onChange={(e) =>
-                          setField(r.a.id, r.labelId, "label", e.target.value)
+                          setField(r.a.id, "label", e.target.value)
                         }
                         className={cell}
                       />
@@ -263,7 +255,7 @@ export default function ChecksheetPage() {
                       <input
                         value={r.a.value}
                         onChange={(e) =>
-                          setField(r.a.id, r.labelId, "value", e.target.value)
+                          setField(r.a.id, "value", e.target.value)
                         }
                         className={`${cell} font-mono`}
                       />
@@ -272,7 +264,7 @@ export default function ChecksheetPage() {
                       <input
                         value={r.a.range ?? ""}
                         onChange={(e) =>
-                          setField(r.a.id, r.labelId, "range", e.target.value)
+                          setField(r.a.id, "range", e.target.value)
                         }
                         className={`${cell} font-mono`}
                       />
@@ -292,7 +284,7 @@ export default function ChecksheetPage() {
                       <input
                         value={r.method}
                         onChange={(e) =>
-                          setField(r.a.id, r.labelId, "method", e.target.value)
+                          setField(r.a.id, "method", e.target.value)
                         }
                         className={cell}
                       />
@@ -301,7 +293,7 @@ export default function ChecksheetPage() {
                       <select
                         value={r.tool}
                         onChange={(e) =>
-                          setField(r.a.id, r.labelId, "tool", e.target.value)
+                          setField(r.a.id, "tool", e.target.value)
                         }
                         className={`${cell} bg-white`}
                       >

@@ -1,5 +1,9 @@
 import type { Annotation } from "@/types/annotation";
-import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
+import {
+  buildInspectionSheet,
+  valueAnnotations,
+  type InspectionSheet,
+} from "@/lib/project";
 
 const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
@@ -84,11 +88,11 @@ export function exportInspectionCSV(
 }
 
 export function exportXML(annotations: Annotation[]): string {
-  const items = annotations
+  const items = valueAnnotations(annotations)
     .map(
       (a) => `  <annotation id="${a.id}" number="${a.number}" page="${a.page}" type="${a.type}" confidence="${a.confidence}">
     <value>${escapeXml(a.value)}</value>
-    <label>${escapeXml(a.label)}</label>
+    <label>${escapeXml(a.label ?? "")}</label>
     <range>${escapeXml(a.range ?? "")}</range>
     <method>${escapeXml(a.method ?? "")}</method>
     <tool>${escapeXml(a.tool ?? "")}</tool>
