@@ -1,18 +1,12 @@
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
 
-const TOLERANCE_NUMBER = String.raw`(?:\\d+(?:\\.\\d+)?|\\.\\d+)`;
+const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
-  String.raw`^(?:${TOLERANCE_NUMBER}|±\\s*${TOLERANCE_NUMBER}|\\+\\s*${TOLERANCE_NUMBER}\\s*,?\\s*-\\s*${TOLERANCE_NUMBER})import type { Annotation } from "@/types/annotation";
-import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
-
-
+  String.raw`^(?:${TOLERANCE_NUMBER}|±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
 );
 const VALID_EMBEDDED_TOLERANCE = new RegExp(
-  String.raw`^[-+]?\\d+(?:\\.\\d+)?\\s*(?:±\\s*${TOLERANCE_NUMBER}|\\+\\s*${TOLERANCE_NUMBER}\\s*,?\\s*-\\s*${TOLERANCE_NUMBER})import type { Annotation } from "@/types/annotation";
-import { buildInspectionSheet, type InspectionSheet } from "@/lib/project";
-
-
+  String.raw`^[-+]?\d+(?:\.\d+)?\s*(?:±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
 );
 
 /**
@@ -30,7 +24,7 @@ export function findMalformedToleranceAnnotations(
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);
 
     const value = annotation.value.trim();
-    const nominal = value.match(/[-+]?\\d+(?:\\.\\d+)?/);
+    const nominal = value.match(/[-+]?\d+(?:\.\d+)?/);
     if (!nominal || nominal.index == null) {
       return /[±+-]/.test(value);
     }
@@ -40,7 +34,6 @@ export function findMalformedToleranceAnnotations(
     return hasToleranceIntent && !VALID_EMBEDDED_TOLERANCE.test(value);
   });
 }
-
 /** In-memory form of the values-only inspection JSON export. */
 export interface InspectionJSON {
   data: Array<Record<string, string>>;
