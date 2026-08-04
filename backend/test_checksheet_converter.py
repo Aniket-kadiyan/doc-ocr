@@ -13,6 +13,7 @@ from pathlib import Path
 from checksheet_converter import (
     convert_ts2_json_to_checksheet,
     make_template_id_from_filename,
+    parse_range,
     save_checksheet_template,
 )
 
@@ -63,6 +64,44 @@ def test_conversion_shape_and_ranges() -> None:
     assert angle_part_input["type"] == "text"
     assert "range" not in angle_part_input
 
+
+
+def test_default_zero_and_supported_tolerances() -> None:
+    assert parse_range("25", "") == {"min": 25, "max": 25}
+    assert parse_range("25", "0") == {"min": 25, "max": 25}
+    assert parse_range("25", "±0.1") == {"min": 24.9, "max": 25.1}
+    assert parse_range("25", "+0.1 -0.2") == {"min": 24.8, "max": 25.1}
+    assert parse_range("25", "+.1, -.2") == {"min": 24.8, "max": 25.1}
+    assert parse_range("25 +0.1 -0.2", "") == {
+        "min": 24.8,
+        "max": 25.1,
+    }
+    assert parse_range("58.21±0.05", "") == {
+        "min": 58.16,
+        "max": 58.26,
+    }
+
+
+def test_malformed_tolerance_expressions_block_conversion() -> None:
+    malformed_cases = [
+        ("25", "+0.1 +0.2"),
+        ("25", "+ -0.2"),
+        ("25", "±"),
+        ("25", "+0.1 -"),
+        ("25 +0.1 +0.2", ""),
+        ("25 + -0.2", ""),
+        ("25 ±", ""),
+        ("25 +0.1 -", ""),
+    ]
+    for value, tolerance in malformed_cases:
+        try:
+            parse_range(value, tolerance)
+        except ValueError as exc:
+            assert "Malformed" in str(exc)
+        else:
+            raise AssertionError(
+                f"Expected malformed expression to fail: {value!r}, {tolerance!r}"
+            )
 
 def test_template_filename_is_safe_and_portable() -> None:
     assert (
@@ -118,6 +157,8 @@ def test_part_column_is_required() -> None:
 
 if __name__ == "__main__":
     test_conversion_shape_and_ranges()
+    test_default_zero_and_supported_tolerances()
+    test_malformed_tolerance_expressions_block_conversion()
     test_template_filename_is_safe_and_portable()
     test_save_creates_then_replaces_complete_json()
     test_part_column_is_required()
