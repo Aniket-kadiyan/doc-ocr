@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { classifyDimension } from "@/lib/dimensionClassifier";
+import { deriveRange } from "@/lib/valueFields";
 import { TOOL_OPTIONS, type Annotation } from "@/types/annotation";
 import { db, loadAnnotations, saveAnnotations } from "@/lib/db";
 import { inspectionSheetCSV } from "@/lib/export";
@@ -108,8 +109,15 @@ export default function ChecksheetPage() {
         prev.map((a) => {
           if (a.id !== id) return a;
           if (field === "label") return { ...a, label: val };
-          if (field === "value")
-            return { ...a, value: val, type: classifyDimension(val) };
+          if (field === "value") {
+            const derivedRange = deriveRange(val);
+            return {
+              ...a,
+              value: val,
+              type: classifyDimension(val),
+              range: derivedRange || undefined,
+            };
+          }
           return { ...a, [field]: val };
         })
       );

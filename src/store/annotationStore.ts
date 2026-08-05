@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { renumberValueAnnotations } from "@/lib/annotationNumbers";
 import type { Annotation, PendingSelection } from "@/types/annotation";
 
 const isValue = (annotation: Annotation) => annotation.kind !== "label";
@@ -34,7 +35,7 @@ interface AnnotationState {
   setIsProcessing: (processing: boolean) => void;
   setProjectName: (name: string) => void;
   setProjectId: (id: string) => void;
-  /** Next visible balloon number. Deleted numbers remain as gaps. */
+  /** Next visible balloon number in the contiguous 1…N sequence. */
   getNextNumber: () => number;
 }
 
@@ -51,29 +52,34 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   projectName: "Untitled Drawing",
   projectId: "",
 
-  setAnnotations: (annotations) => set({ annotations }),
+  setAnnotations: (annotations) =>
+    set({ annotations: renumberValueAnnotations(annotations) }),
 
   addAnnotation: (annotation) =>
     set((state) => ({
-      annotations: [...state.annotations, annotation],
+      annotations: renumberValueAnnotations([
+        ...state.annotations,
+        annotation,
+      ]),
       pending: null,
     })),
 
   addAnnotations: (incoming) =>
     set((state) => {
       if (incoming.length === 0) return {};
-      const existingNumbers = state.annotations
-        .filter(isValue)
-        .map((annotation) => annotation.number);
-      let nextNumber = existingNumbers.length
-        ? Math.max(...existingNumbers) + 1
-        : 1;
+      let nextNumber = state.annotations.filter(isValue).length + 1;
       const numbered = incoming.filter(isValue).map((annotation) => ({
         ...annotation,
         kind: "dimension" as const,
         number: nextNumber++,
       }));
-      return { annotations: [...state.annotations, ...numbered], pending: null };
+      return {
+        annotations: renumberValueAnnotations([
+          ...state.annotations,
+          ...numbered,
+        ]),
+        pending: null,
+      };
     }),
 
   updateAnnotation: (id, patch) =>
@@ -85,7 +91,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   removeAnnotation: (id) =>
     set((state) => ({
-      annotations: state.annotations.filter((a) => a.id !== id),
+      annotations: renumberValueAnnotations(
+        state.annotations.filter((a) => a.id !== id)
+      ),
       editingValueId:
         state.editingValueId === id ? null : state.editingValueId,
     })),
@@ -111,9 +119,6 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   setProjectId: (projectId) => set({ projectId }),
 
   getNextNumber: () => {
-    const nums = get()
-      .annotations.filter(isValue)
-      .map((a) => a.number);
-    return nums.length ? Math.max(...nums) + 1 : 1;
+    return get().annotations.filter(isValue).length + 1;
   },
 }));

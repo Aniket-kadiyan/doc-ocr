@@ -1,4 +1,5 @@
 import type { Annotation } from "@/types/annotation";
+import { renumberValueAnnotations } from "@/lib/annotationNumbers";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -107,7 +108,7 @@ export function normalizeLegacyAnnotations(
   });
 
   return {
-    annotations: normalized,
+    annotations: renumberValueAnnotations(normalized),
     orphanLabelCount: [...legacyLabels.keys()].filter(
       (id) => !usedLabelIds.has(id)
     ).length,
@@ -116,7 +117,9 @@ export function normalizeLegacyAnnotations(
 
 /** Values only, including old records where kind was omitted. */
 export function valueAnnotations(annotations: Annotation[]): Annotation[] {
-  return normalizeLegacyAnnotations(annotations).annotations;
+  return normalizeLegacyAnnotations(annotations).annotations.sort(
+    (left, right) => left.number - right.number
+  );
 }
 
 /** Build the inspection table. Columns: S.no, Label, Value, Tolerance, then any

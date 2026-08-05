@@ -25,31 +25,29 @@ export function ValueEditor({
   const [method, setMethod] = useState(annotation.method ?? "");
   const [tool, setTool] = useState(annotation.tool ?? "");
   const valueInputRef = useRef<HTMLInputElement>(null);
-  const rangeEditedRef = useRef(Boolean(annotation.range));
 
   useEffect(() => {
     setValue(annotation.value);
-    setRange(annotation.range ?? "");
+    setRange(annotation.range ?? deriveRange(annotation.value));
     setLabel(annotation.label ?? "");
     setMethod(annotation.method ?? "");
     setTool(annotation.tool ?? "");
-    rangeEditedRef.current = Boolean(annotation.range);
   }, [annotation.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // If no stored tolerance exists, continue deriving one from an embedded ±.
-  useEffect(() => {
-    if (!rangeEditedRef.current) setRange(deriveRange(value));
-  }, [value]);
+  const updateValue = (nextValue: string) => {
+    setValue(nextValue);
+    setRange(deriveRange(nextValue));
+  };
 
   const insertSymbol = (symbol: string) => {
     const input = valueInputRef.current;
     if (!input) {
-      setValue((current) => current + symbol);
+      updateValue(value + symbol);
       return;
     }
     const start = input.selectionStart ?? value.length;
     const end = input.selectionEnd ?? value.length;
-    setValue(value.slice(0, start) + symbol + value.slice(end));
+    updateValue(value.slice(0, start) + symbol + value.slice(end));
     requestAnimationFrame(() => {
       input.focus();
       const position = start + symbol.length;
@@ -102,7 +100,7 @@ export function ValueEditor({
               ref={valueInputRef}
               type="text"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
+              onChange={(event) => updateValue(event.target.value)}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
             <div className="mt-2 flex flex-wrap gap-1">
@@ -127,10 +125,7 @@ export function ValueEditor({
             <input
               type="text"
               value={range}
-              onChange={(event) => {
-                rangeEditedRef.current = true;
-                setRange(event.target.value);
-              }}
+              onChange={(event) => setRange(event.target.value)}
               placeholder="e.g. ±0.10 or +0.10, -0.20"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />

@@ -58,7 +58,8 @@ export interface Annotation {
   tool?: string;
   /** Legacy parent-label id, removed when an older project is normalized. */
   labelId?: string;
-  /** Tolerance after a ± in the value, formatted "+x, -x" — dimensions only. */
+  /** Editable tolerance; numeric values default to "0" and embedded ± values
+   * are normalized to "+x, -x". */
   range?: string;
   /** Inspector-filled readings keyed by extra-column name (e.g. {part1: "32.01"}).
    * Populated from the checksheet web view; flows into CSV/JSON exports. */

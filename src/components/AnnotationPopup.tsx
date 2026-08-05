@@ -18,36 +18,36 @@ export function AnnotationPopup() {
   const [value, setValue] = useState("");
   const [range, setRange] = useState("");
   const valueInputRef = useRef<HTMLInputElement>(null);
-  const rangeEditedRef = useRef(false);
 
   useEffect(() => {
     if (!pending) return;
     const text = pending.ocrResult.text;
     setValue(text);
-    rangeEditedRef.current = false;
     setRange(deriveRange(text));
   }, [pending]);
-
-  // Keep tolerance synchronized with an embedded ± value until it is edited.
-  useEffect(() => {
-    if (!rangeEditedRef.current) setRange(deriveRange(value));
-  }, [value]);
 
   if (!pending) return null;
 
   const confidence = pending.ocrResult.confidence;
   const needsReview = pending.ocrResult.needsReview ?? false;
 
+  // A manual tolerance remains editable, but the next Value change deliberately
+  // derives it again so corrections such as adding a missed prime stay in sync.
+  const updateValue = (nextValue: string) => {
+    setValue(nextValue);
+    setRange(deriveRange(nextValue));
+  };
+
   const insertSymbol = (symbol: string) => {
     const input = valueInputRef.current;
     if (!input) {
-      setValue((current) => current + symbol);
+      updateValue(value + symbol);
       return;
     }
     const start = input.selectionStart ?? value.length;
     const end = input.selectionEnd ?? value.length;
     const next = value.slice(0, start) + symbol + value.slice(end);
-    setValue(next);
+    updateValue(next);
     requestAnimationFrame(() => {
       input.focus();
       const position = start + symbol.length;
@@ -58,7 +58,6 @@ export function AnnotationPopup() {
   const resetForm = () => {
     setValue("");
     setRange("");
-    rangeEditedRef.current = false;
   };
 
   const handleSave = () => {
@@ -70,7 +69,9 @@ export function AnnotationPopup() {
       value: cleanValue,
       type: classifyDimension(cleanValue),
       confidence,
-      bbox: pending.ocrResult.valueBox ?? pending.bbox,
+      // Preserve the exact manual selection. OCR's tighter text box is useful
+      // metadata, but must not replace geometry chosen by the user.
+      bbox: pending.bbox,
       rotation: pending.ocrResult.rotation,
       page: pending.page,
       createdAt: Date.now(),
@@ -124,7 +125,7 @@ export function AnnotationPopup() {
               type="text"
               value={value}
               autoFocus
-              onChange={(event) => setValue(event.target.value)}
+              onChange={(event) => updateValue(event.target.value)}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
             <div className="mt-2 flex flex-wrap gap-1">
@@ -149,10 +150,7 @@ export function AnnotationPopup() {
             <input
               type="text"
               value={range}
-              onChange={(event) => {
-                rangeEditedRef.current = true;
-                setRange(event.target.value);
-              }}
+              onChange={(event) => setRange(event.target.value)}
               placeholder="e.g. ±0.10 or +0.10, -0.20"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
