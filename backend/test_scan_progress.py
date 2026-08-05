@@ -9,9 +9,35 @@ from ocr_pipeline import OcrPipeline
 
 def test_segment_reports_real_stages_and_recognition_counters() -> None:
     pipeline = object.__new__(OcrPipeline)
-    pipeline.detect_regions = lambda _image: [
-        {"x": 10.0, "y": 10.0, "w": 40.0, "h": 12.0, "text": "25", "conf": 0.9}
-    ]
+
+    def detect_regions(_image, *, progress_callback=None, **_kwargs):
+        if progress_callback is not None:
+            progress_callback(
+                completed=1,
+                total=2,
+                label="source contrast, 0 deg, 1100px",
+                proposals=1,
+                deskew_angle=0.0,
+            )
+            progress_callback(
+                completed=2,
+                total=2,
+                label="morphology",
+                proposals=1,
+                deskew_angle=0.0,
+            )
+        return [
+            {
+                "x": 10.0,
+                "y": 10.0,
+                "w": 40.0,
+                "h": 12.0,
+                "text": "25",
+                "conf": 0.9,
+            }
+        ]
+
+    pipeline.detect_regions = detect_regions
     pipeline._expand_clusters = lambda _image, clusters, **_kwargs: clusters
     pipeline.recognize = lambda _image, **_kwargs: {
         "text": "25.00",
@@ -34,6 +60,9 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
 
     assert result["count"] == 1
     assert [event["stage"] for event in events] == [
+        "preparing",
+        "detecting",
+        "detecting",
         "detecting",
         "detecting",
         "grouping",
@@ -43,6 +72,14 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
         "finalizing",
         "finalizing",
     ]
+    detection_events = [
+        event
+        for event in events
+        if event["stage"] == "detecting" and event["total"] > 0
+    ]
+    assert detection_events[0]["message"].startswith("Detection pass 1 of 2")
+    assert detection_events[-1]["completed"] == 2
+    assert detection_events[-1]["total"] == 2
     recognition_events = [
         event for event in events if event["stage"] == "recognizing"
     ]

@@ -600,18 +600,98 @@ class OcrPipeline:
             return False
         return True
 
-    def detect_regions(self, image: Image.Image) -> list[dict[str, Any]]:
-        """
-        Propose every text-region box inside ``image`` (received-image pixels).
+    def detect_regions(
+        self,
+        image: Image.Image,
+        *,
+        progress_callback: Callable[..., None] | None = None,
+        thorough: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Propose text boxes in the received image's original coordinates.
 
-        Primary path is PaddleOCR's learned text detector run on the
-        blue-ink-emphasized image (``cad_ink_to_gray`` + upscale): on CAD sheets
-        this reliably returns one tight box per dimension line — including faint
-        angles and values wedged against geometry that the morphology proposer
-        drops. Falls back to the morphology + OCR-supplement proposer only when
-        the detector finds nothing (e.g. a blank or non-text crop). Returns
-        dicts: {x, y, w, h, text, conf}.
+        A top-level auto-balloon scan uses the accuracy-first Milestone 2 pass
+        stack.  Oversized-cluster refinement can request the earlier quick path
+        so one refinement does not recursively launch another complete scan.
         """
+
+        if not thorough:
+            return self._detect_regions_quick(image)
+
+        from detection_passes import (
+            build_detection_pass_plan,
+            build_detection_variants,
+            map_detection_box_to_original,
+            prepare_detection_source,
+            rotate_for_detection,
+        )
+        from region_detect import propose_text_regions
+
+        prepared = prepare_detection_source(image)
+        variants = build_detection_variants(prepared.image)
+        pass_plan = build_detection_pass_plan(prepared.image)
+        # Morphology is always included rather than only acting as a fallback;
+        # it can recover faint objects missed by otherwise successful OCR passes.
+        total_passes = len(pass_plan) + 1
+        candidates: list[dict[str, Any]] = []
+
+        for pass_index, spec in enumerate(pass_plan, start=1):
+            rotated = rotate_for_detection(
+                variants[spec.variant],
+                spec.rotation_cw,
+            )
+            detected = self._paddle_det_boxes(
+                rotated,
+                target_long_edge=spec.target_long_edge,
+                preprocess=False,
+            )
+            for box in detected:
+                mapped = map_detection_box_to_original(
+                    box,
+                    rotation_cw=spec.rotation_cw,
+                    source_size=prepared.image.size,
+                    correction_angle=prepared.correction_angle,
+                )
+                if mapped is None:
+                    continue
+                mapped["_detection_pass"] = spec.label
+                candidates.append(mapped)
+
+            if progress_callback is not None:
+                progress_callback(
+                    completed=pass_index,
+                    total=total_passes,
+                    label=spec.label,
+                    proposals=len(candidates),
+                    deskew_angle=prepared.correction_angle,
+                )
+
+        morphology = propose_text_regions(image)
+        for box in morphology:
+            candidates.append(
+                {
+                    **box,
+                    "text": "",
+                    "conf": 0.0,
+                    "_detection_pass": "morphology",
+                }
+            )
+        if progress_callback is not None:
+            progress_callback(
+                completed=total_passes,
+                total=total_passes,
+                label="morphology",
+                proposals=len(candidates),
+                deskew_angle=prepared.correction_angle,
+            )
+
+        # This is only coarse same-position suppression needed to keep the
+        # 30+ pass proposal set tractable. Logical-object deduplication remains
+        # Milestone 3 work.
+        return self._dedupe_det_boxes(candidates, overlap_thresh=0.62)
+
+    def _detect_regions_quick(self, image: Image.Image) -> list[dict[str, Any]]:
+        """Earlier two-orientation proposer used only for local refinement."""
+
         from region_detect import opencv_available, propose_text_regions
 
         paddle_boxes = self._detect_regions_paddle_ink(image)
@@ -631,21 +711,30 @@ class OcrPipeline:
         # Add substantial Paddle det boxes only when morphology missed a value.
         return self._merge_region_proposals(boxes, ocr_boxes)
 
-    def _paddle_det_boxes(self, pil_img: Image.Image) -> list[dict[str, Any]]:
-        """PaddleOCR detection on one image; boxes in that image's own pixels."""
+    def _paddle_det_boxes(
+        self,
+        pil_img: Image.Image,
+        *,
+        target_long_edge: int = 1100,
+        preprocess: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Paddle detection with boxes restored to the supplied image pixels."""
+
         pad = 24
         padded = pad_image(pil_img, px=pad)
         pw, ph = padded.size
         edge = max(pw, ph)
-        # Target ~1100 px on the long edge — enough for det on thin strokes.
-        factor = min(12.0, max(1.0, 1100.0 / max(edge, 1)))
+        factor = min(12.0, max(1.0, target_long_edge / max(edge, 1)))
         det_img = (
             padded.resize((int(pw * factor), int(ph * factor)),
                           Image.Resampling.LANCZOS)
             if factor > 1.0
             else padded
         )
-        _, _, words = self._run_paddle(clahe_rgb(det_img), det=True)
+        # Legacy callers pass an ink image and expect this final CLAHE step.
+        # Accuracy-first callers supply an already prepared pass variant.
+        paddle_input = clahe_rgb(det_img) if preprocess else det_img
+        _, _, words = self._run_paddle(paddle_input, det=True)
         out: list[dict[str, Any]] = []
         for w in words:
             out.append(
@@ -896,7 +985,9 @@ class OcrPipeline:
             cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
             cy1 = min(ih, int(ub["y"] + ub["height"] + margin))
             sub = image.crop((cx0, cy0, cx1, cy1))
-            sub_boxes = self.detect_regions(sub)
+            # Refinement needs one local proposal pass, not another complete
+            # 33-pass accuracy scan inside the already-running scan.
+            sub_boxes = self.detect_regions(sub, thorough=False)
             if not sub_boxes:
                 out.append(cluster)
                 continue
@@ -964,24 +1055,60 @@ class OcrPipeline:
                 )
 
         report(
-            stage="detecting",
-            message="Detecting text regions",
-            percent=8,
+            stage="preparing",
+            message="Preparing source-resolution scan and deskew",
+            percent=4,
         )
-        boxes = self.detect_regions(image)
+        report(
+            stage="detecting",
+            message="Building accuracy-first detection passes",
+            percent=7,
+        )
+        detection_state = {"completed": 0, "total": 0}
+
+        def report_detection_pass(
+            *,
+            completed: int,
+            total: int,
+            label: str,
+            proposals: int,
+            deskew_angle: float,
+        ) -> None:
+            detection_state["completed"] = completed
+            detection_state["total"] = total
+            deskew = (
+                f"; deskew {deskew_angle:+.2f} deg"
+                if deskew_angle != 0.0
+                else ""
+            )
+            report(
+                stage="detecting",
+                message=(
+                    f"Detection pass {completed} of {total}: {label}"
+                    f" ({proposals} proposals{deskew})"
+                ),
+                percent=7 + int(23 * completed / max(total, 1)),
+                completed=completed,
+                total=total,
+            )
+
+        boxes = self.detect_regions(
+            image,
+            progress_callback=report_detection_pass,
+        )
         report(
             stage="detecting",
             message=f"Detected {len(boxes)} region proposals",
-            percent=25,
-            completed=len(boxes),
-            total=len(boxes),
+            percent=30,
+            completed=detection_state["completed"],
+            total=detection_state["total"],
         )
         # Drop cross-column bridge boxes before clustering so separate
         # dimensions (e.g. Ø174,07 and Ø175,32) don't fuse into one cluster.
         report(
             stage="grouping",
             message="Grouping related text fragments",
-            percent=30,
+            percent=34,
         )
         boxes = drop_bridge_boxes(boxes)
         iw, ih = image.size
@@ -1002,7 +1129,7 @@ class OcrPipeline:
         report(
             stage="grouping",
             message=f"Prepared {len(clusters)} candidate objects",
-            percent=40,
+            percent=42,
             completed=len(clusters),
             total=len(clusters),
         )
@@ -1025,7 +1152,7 @@ class OcrPipeline:
             report(
                 stage="recognizing",
                 message=f"Recognizing object {cluster_index} of {cluster_total}",
-                percent=40 + int(50 * (cluster_index - 1) / max(cluster_total, 1)),
+                percent=42 + int(48 * (cluster_index - 1) / max(cluster_total, 1)),
                 completed=cluster_index - 1,
                 total=cluster_total,
             )
@@ -1074,7 +1201,7 @@ class OcrPipeline:
             report(
                 stage="recognizing",
                 message=f"Recognized object {cluster_index} of {cluster_total}",
-                percent=40 + int(50 * cluster_index / max(cluster_total, 1)),
+                percent=42 + int(48 * cluster_index / max(cluster_total, 1)),
                 completed=cluster_index,
                 total=cluster_total,
             )

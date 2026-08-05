@@ -120,15 +120,21 @@ identify the offending balloon and block final output once the edit is saved.
 
 ## Explicitly deferred until after auto-ballooning
 
-These observed behaviors are recorded but intentionally not changed in the
-current cleanup milestone:
+These observed behaviors are recorded but intentionally not changed during the
+current auto-ballooning milestones:
 
 1. Editing the separate Tolerance field does not yet rewrite a tolerance already
    embedded in Value.
 2. Export validation evaluates committed annotation data; exporting while the
    latest editor changes are still unsaved can miss those pending changes.
+3. Clicking the currently selected balloon does not deselect it.
+4. Balloons cannot yet be reordered by the user. Reordering must preserve
+   contiguous `1...N` numbering in the drawing, sidebar, project, and exports.
+5. Selected-value filtering must be extracted into a modular, independently
+   configurable layer so filter changes do not modify the detection,
+   recognition, annotation, or export pipeline.
 
-Do not mark tests for these two behaviors as passing until their later fixes are
+Do not mark tests for these five behaviors as passing until their later fixes are
 implemented.
 
 ## Reporting a failure
