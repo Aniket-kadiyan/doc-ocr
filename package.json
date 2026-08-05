@@ -6,7 +6,12 @@
     "dev": "dotenv -e .env.local -- next dev --turbopack",
     "build": "next build",
     "start": "dotenv -e .env.local -- next start",
-    "lint": "next lint",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test:frontend": "vitest run",
+    "test:backend": "node scripts/run-python-tests.mjs --fast",
+    "test:ocr": "node scripts/run-python-tests.mjs --ocr",
+    "verify": "npm run lint && npm run typecheck && npm run test:frontend && npm run test:backend",
     "ocr-api": "node scripts/run-ocr.mjs",
     "ocr-api:debug": "node scripts/run-ocr.mjs --debug",
     "ocr-api:debug:force": "node scripts/run-ocr.mjs --force"
@@ -33,6 +38,7 @@
     "eslint": "^9.27.0",
     "eslint-config-next": "^15.3.3",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "4.1.10"
   }
 }
