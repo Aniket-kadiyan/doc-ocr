@@ -54,4 +54,31 @@ describe("annotationStore numbering", () => {
         .annotations.map(({ number }) => number)
     ).toEqual([1, 2, 3]);
   });
+
+  it("adds an automatic scan batch in one state update with contiguous numbers", () => {
+    useAnnotationStore
+      .getState()
+      .setAnnotations([makeAnnotation({ id: "manual", number: 1 })]);
+    let updates = 0;
+    const unsubscribe = useAnnotationStore.subscribe(() => {
+      updates += 1;
+    });
+
+    useAnnotationStore.getState().addAnnotations([
+      makeAnnotation({ id: "auto-a", number: 0 }),
+      makeAnnotation({ id: "auto-b", number: 0 }),
+    ]);
+    unsubscribe();
+
+    expect(updates).toBe(1);
+    expect(
+      useAnnotationStore
+        .getState()
+        .annotations.map(({ id, number }) => ({ id, number }))
+    ).toEqual([
+      { id: "manual", number: 1 },
+      { id: "auto-a", number: 2 },
+      { id: "auto-b", number: 3 },
+    ]);
+  });
 });

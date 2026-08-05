@@ -4,8 +4,8 @@ PaddleOCR pipeline: best digit read + balanced symbol compose.
 
 from __future__ import annotations
 from time import perf_counter
+from typing import Any, Callable
 
-from typing import Any
 import numpy as np
 from PIL import Image
 
@@ -924,6 +924,7 @@ class OcrPipeline:
         debug_dump: bool = False,
         debug_dump_force: bool = False,
         cluster_margin: float = 0.72,
+        progress_callback: Callable[..., None] | None = None,
     ) -> dict[str, Any]:
         """
         Auto-segment a multi-value selection into individual dimensions.
@@ -945,9 +946,43 @@ class OcrPipeline:
         )
         from segment_quality import dedupe_regions, is_segment_worthy
 
+        def report(
+            *,
+            stage: str,
+            message: str,
+            percent: int,
+            completed: int = 0,
+            total: int = 0,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    stage=stage,
+                    message=message,
+                    percent=percent,
+                    completed=completed,
+                    total=total,
+                )
+
+        report(
+            stage="detecting",
+            message="Detecting text regions",
+            percent=8,
+        )
         boxes = self.detect_regions(image)
+        report(
+            stage="detecting",
+            message=f"Detected {len(boxes)} region proposals",
+            percent=25,
+            completed=len(boxes),
+            total=len(boxes),
+        )
         # Drop cross-column bridge boxes before clustering so separate
         # dimensions (e.g. Ø174,07 and Ø175,32) don't fuse into one cluster.
+        report(
+            stage="grouping",
+            message="Grouping related text fragments",
+            percent=30,
+        )
         boxes = drop_bridge_boxes(boxes)
         iw, ih = image.size
         clustered = cluster_boxes(
@@ -964,6 +999,13 @@ class OcrPipeline:
         # Re-join any fragments of one dimension that landed in overlapping
         # boxes (e.g. a value split from its REF. tag onto a perpendicular axis).
         clusters = order_clusters(merge_overlapping_clusters(clusters))
+        report(
+            stage="grouping",
+            message=f"Prepared {len(clusters)} candidate objects",
+            percent=40,
+            completed=len(clusters),
+            total=len(clusters),
+        )
 
         if should_dump(request_override=debug_dump):
             from debug_dump import dump_segment
@@ -978,7 +1020,15 @@ class OcrPipeline:
 
         margin = 6  # a few px of context around each cluster crop
         regions: list[dict[str, Any]] = []
-        for cluster in clusters:
+        cluster_total = len(clusters)
+        for cluster_index, cluster in enumerate(clusters, start=1):
+            report(
+                stage="recognizing",
+                message=f"Recognizing object {cluster_index} of {cluster_total}",
+                percent=40 + int(50 * (cluster_index - 1) / max(cluster_total, 1)),
+                completed=cluster_index - 1,
+                total=cluster_total,
+            )
             ub = union_bbox(cluster)
             cx0 = max(0, int(ub["x"] - margin))
             cy0 = max(0, int(ub["y"] - margin))
@@ -1021,8 +1071,30 @@ class OcrPipeline:
                 }
             )
 
+            report(
+                stage="recognizing",
+                message=f"Recognized object {cluster_index} of {cluster_total}",
+                percent=40 + int(50 * cluster_index / max(cluster_total, 1)),
+                completed=cluster_index,
+                total=cluster_total,
+            )
+
+        report(
+            stage="finalizing",
+            message="Checking and merging scan results",
+            percent=94,
+            completed=cluster_total,
+            total=cluster_total,
+        )
         regions = self._complete_angle_regions(image, regions)
         regions = dedupe_regions(regions)
+        report(
+            stage="finalizing",
+            message=f"Prepared {len(regions)} balloon candidates",
+            percent=99,
+            completed=len(regions),
+            total=len(regions),
+        )
         return {"count": len(regions), "regions": regions}
 
     def _complete_angle_regions(

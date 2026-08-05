@@ -22,7 +22,11 @@ import { saveAnnotations } from "@/lib/db";
 // but skip it while the Digital Checksheet integration is active.
 const USE_LEGACY_CHECKSHEET_WEBVIEW = false;
 
-export function ExportPanel() {
+interface ExportPanelProps {
+  disabled?: boolean;
+}
+
+export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
@@ -50,6 +54,10 @@ export function ExportPanel() {
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (disabled) setMenuOpen(false);
+  }, [disabled]);
 
   const validateToleranceExpressions = (): boolean => {
     const malformed = findMalformedToleranceAnnotations(annotations);
@@ -230,7 +238,7 @@ export function ExportPanel() {
       <button
         type="button"
         onClick={() => setMenuOpen((o) => !o)}
-        disabled={empty || busy}
+        disabled={disabled || empty || busy}
         title="Export annotations or send them for verification"
         className={`rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${
           menuOpen

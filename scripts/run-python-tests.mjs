@@ -23,6 +23,8 @@ const fastTests = [
   "backend/test_checksheet_converter.py",
   "backend/test_paddle_parse.py",
   "backend/test_region_cluster.py",
+  "backend/test_scan_jobs.py",
+  "backend/test_scan_progress.py",
   "backend/test_segment_quality.py",
   "tools/balloon_builder/test_balloon_builder.py",
 ];

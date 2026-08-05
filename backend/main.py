@@ -6,13 +6,14 @@ Run: uvicorn main:app --reload --port 8000
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import re
 from enum import Enum
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -21,13 +22,15 @@ from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
 )
-from config_env import get_cors_origins, load_env_files
-from debug_dump import dump_status
-from ocr_pipeline import get_pipeline
 from checksheet_index import (
     ChecksheetIndexError,
     register_template_if_missing,
 )
+from config_env import get_cors_origins, load_env_files
+from debug_dump import dump_status
+from ocr_pipeline import get_pipeline
+from scan_jobs import ProgressReporter, ScanJobManager
+
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
 load_env_files()
@@ -37,6 +40,11 @@ app = FastAPI(
     description="Self-hosted engineering drawing OCR",
     version="0.2.0",
 )
+
+# PaddleOCR is expensive and the local service normally serves one operator.
+# A single worker prevents concurrent scans from competing for the same model
+# while still returning the HTTP request immediately.
+scan_job_manager = ScanJobManager(max_workers=1)
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -104,6 +112,11 @@ def startup() -> None:
         print(  # noqa: T201
             "[debug_dump] OFF — set DEBUG_DUMP=1 on server, or use ?debug_dump=1 per request"
         )
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    scan_job_manager.shutdown(wait=False)
 
 
 @app.get("/health")
@@ -237,8 +250,13 @@ async def segment_region(
         debug_dump_force=req_force,
     )
 
-    regions = []
-    for r in seg["regions"]:
+    return _serialize_segment_result(seg)
+
+
+def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
+    """Apply the API's dimension classification to one complete scan result."""
+    regions: list[dict[str, Any]] = []
+    for r in seg.get("regions", []):
         dim_type = r.get("type") or classify_dimension(r["text"]).value
         regions.append(
             {
@@ -248,6 +266,80 @@ async def segment_region(
         )
 
     return {"count": len(regions), "regions": regions}
+
+
+@app.post("/ocr/scan-jobs", status_code=202)
+async def create_scan_job(
+    file: UploadFile = File(...),
+    scope_kind: str = Form("section"),
+    page: int = Form(1),
+    scope_x: float = Form(0),
+    scope_y: float = Form(0),
+    scope_width: float = Form(...),
+    scope_height: float = Form(...),
+    debug_dump: bool = Query(
+        False,
+        description="Write pipeline steps to backend/debug_output/",
+    ),
+    debug_dump_force: bool = Query(
+        False,
+        description="Re-dump even if a sub-crop was saved before (.done)",
+    ),
+    x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
+    x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+) -> dict[str, Any]:
+    """Queue an atomic section or whole-page scan and return its job id."""
+    if scope_kind not in {"section", "page"}:
+        raise HTTPException(status_code=422, detail="Invalid scan scope")
+    if page < 1 or scope_width <= 0 or scope_height <= 0:
+        raise HTTPException(status_code=422, detail="Invalid scan page or bounds")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="The scan image is empty")
+
+    truthy = {"1", "true", "yes", "on"}
+    req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
+    req_force = (
+        debug_dump_force
+        or (x_debug_dump_force or "").strip().lower() in truthy
+    )
+
+    def run_scan(report_progress: ProgressReporter) -> dict[str, Any]:
+        image = Image.open(io.BytesIO(raw)).convert("RGB")
+        seg = get_pipeline().segment(
+            image,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+            progress_callback=report_progress,
+        )
+        return _serialize_segment_result(seg)
+
+    return scan_job_manager.submit(
+        run_scan,
+        metadata={
+            "scope_kind": scope_kind,
+            "page": page,
+            "scope_bbox": {
+                "x": scope_x,
+                "y": scope_y,
+                "width": scope_width,
+                "height": scope_height,
+            },
+            # This is not a resume checkpoint yet.  It gives the future
+            # stop/resume design a stable identity for the exact scanned crop.
+            "crop_fingerprint": hashlib.sha256(raw).hexdigest(),
+        },
+    )
+
+
+@app.get("/ocr/scan-jobs/{job_id}")
+def get_scan_job(job_id: str) -> dict[str, Any]:
+    """Poll genuine scan progress; candidates appear only after success."""
+    job = scan_job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    return job
 
 
 @app.post("/training/export-labels")

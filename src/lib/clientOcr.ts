@@ -4,6 +4,8 @@
  */
 
 import type { BBox, OCRResult } from "@/types/annotation";
+import type { RunScanJobOptions } from "@/lib/scanJobClient";
+import { runScanJob } from "@/lib/scanJobClient";
 import {
   checkOcrApiHealth,
   runPaddleOcr,
@@ -78,6 +80,21 @@ export async function runSegment(
 
   activeEngine = "paddleocr";
   return runSegmentOcr(sourceCanvas, bbox, displayScale);
+}
+
+export async function runAutoBalloonScan(
+  options: RunScanJobOptions
+): Promise<SegmentRegion[]> {
+  apiHealth = await checkOcrApiHealth();
+
+  if (!apiHealth.available) {
+    throw new Error(
+      "PaddleOCR API is not running. Start it with: uvicorn main:app --reload --port 8000"
+    );
+  }
+
+  activeEngine = "paddleocr";
+  return runScanJob(options);
 }
 
 export async function terminateOCR(): Promise<void> {

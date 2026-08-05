@@ -1,0 +1,55 @@
+"""Progress instrumentation tests that do not load PaddleOCR models."""
+
+from __future__ import annotations
+
+from PIL import Image
+
+from ocr_pipeline import OcrPipeline
+
+
+def test_segment_reports_real_stages_and_recognition_counters() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline.detect_regions = lambda _image: [
+        {"x": 10.0, "y": 10.0, "w": 40.0, "h": 12.0, "text": "25", "conf": 0.9}
+    ]
+    pipeline._expand_clusters = lambda _image, clusters, **_kwargs: clusters
+    pipeline.recognize = lambda _image, **_kwargs: {
+        "text": "25.00",
+        "confidence": 0.98,
+        "type": "Linear",
+        "orientation": "horizontal",
+        "rotation": 0,
+        "needs_review": False,
+        "agreement": 1.0,
+        "engine": "paddleocr",
+        "symbols_detected": {},
+    }
+    pipeline._complete_angle_regions = lambda _image, regions: regions
+    events: list[dict] = []
+
+    result = pipeline.segment(
+        Image.new("RGB", (100, 60), "white"),
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert result["count"] == 1
+    assert [event["stage"] for event in events] == [
+        "detecting",
+        "detecting",
+        "grouping",
+        "grouping",
+        "recognizing",
+        "recognizing",
+        "finalizing",
+        "finalizing",
+    ]
+    recognition_events = [
+        event for event in events if event["stage"] == "recognizing"
+    ]
+    assert recognition_events[0]["completed"] == 0
+    assert recognition_events[0]["total"] == 1
+    assert recognition_events[-1]["completed"] == 1
+    assert recognition_events[-1]["total"] == 1
+    assert [event["percent"] for event in events] == sorted(
+        event["percent"] for event in events
+    )

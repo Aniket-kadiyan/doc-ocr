@@ -11,8 +11,10 @@ import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
-import { runOCR, runSegment, preloadOcr } from "@/lib/clientOcr";
+import { runAutoBalloonScan, runOCR, preloadOcr } from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
+import { filterNewScanRegions } from "@/lib/scanCandidates";
+import { deriveRange } from "@/lib/valueFields";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
@@ -40,7 +42,13 @@ import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
+import { ScanProgressBanner } from "@/components/ScanProgressBanner";
 import type { Annotation, BBox } from "@/types/annotation";
+import type {
+  ScanCompletionSummary,
+  ScanProgress,
+  ScanScopeKind,
+} from "@/types/scanJob";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
@@ -67,6 +75,7 @@ export function DrawingViewer() {
   /** Original drawing bytes, kept so a saved project can embed them. */
   const sourceFileRef = useRef<ProjectSource | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  const projectIdRef = useRef("");
 
   const [konvaImage, setKonvaImage] = useState<HTMLImageElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
@@ -77,6 +86,9 @@ export function DrawingViewer() {
   const [currentBox, setCurrentBox] = useState<BBox | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [lastDebugDump, setLastDebugDump] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanSummary, setScanSummary] =
+    useState<ScanCompletionSummary | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -156,6 +168,7 @@ export function DrawingViewer() {
   // the checksheet web view (which opens in a separate browser tab).
   useEffect(() => {
     setStoreProjectId(projectId);
+    projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
 
   // Pull edits made in the checksheet tab back into the live drawing. The tab
@@ -243,6 +256,8 @@ export function DrawingViewer() {
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
+    setScanProgress(null);
+    setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = file.type === "application/pdf" ? "pdf" : "image";
     sourceFileRef.current = {
@@ -298,6 +313,8 @@ export function DrawingViewer() {
     setIsSegmenting(false);
     setPending(null);
     setSelectionError(null);
+    setScanProgress(null);
+    setScanSummary(null);
     setCurrentPage(1);
     setTotalPages(1);
     setProjectName("Untitled Drawing");
@@ -307,6 +324,8 @@ export function DrawingViewer() {
 
   const handleLoadProject = async (file: File) => {
     setSelectionError(null);
+    setScanProgress(null);
+    setScanSummary(null);
     try {
       const bundle = parseProjectBundle(await file.text());
       const id = uuidv4();
@@ -381,6 +400,7 @@ export function DrawingViewer() {
 
       setIsProcessing(true);
       setSelectionError(null);
+      setScanSummary(null);
       try {
         const ocrResult = await runOCR(source, bbox, 1);
         if (ocrResult.debugDumpDir) {
@@ -422,24 +442,53 @@ export function DrawingViewer() {
     [currentPage, setPending, setIsDrawingValue, setIsProcessing]
   );
 
-  const finishSegmentBox = useCallback(
-    async (bbox: BBox) => {
+  const runAutoBalloon = useCallback(
+    async (bbox: BBox, scopeKind: ScanScopeKind, scanPage: number) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
       const source = sourceCanvasRef.current;
       if (!source) return;
 
+      const projectAtStart = projectIdRef.current;
       setIsProcessing(true);
       setSelectionError(null);
+      setScanSummary(null);
+      setScanProgress({
+        jobId: "",
+        status: "queued",
+        stage: "preparing",
+        message: "Preparing selected area",
+        percent: 0,
+        completed: 0,
+        total: 0,
+      });
       try {
-        const regions = await runSegment(source, bbox, 1);
-        if (regions.length === 0) {
-          setSelectionError(
-            "No values detected in that area — draw a tighter box around the cluster."
+        const regions = await runAutoBalloonScan({
+          sourceCanvas: source,
+          bbox,
+          page: scanPage,
+          scopeKind,
+          displayScale: 1,
+          onProgress: setScanProgress,
+        });
+        if (projectIdRef.current !== projectAtStart) {
+          throw new Error(
+            "The drawing changed while the scan was running. No balloons were added."
           );
+        }
+        if (regions.length === 0) {
+          setSelectionError("No values were detected in the scanned area.");
           return;
         }
+
+        // Recheck against the live store immediately before the single batch
+        // insertion so existing manual or edited balloons always win.
+        const filtered = filterNewScanRegions(
+          regions,
+          useAnnotationStore.getState().annotations,
+          scanPage
+        );
         const now = Date.now();
-        const newAnnotations: Annotation[] = regions
+        const newAnnotations: Annotation[] = filtered.accepted
           .filter((r) => r.text.trim())
           .map((r) => {
             const type = classifyDimension(r.text);
@@ -453,27 +502,63 @@ export function DrawingViewer() {
               confidence: r.confidence,
               bbox: r.valueBox,
               rotation: r.rotation,
-              page: currentPage,
+              page: scanPage,
               createdAt: now,
               kind: "dimension",
               needsReview: r.needsReview,
+              range: deriveRange(r.text.trim()) || undefined,
             };
           });
         if (newAnnotations.length === 0) {
-          setSelectionError("Detected regions but read no text — try a tighter box.");
+          setScanSummary({
+            added: 0,
+            skippedExisting: filtered.skippedExisting,
+            skippedDuplicates: filtered.skippedDuplicates,
+          });
           return;
         }
+        // Atomic frontend commit: annotations become visible only here.
         addAnnotations(newAnnotations);
+        setScanSummary({
+          added: newAnnotations.length,
+          skippedExisting: filtered.skippedExisting,
+          skippedDuplicates: filtered.skippedDuplicates,
+        });
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : "Auto-segment failed unexpectedly";
+          err instanceof Error
+            ? err.message
+            : "Auto-balloon scan failed unexpectedly";
         setSelectionError(message);
       } finally {
+        setScanProgress(null);
         setIsProcessing(false);
         setIsSegmenting(false);
       }
     },
-    [currentPage, addAnnotations, setIsProcessing, setIsSegmenting]
+    [addAnnotations, setIsProcessing, setIsSegmenting]
+  );
+
+  const finishSegmentBox = useCallback(
+    async (bbox: BBox) => {
+      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
+      setIsSegmenting(false);
+      await runAutoBalloon(bbox, "section", currentPage);
+    },
+    [currentPage, runAutoBalloon, setIsSegmenting]
+  );
+
+  const scanWholePage = useCallback(async () => {
+    const source = sourceCanvasRef.current;
+    if (!source) return;
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    await runAutoBalloon(
+      { x: 0, y: 0, width: source.width, height: source.height },
+      "page",
+      currentPage
+    );
+  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
   );
 
   const isCompletingDraw = useRef(false);
@@ -584,6 +669,22 @@ export function DrawingViewer() {
           {selectionError}
         </div>
       )}
+      {scanSummary && (
+        <div className="bg-emerald-50 px-4 py-1.5 text-center text-xs text-emerald-900">
+          {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
+          {" · "}
+          {scanSummary.skippedExisting} existing object
+          {scanSummary.skippedExisting === 1 ? "" : "s"} skipped
+          {scanSummary.skippedDuplicates > 0 && (
+            <>
+              {" · "}
+              {scanSummary.skippedDuplicates} duplicate candidate
+              {scanSummary.skippedDuplicates === 1 ? "" : "s"} skipped
+            </>
+          )}
+        </div>
+      )}
+      {scanProgress && <ScanProgressBanner progress={scanProgress} />}
       {lastDebugDump && (
         <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
           OCR debug: {lastDebugDump}
@@ -604,19 +705,39 @@ export function DrawingViewer() {
           </button>
         </div>
       )}
+      {isSegmenting && !isProcessing && (
+        <div className="flex items-center justify-center gap-3 bg-emerald-600 px-4 py-2.5 text-center text-sm font-medium text-white">
+          <span>
+            Drag a rectangle around the section to auto-balloon.
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsSegmenting(false)}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       <Toolbar
-        isSegmenting={isSegmenting}
+        isSelectingScanArea={isSegmenting}
+        isScanRunning={scanProgress !== null}
         isDrawingValue={isDrawingValue}
         isProcessing={isProcessing}
         currentPage={currentPage}
         totalPages={totalPages}
         scale={scale}
-        onToggleSegment={() => {
+        onSelectScanSection={() => {
+          setSelectionError(null);
+          setScanSummary(null);
           setIsDrawingValue(false);
-          setIsSegmenting(!isSegmenting);
+          setIsSegmenting(true);
         }}
+        onScanWholePage={() => void scanWholePage()}
         onToggleDrawValue={() => {
+          setSelectionError(null);
+          setScanSummary(null);
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
         }}

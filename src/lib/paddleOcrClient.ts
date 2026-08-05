@@ -128,17 +128,66 @@ export interface SegmentRegion {
   valueBox: BBox;
 }
 
-interface ApiSegmentResponse {
+export interface ApiSegmentRegion {
+  bbox: { x: number; y: number; width: number; height: number };
+  text: string;
+  confidence: number;
+  type?: string;
+  orientation?: "horizontal" | "vertical" | "rotated";
+  rotation?: number;
+  needs_review?: boolean;
+}
+
+export interface ApiSegmentResponse {
   count: number;
-  regions: Array<{
-    bbox: { x: number; y: number; width: number; height: number };
-    text: string;
-    confidence: number;
-    type?: string;
-    orientation?: "horizontal" | "vertical" | "rotated";
-    rotation?: number;
-    needs_review?: boolean;
-  }>;
+  regions: ApiSegmentRegion[];
+}
+
+/** Map backend crop coordinates into the drawing's base canvas coordinates. */
+export function mapSegmentRegions(
+  regions: ApiSegmentRegion[],
+  bbox: BBox,
+  displayScale = 1
+): SegmentRegion[] {
+  const pad = Math.max(4, CROP_PAD_PX / displayScale);
+
+  return regions.map((r) => {
+    const mapped: BBox = {
+      x: bbox.x + (r.bbox.x - CROP_PAD_PX) / displayScale,
+      y: bbox.y + (r.bbox.y - CROP_PAD_PX) / displayScale,
+      width: r.bbox.width / displayScale,
+      height: r.bbox.height / displayScale,
+    };
+
+    const outOfBounds =
+      !Number.isFinite(mapped.x) ||
+      !Number.isFinite(mapped.y) ||
+      !Number.isFinite(mapped.width) ||
+      !Number.isFinite(mapped.height) ||
+      mapped.x < bbox.x - pad ||
+      mapped.y < bbox.y - pad ||
+      mapped.x + mapped.width > bbox.x + bbox.width + pad ||
+      mapped.y + mapped.height > bbox.y + bbox.height + pad;
+
+    const valueBox: BBox = outOfBounds
+      ? {
+          x: bbox.x,
+          y: bbox.y,
+          width: bbox.width,
+          height: bbox.height,
+        }
+      : mapped;
+
+    return {
+      text: fixEngineeringSymbols(r.text ?? ""),
+      confidence: r.confidence ?? 0,
+      type: r.type,
+      orientation: r.orientation ?? "horizontal",
+      rotation: r.rotation ?? 0,
+      needsReview: r.needs_review ?? false,
+      valueBox,
+    };
+  });
 }
 
 /**
@@ -191,45 +240,7 @@ export async function runSegmentOcr(
 
   const data = (await res.json()) as ApiSegmentResponse;
 
-  const pad = Math.max(4, CROP_PAD_PX / displayScale);
-
-  return (data.regions ?? []).map((r) => {
-    const mapped: BBox = {
-      x: bbox.x + (r.bbox.x - CROP_PAD_PX) / displayScale,
-      y: bbox.y + (r.bbox.y - CROP_PAD_PX) / displayScale,
-      width: r.bbox.width / displayScale,
-      height: r.bbox.height / displayScale,
-    };
-
-    const outOfBounds =
-      !Number.isFinite(mapped.x) ||
-      !Number.isFinite(mapped.y) ||
-      !Number.isFinite(mapped.width) ||
-      !Number.isFinite(mapped.height) ||
-      mapped.x < bbox.x - pad ||
-      mapped.y < bbox.y - pad ||
-      mapped.x + mapped.width > bbox.x + bbox.width + pad ||
-      mapped.y + mapped.height > bbox.y + bbox.height + pad;
-
-    const valueBox: BBox = outOfBounds
-      ? {
-          x: bbox.x,
-          y: bbox.y,
-          width: bbox.width,
-          height: bbox.height,
-        }
-      : mapped;
-
-    return {
-      text: fixEngineeringSymbols(r.text ?? ""),
-      confidence: r.confidence ?? 0,
-      type: r.type,
-      orientation: r.orientation ?? "horizontal",
-      rotation: r.rotation ?? 0,
-      needsReview: r.needs_review ?? false,
-      valueBox,
-    };
-  });
+  return mapSegmentRegions(data.regions ?? [], bbox, displayScale);
 }
 
 export async function runPaddleOcr(

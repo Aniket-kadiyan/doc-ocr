@@ -1,0 +1,87 @@
+import { describe, expect, it } from "vitest";
+import {
+  bboxOverlapFraction,
+  filterNewScanRegions,
+} from "@/lib/scanCandidates";
+import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type { BBox } from "@/types/annotation";
+import { makeAnnotation } from "@/test/annotationFixture";
+
+function makeRegion(text: string, valueBox: BBox): SegmentRegion {
+  return {
+    text,
+    confidence: 0.9,
+    orientation: "horizontal",
+    rotation: 0,
+    needsReview: false,
+    valueBox,
+  };
+}
+
+describe("scan candidate duplicate protection", () => {
+  it("treats a tight candidate contained by an existing manual box as a match", () => {
+    expect(
+      bboxOverlapFraction(
+        { x: 20, y: 20, width: 10, height: 10 },
+        { x: 10, y: 10, width: 40, height: 30 }
+      )
+    ).toBe(1);
+  });
+
+  it("skips overlapping candidates on the scanned page only", () => {
+    const duplicate = makeRegion("25", {
+      x: 12,
+      y: 21,
+      width: 25,
+      height: 10,
+    });
+    const otherPage = makeRegion("30", {
+      x: 110,
+      y: 20,
+      width: 30,
+      height: 12,
+    });
+    const result = filterNewScanRegions(
+      [duplicate, otherPage],
+      [
+        makeAnnotation(),
+        makeAnnotation({
+          id: "page-2",
+          page: 2,
+          bbox: { x: 110, y: 20, width: 30, height: 12 },
+        }),
+      ],
+      1
+    );
+
+    expect(result.accepted.map((region) => region.text)).toEqual(["30"]);
+    expect(result.skippedExisting).toBe(1);
+    expect(result.skippedDuplicates).toBe(0);
+  });
+
+  it("deduplicates one batch and returns survivors in stable page order", () => {
+    const result = filterNewScanRegions(
+      [
+        makeRegion("third", { x: 80, y: 80, width: 20, height: 10 }),
+        makeRegion("first", { x: 40, y: 10, width: 20, height: 10 }),
+        makeRegion("duplicate first", {
+          x: 41,
+          y: 10,
+          width: 18,
+          height: 10,
+        }),
+        makeRegion("second", { x: 10, y: 80, width: 20, height: 10 }),
+      ],
+      [],
+      1
+    );
+
+    expect(result.accepted.map((region) => region.text)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    expect(result.skippedExisting).toBe(0);
+    expect(result.skippedDuplicates).toBe(1);
+  });
+});
