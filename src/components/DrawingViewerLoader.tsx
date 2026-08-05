@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { BalloonStyleProvider } from "@/components/BalloonStyleProvider";
 
 const DrawingViewer = dynamic(
   () =>
@@ -18,5 +19,9 @@ const DrawingViewer = dynamic(
 );
 
 export function DrawingViewerLoader() {
-  return <DrawingViewer />;
+  return (
+    <BalloonStyleProvider>
+      <DrawingViewer />
+    </BalloonStyleProvider>
+  );
 }
