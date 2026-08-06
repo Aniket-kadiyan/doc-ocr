@@ -58,10 +58,12 @@ The fast suite verifies:
   fits multi-digit numbers.
 - The developer balloon builder preserves enclosed white regions, round-trips
   one-file styles, and rejects corrupt or unsafe files.
-- Large auto-balloon selections split into overlapping, coordinate-safe work
-  tiles while small selections remain one tile.
+- Auto-balloon localization uses one morphology proposal pass and exactly two
+  bounded primary detector passes (`0°` and `90°`), with a capped set of local
+  refinements only for uncovered morphology regions.
 - Scan results remain hidden until success while heartbeat, liveness,
-  pass/tile/object counters, elapsed time, and ETA telemetry remain observable.
+  pass/object counters, elapsed time, and stage-rate ETA telemetry remain
+  observable.
 
 Automated tests do not claim OCR accuracy on real manufacturing drawings or
 pixel-perfect browser rendering. Those remain manual acceptance checks.
@@ -116,7 +118,9 @@ identify the offending balloon and block final output once the edit is saved.
 ### OCR integration
 
 - Run `npm run test:ocr` with the complete Windows OCR environment installed.
-- Start `npm run ocr-api` and verify `/health` reports PaddleOCR available.
+- Start `npm run ocr-api` and verify `/health` reports both `paddleocr: true`
+  and `text_detector: true`. A false detector flag activates the slower,
+  reduced compatibility path and must be recorded with benchmark results.
 - Read at least one horizontal dimension, vertical dimension, diameter,
   decimal tolerance, and DMS angle from representative drawings.
 - Verify an OCR failure still opens an editable empty Value dialog without
@@ -127,26 +131,34 @@ identify the offending balloon and block final output once the edit is saved.
 - Scan a small section and confirm each blocking detection pass is named before
   PaddleOCR begins it; the indicator must continue pulsing while its percentage
   is unchanged.
-- Scan a section wider or taller than 2000 source pixels and confirm progress
-  shows both `Pass N/M` and `Tile N/M`. Tile counts must increase with area.
+- Scan a large section and a whole page. Confirm localization shows one
+  morphology-proposal stage followed by only two primary detector passes. A
+  large source is labelled with a bounded `2400px` primary target rather than
+  multiplying the page into repeated OCR tiles.
+- If morphology finds uncovered areas, confirm a separate **Refining coverage
+  gaps** stage appears and advances one local gap at a time. The retry count is
+  bounded; morphology proposals remain available even beyond that retry cap.
 - Confirm elapsed time and current-step time continue advancing throughout the
-  job. ETA appears only after enough real progress exists and may adjust as the
-  scan discovers recognition work.
+  job. Before a comparable unit completes, the UI must say **Calculating
+  estimate**. Afterwards it shows **Stage ETA**; it must not extrapolate total
+  runtime from the global weighted percentage.
 - Confirm the heartbeat normally stays current. A slow unit may change to
   **Long-running step** and an unusually stale unit to **Possibly stalled**;
   neither warning cancels the scan or commits partial balloons.
 - Confirm recognition reports `Object N/M`, finalization is visible, and all
   balloons still appear together only after the complete job succeeds.
 
-## Immediate post-auto-ballooning performance milestone
+## Milestone 2B performance gate
 
-After functional auto-ballooning is accepted, the first follow-up is to bring
-the complete click-to-insertion time to no more than five minutes on the actual
-deployment Windows machine. Measure an agreed representative worst-case drawing
-and maximum page resolution, exclude manual review time, and retain at least the
-accepted detection/recognition accuracy. Five minutes is an acceptance ceiling,
-not an automatic cancellation timeout. The progress telemetry above identifies
-the stages and work units to optimize.
+Performance is now a prerequisite for the remaining auto-ballooning accuracy
+milestones. On the actual deployment Windows machine, complete click-to-balloon
+insertion must take no more than **10 minutes** for the agreed representative
+worst-case drawing and maximum page resolution; **5 minutes or less** is the
+preferred target. Use a warm OCR service, exclude manual review time, and retain
+at least the accepted detection/recognition accuracy. Neither limit is an
+automatic cancellation timeout. Record total time plus proposal, primary
+detection, local refinement, recognition, and finalization times so the next
+optimization targets measured work.
 
 ## Explicitly deferred until after auto-ballooning
 

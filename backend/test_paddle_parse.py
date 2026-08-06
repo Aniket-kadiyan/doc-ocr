@@ -4,7 +4,7 @@ Run from backend/:
     python test_paddle_parse.py
 """
 
-from paddle_parse import extract_paddle_lines
+from paddle_parse import extract_paddle_detection_boxes, extract_paddle_lines
 
 
 BOX = [[1, 2], [21, 2], [21, 10], [1, 10]]
@@ -20,6 +20,19 @@ class Paddle3Result:
                 "rec_texts": ["42.50"],
                 "rec_scores": [0.98],
                 "rec_polys": [BOX],
+            }
+        }
+
+
+class Paddle3DetectionResult:
+    """Minimal standalone TextDetection result with no recognition fields."""
+
+    @property
+    def json(self):
+        return {
+            "res": {
+                "dt_polys": [BOX],
+                "dt_scores": [0.03],
             }
         }
 
@@ -49,8 +62,14 @@ def test_paddle_2_recognition_only_result() -> None:
     assert parsed == [("8.00", 0.0, 0.0, 0.0, 0.0, 0.94)], parsed
 
 
+def test_paddle_3_detector_only_result_keeps_low_confidence_box() -> None:
+    parsed = extract_paddle_detection_boxes(iter([Paddle3DetectionResult()]))
+    assert parsed == [(1.0, 2.0, 20.0, 8.0, 0.03)]
+
+
 if __name__ == "__main__":
     test_paddle_3_result_object()
     test_paddle_2_nested_result()
     test_paddle_2_recognition_only_result()
+    test_paddle_3_detector_only_result_keeps_low_confidence_box()
     print("OK")

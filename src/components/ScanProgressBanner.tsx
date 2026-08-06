@@ -19,7 +19,9 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
   const stageTitle: Record<string, string> = {
     queued: "Queued",
     preparing: "Preparing scan",
+    proposing: "Finding candidate regions",
     detecting: "Detecting objects",
+    refining: "Refining coverage gaps",
     grouping: "Grouping objects",
     recognizing: "Recognizing values",
     finalizing: "Finalizing balloons",
@@ -52,9 +54,14 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
           </span>
           {progress.estimatedRemainingSeconds !== null && (
             <span className="tabular-nums">
-              ETA {formatScanDuration(progress.estimatedRemainingSeconds)}
+              Stage ETA {formatScanDuration(progress.estimatedRemainingSeconds)}
             </span>
           )}
+          {progress.status === "running" &&
+            progress.total > progress.completed &&
+            progress.estimatedRemainingSeconds === null && (
+              <span>Calculating estimate</span>
+            )}
           <span className="w-10 text-right font-medium tabular-nums">
             {percent}%
           </span>

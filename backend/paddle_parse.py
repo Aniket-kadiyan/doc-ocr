@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from numbers import Real
 from typing import Any, Iterator
 
@@ -194,3 +195,39 @@ def extract_paddle_lines(
 ) -> list[tuple[str, float, float, float, float, float]]:
     """Returns list of (text, x, y, width, height, confidence)."""
     return list(_walk_result(result))
+
+
+def _walk_detection_result(
+    obj: Any,
+) -> Iterator[tuple[float, float, float, float, float]]:
+    """Walk standalone PaddleOCR ``TextDetection`` result objects."""
+
+    obj = _unwrap_result(obj)
+    if obj is None:
+        return
+
+    if isinstance(obj, dict):
+        polys = _as_list(_first_present(obj, "dt_polys", "rec_polys"))
+        scores = _as_list(_first_present(obj, "dt_scores", "rec_scores"))
+        for index, polygon in enumerate(polys):
+            if not _is_box(polygon):
+                continue
+            x, y, width, height = _box_to_rect(polygon)
+            score = float(scores[index]) if index < len(scores) else 0.0
+            if width > 0 and height > 0:
+                yield x, y, width, height, score
+        return
+
+    if hasattr(obj, "tolist"):
+        obj = obj.tolist()
+    if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        for child in obj:
+            yield from _walk_detection_result(child)
+
+
+def extract_paddle_detection_boxes(
+    result: Any,
+) -> list[tuple[float, float, float, float, float]]:
+    """Return detector-only ``(x, y, width, height, confidence)`` boxes."""
+
+    return list(_walk_detection_result(result))

@@ -1,9 +1,11 @@
-"""Accuracy-first detection passes and coordinate transforms.
+"""Adaptive auto-balloon detection plans and coordinate transforms.
 
-Milestone 2 deliberately separates *where text might be* from grouping and
-recognition.  Every pass operates on the same source crop, and every detected
-box is mapped back into that crop's original pixel coordinate system before it
-leaves this module.
+The first accuracy-first implementation exhaustively combined four image
+variants, four rotations, two scales, and page tiles.  PaddleOCR 3.x ran the
+complete OCR pipeline for every one of those nominal "detection" calls, which
+made whole-page scans impractical.  Milestone 2B keeps the high-recall
+morphology proposals but bounds learned localization to two detector-only page
+passes plus a capped set of local refinements.
 """
 
 from __future__ import annotations
@@ -30,7 +32,19 @@ DETECTION_VARIANTS = (
     "threshold",
     "inverted",
 )
-DETECTION_ROTATIONS_CW = (0, 90, 180, 270)
+# A 180/270-degree pass cannot reveal a new text location.  The recognition
+# stage resolves a crop's final reading orientation later.
+DETECTION_ROTATIONS_CW = (0, 90)
+DETECTION_PRIMARY_VARIANT = "source_contrast"
+DETECTION_PRIMARY_MIN_EDGE = 1100
+DETECTION_PRIMARY_MAX_EDGE = 2400
+DETECTION_REFINEMENT_TARGET_EDGE = 1100
+DETECTION_MAX_REFINEMENT_REGIONS = 24
+DETECTION_FALLBACK_MAX_REFINEMENT_REGIONS = 8
+DETECTION_COVERAGE_RATIO = 0.55
+
+# These helpers remain available for local/refinement experiments, but the
+# whole-page adaptive path no longer tiles every detector pass.
 DETECTION_TILE_MAX_EDGE = 2000
 DETECTION_TILE_OVERLAP = 160
 
@@ -148,31 +162,35 @@ def offset_tile_box(
     }
 
 
-def detection_target_edges(image: Image.Image) -> tuple[int, ...]:
-    """Return balanced and detail scales without downsampling source pixels."""
+def detection_primary_target_edge(
+    image_or_size: Image.Image | tuple[int, int],
+) -> int:
+    """Return the bounded long edge used by both primary detector passes.
 
-    long_edge = max(image.size)
-    balanced = max(long_edge, 1100)
-    # A second, substantially larger pass helps faint and very small CAD text.
-    detail = max(1800, int(round(balanced * 1.55)))
-    detail = min(detail, 3000)
+    Small sections are enlarged enough for CAD digits while large drawings are
+    downscaled once for localization.  Full source pixels are retained for the
+    later, targeted refinement crops.
+    """
 
-    # Very large source images already exceed the safe detail ceiling.  Running
-    # the same native-size pass twice would add time without new information.
-    if detail <= balanced:
-        return (balanced,)
-    return (balanced, detail)
+    size = (
+        image_or_size.size
+        if isinstance(image_or_size, Image.Image)
+        else image_or_size
+    )
+    long_edge = max(size)
+    return min(
+        DETECTION_PRIMARY_MAX_EDGE,
+        max(DETECTION_PRIMARY_MIN_EDGE, long_edge),
+    )
 
 
 def build_detection_pass_plan(image: Image.Image) -> list[DetectionPassSpec]:
-    """Build the complete, stable pass order used for progress reporting."""
+    """Build the two bounded primary detector-only passes."""
 
-    targets = detection_target_edges(image)
+    target = detection_primary_target_edge(image)
     return [
-        DetectionPassSpec(variant, rotation, target)
+        DetectionPassSpec(DETECTION_PRIMARY_VARIANT, rotation, target)
         for rotation in DETECTION_ROTATIONS_CW
-        for variant in DETECTION_VARIANTS
-        for target in targets
     ]
 
 
@@ -234,6 +252,141 @@ def build_detection_variants(image: Image.Image) -> dict[str, Image.Image]:
         "threshold": binary.convert("RGB"),
         "inverted": ImageOps.invert(binary).convert("RGB"),
     }
+
+
+def build_primary_detection_image(image: Image.Image) -> Image.Image:
+    """Create only the view used by the primary adaptive detector.
+
+    Building all four legacy variants over a large page consumed time and
+    memory even when only one view was required.  Local fallback experiments
+    can still call :func:`build_detection_variants` explicitly.
+    """
+
+    return ImageOps.autocontrast(image.convert("L"), cutoff=0).convert("RGB")
+
+
+def _box_area(box: dict[str, Any]) -> float:
+    return max(0.0, float(box["w"])) * max(0.0, float(box["h"]))
+
+
+def _intersection_area(a: dict[str, Any], b: dict[str, Any]) -> float:
+    x0 = max(float(a["x"]), float(b["x"]))
+    y0 = max(float(a["y"]), float(b["y"]))
+    x1 = min(float(a["x"] + a["w"]), float(b["x"] + b["w"]))
+    y1 = min(float(a["y"] + a["h"]), float(b["y"] + b["h"]))
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return (x1 - x0) * (y1 - y0)
+
+
+def _union_box(a: dict[str, Any], b: dict[str, Any]) -> dict[str, float]:
+    x0 = min(float(a["x"]), float(b["x"]))
+    y0 = min(float(a["y"]), float(b["y"]))
+    x1 = max(float(a["x"] + a["w"]), float(b["x"] + b["w"]))
+    y1 = max(float(a["y"] + a["h"]), float(b["y"] + b["h"]))
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
+def _boxes_touch(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return not (
+        float(a["x"] + a["w"]) < float(b["x"])
+        or float(b["x"] + b["w"]) < float(a["x"])
+        or float(a["y"] + a["h"]) < float(b["y"])
+        or float(b["y"] + b["h"]) < float(a["y"])
+    )
+
+
+def build_refinement_regions(
+    morphology_boxes: list[dict[str, Any]],
+    detector_boxes: list[dict[str, Any]],
+    *,
+    source_size: tuple[int, int],
+    max_regions: int = DETECTION_MAX_REFINEMENT_REGIONS,
+    coverage_ratio: float = DETECTION_COVERAGE_RATIO,
+    margin_ratio: float = 0.45,
+    max_region_area_ratio: float = 0.18,
+) -> list[dict[str, float]]:
+    """Build bounded local retries for morphology proposals not yet covered.
+
+    Morphology boxes always remain candidates, including proposals beyond the
+    retry cap.  The cap therefore bounds detector work without silently losing
+    recall; local refinement only improves the learned box around a gap.
+    """
+
+    if max_regions <= 0:
+        return []
+
+    width, height = source_size
+    source_area = max(float(width * height), 1.0)
+    max_region_area = source_area * max_region_area_ratio
+    gaps: list[dict[str, float]] = []
+
+    for proposal in morphology_boxes:
+        area = _box_area(proposal)
+        if area < 1.0:
+            continue
+        covered = any(
+            _intersection_area(proposal, detected) / area >= coverage_ratio
+            for detected in detector_boxes
+        )
+        if covered:
+            continue
+
+        margin = max(8.0, min(float(proposal["w"]), float(proposal["h"])) * margin_ratio)
+        expanded = _clip_box(
+            {
+                "x": float(proposal["x"]) - margin,
+                "y": float(proposal["y"]) - margin,
+                "w": float(proposal["w"]) + margin * 2,
+                "h": float(proposal["h"]) + margin * 2,
+            },
+            float(width),
+            float(height),
+        )
+        # Very large morphology components are usually drawing geometry.  They
+        # are still retained as proposals, but a page-like local retry adds no
+        # detail beyond the bounded primary scan.
+        if expanded is not None and _box_area(expanded) <= max_region_area:
+            gaps.append(
+                {
+                    "x": float(expanded["x"]),
+                    "y": float(expanded["y"]),
+                    "w": float(expanded["w"]),
+                    "h": float(expanded["h"]),
+                }
+            )
+
+    # Expanded neighbouring gaps are one detector call.  Repeat until no
+    # transitive overlaps remain, but do not merge into a page-sized retry.
+    regions = gaps
+    changed = True
+    while changed:
+        changed = False
+        merged: list[dict[str, float]] = []
+        while regions:
+            current = regions.pop(0)
+            remainder: list[dict[str, float]] = []
+            for other in regions:
+                union = _union_box(current, other)
+                if _boxes_touch(current, other) and _box_area(union) <= max_region_area:
+                    current = union
+                    changed = True
+                else:
+                    remainder.append(other)
+            regions = remainder
+            merged.append(current)
+        regions = merged
+
+    # Coarse/large gaps benefit most from refinement.  Return the capped set in
+    # stable page-reading order so progress is deterministic.
+    selected = sorted(regions, key=_box_area, reverse=True)[:max_regions]
+    return sorted(selected, key=lambda box: (box["y"], box["x"]))
+
+
+def refinement_rotation(region: dict[str, Any]) -> int:
+    """Make a tall local gap horizontal for its one detector retry."""
+
+    return 90 if float(region["h"]) > float(region["w"]) * 1.25 else 0
 
 
 def estimate_skew_correction(

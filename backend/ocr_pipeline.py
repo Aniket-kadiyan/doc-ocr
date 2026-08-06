@@ -21,7 +21,7 @@ from image_preprocess import (
     upscale_min_edge,
     clahe_rgb,
 )
-from paddle_parse import extract_paddle_lines
+from paddle_parse import extract_paddle_detection_boxes, extract_paddle_lines
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_regions import enlarge_zone, split_symbol_zones
 from symbol_vision import (
@@ -87,6 +87,8 @@ class OcrPipeline:
         self._paddle = None
         self._paddle_available = False
         self._paddle_api = 0  # 3 = PaddleOCR 3.x (.predict), 2 = 2.x (.ocr)
+        self._text_detector = None
+        self._text_detector_available = False
         self._paddle_version = "unknown"
         self._init_errors: list[str] = []
 
@@ -133,6 +135,7 @@ class OcrPipeline:
                 )
                 self._paddle_api = 3
                 self._paddle_available = True
+                self._load_text_detector(paddleocr)
                 return
             except Exception as exc:  # noqa: BLE001
                 self._init_errors.append(f"PaddleOCR 3.x: {exc}")
@@ -158,12 +161,39 @@ class OcrPipeline:
         except Exception as exc:  # noqa: BLE001
             self._init_errors.append(f"PaddleOCR 2.x: {exc}")
 
+    def _load_text_detector(self, paddleocr_module: Any) -> None:
+        """Load PaddleOCR 3.x's standalone detector for auto-balloon scans."""
+
+        detector_class = getattr(paddleocr_module, "TextDetection", None)
+        if detector_class is None:
+            self._init_errors.append(
+                "PaddleOCR TextDetection module is unavailable; "
+                "auto-ballooning will use the reduced compatibility path"
+            )
+            return
+
+        try:
+            self._text_detector = detector_class(
+                model_name="PP-OCRv5_mobile_det",
+                thresh=0.2,
+                box_thresh=0.4,
+            )
+            self._text_detector_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(f"PaddleOCR TextDetection: {exc}")
+
     @property
     def status(self) -> dict[str, Any]:
         return {
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
+            "text_detector": self._text_detector_available,
+            "auto_balloon_detection_mode": (
+                "detector_only"
+                if self._text_detector_available
+                else "reduced_ocr_compatibility"
+            ),
             "trocr": False,
             "symbol_vision": True,
             "errors": self._init_errors,
@@ -172,6 +202,35 @@ class OcrPipeline:
     def _predict_3x(self, arr: np.ndarray) -> Any:
         """Run PaddleOCR 3.x; paddle_parse normalizes its Result objects."""
         return self._paddle.predict(arr)
+
+    def _predict_text_detector(self, arr: np.ndarray) -> Any:
+        """Run the standalone PaddleOCR detector without recognition."""
+
+        # The image has already been deliberately bounded/upscaled by the
+        # adaptive caller. Override the model's generic document limit so it
+        # does not silently downscale a 2400px engineering drawing again.
+        return self._text_detector.predict(
+            arr,
+            batch_size=1,
+            limit_side_len=max(arr.shape[:2]),
+            limit_type="max",
+        )
+
+    def _run_text_detector(
+        self,
+        image: Image.Image,
+    ) -> list[tuple[float, float, float, float, float]]:
+        """Return detector-only boxes in the supplied image coordinates."""
+
+        if not self._text_detector_available or self._text_detector is None:
+            raise RuntimeError("The standalone PaddleOCR text detector is unavailable")
+        try:
+            result = self._predict_text_detector(np.asarray(image.convert("RGB")))
+        except Exception as exc:
+            raise RuntimeError(
+                f"PaddleOCR {self._paddle_version} detector-only inference failed: {exc}"
+            ) from exc
+        return extract_paddle_detection_boxes(result)
 
     def _run_paddle(
         self,
@@ -609,124 +668,74 @@ class OcrPipeline:
     ) -> list[dict[str, Any]]:
         """Propose text boxes in the received image's original coordinates.
 
-        A top-level auto-balloon scan uses the accuracy-first Milestone 2 pass
-        stack.  Oversized-cluster refinement can request the earlier quick path
-        so one refinement does not recursively launch another complete scan.
+        A top-level auto-balloon scan uses the bounded Milestone 2B adaptive
+        cascade. Oversized-cluster refinement can request the earlier quick
+        path so one refinement does not recursively launch another page scan.
         """
 
         if not thorough:
             return self._detect_regions_quick(image)
 
         from detection_passes import (
+            DETECTION_FALLBACK_MAX_REFINEMENT_REGIONS,
+            DETECTION_MAX_REFINEMENT_REGIONS,
+            DETECTION_REFINEMENT_TARGET_EDGE,
             build_detection_pass_plan,
-            build_detection_tiles,
-            build_detection_variants,
-            detection_tile_target_edge,
-            map_detection_box_to_original,
-            offset_tile_box,
+            build_primary_detection_image,
+            build_refinement_regions,
+            map_deskewed_box_to_original,
+            map_quarter_turn_box_to_source,
             prepare_detection_source,
+            refinement_rotation,
             rotate_for_detection,
         )
         from region_detect import propose_text_regions
 
         prepared = prepare_detection_source(image)
-        variants = build_detection_variants(prepared.image)
         pass_plan = build_detection_pass_plan(prepared.image)
-        # Morphology is always included rather than only acting as a fallback;
-        # it can recover faint objects missed by otherwise successful OCR passes.
-        total_passes = len(pass_plan) + 1
-        source_width, source_height = prepared.image.size
-        pass_tile_counts = [
-            len(
-                build_detection_tiles(
-                    (source_height, source_width)
-                    if spec.rotation_cw in {90, 270}
-                    else (source_width, source_height)
+        primary_total = len(pass_plan)
+        morphology_candidates: list[dict[str, Any]] = []
+        primary_candidates: list[dict[str, Any]] = []
+
+        def emit(
+            *,
+            phase: str,
+            completed: int,
+            total: int,
+            state: str,
+            label: str,
+            pass_current: int,
+            proposals: int,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    phase=phase,
+                    completed=completed,
+                    total=total,
+                    state=state,
+                    label=label,
+                    proposals=proposals,
+                    deskew_angle=prepared.correction_angle,
+                    pass_current=pass_current,
+                    pass_total=total,
+                    tile_current=1,
+                    tile_total=1,
                 )
-            )
-            for spec in pass_plan
-        ]
-        # Morphology is one final work unit.  This makes the progress denominator
-        # grow with the selected area instead of pretending every page-sized
-        # Paddle pass costs the same as one small-section pass.
-        total_units = sum(pass_tile_counts) + 1
-        completed_units = 0
-        candidates: list[dict[str, Any]] = []
 
-        for pass_index, spec in enumerate(pass_plan, start=1):
-            rotated = rotate_for_detection(
-                variants[spec.variant],
-                spec.rotation_cw,
-            )
-            tiles = build_detection_tiles(rotated)
-            for tile_index, tile in enumerate(tiles, start=1):
-                if progress_callback is not None:
-                    progress_callback(
-                        completed=completed_units,
-                        total=total_units,
-                        state="running",
-                        label=spec.label,
-                        proposals=len(candidates),
-                        deskew_angle=prepared.correction_angle,
-                        pass_current=pass_index,
-                        pass_total=total_passes,
-                        tile_current=tile_index,
-                        tile_total=len(tiles),
-                    )
-
-                tile_image = rotated.crop(tile.box)
-                detected = self._paddle_det_boxes(
-                    tile_image,
-                    target_long_edge=detection_tile_target_edge(
-                        tile,
-                        full_size=rotated.size,
-                        pass_target_edge=spec.target_long_edge,
-                    ),
-                    preprocess=False,
-                )
-                for box in detected:
-                    mapped = map_detection_box_to_original(
-                        offset_tile_box(box, tile),
-                        rotation_cw=spec.rotation_cw,
-                        source_size=prepared.image.size,
-                        correction_angle=prepared.correction_angle,
-                    )
-                    if mapped is None:
-                        continue
-                    mapped["_detection_pass"] = spec.label
-                    candidates.append(mapped)
-
-                completed_units += 1
-                if progress_callback is not None:
-                    progress_callback(
-                        completed=completed_units,
-                        total=total_units,
-                        state="completed",
-                        label=spec.label,
-                        proposals=len(candidates),
-                        deskew_angle=prepared.correction_angle,
-                        pass_current=pass_index,
-                        pass_total=total_passes,
-                        tile_current=tile_index,
-                        tile_total=len(tiles),
-                    )
-
-        if progress_callback is not None:
-            progress_callback(
-                completed=completed_units,
-                total=total_units,
-                state="running",
-                label="morphology",
-                proposals=len(candidates),
-                deskew_angle=prepared.correction_angle,
-                pass_current=total_passes,
-                pass_total=total_passes,
-                tile_current=1,
-                tile_total=1,
-            )
-        morphology = propose_text_regions(image)
-        for box in morphology:
-            candidates.append(
+        # Morphology runs once at source resolution.  It is inexpensive enough
+        # to preserve faint/small proposals that the bounded page detector may
+        # miss, and it defines where local detector retries are useful.
+        emit(
+            phase="proposing",
+            completed=0,
+            total=1,
+            state="running",
+            label="source-resolution morphology proposals",
+            pass_current=1,
+            proposals=0,
+        )
+        for box in propose_text_regions(prepared.image):
+            morphology_candidates.append(
                 {
                     **box,
                     "text": "",
@@ -734,25 +743,150 @@ class OcrPipeline:
                     "_detection_pass": "morphology",
                 }
             )
-        completed_units += 1
-        if progress_callback is not None:
-            progress_callback(
-                completed=completed_units,
-                total=total_units,
+        emit(
+            phase="proposing",
+            completed=1,
+            total=1,
+            state="completed",
+            label="source-resolution morphology proposals",
+            pass_current=1,
+            proposals=len(morphology_candidates),
+        )
+
+        primary_image = build_primary_detection_image(prepared.image)
+        detector_mode = (
+            "detector only"
+            if getattr(self, "_text_detector_available", False)
+            else "reduced OCR compatibility"
+        )
+        for plan_index, spec in enumerate(pass_plan, start=1):
+            pass_current = plan_index
+            label = f"{spec.label}, {detector_mode}"
+            emit(
+                phase="detecting",
+                completed=plan_index - 1,
+                total=primary_total,
+                state="running",
+                label=label,
+                pass_current=pass_current,
+                proposals=len(morphology_candidates) + len(primary_candidates),
+            )
+            rotated = rotate_for_detection(primary_image, spec.rotation_cw)
+            for box in self._detector_only_boxes(
+                rotated,
+                target_long_edge=spec.target_long_edge,
+            ):
+                mapped = map_quarter_turn_box_to_source(
+                    box,
+                    spec.rotation_cw,
+                    prepared.image.size,
+                )
+                if mapped is None:
+                    continue
+                mapped["_detection_pass"] = spec.label
+                primary_candidates.append(mapped)
+            emit(
+                phase="detecting",
+                completed=plan_index,
+                total=primary_total,
                 state="completed",
-                label="morphology",
-                proposals=len(candidates),
-                deskew_angle=prepared.correction_angle,
-                pass_current=total_passes,
-                pass_total=total_passes,
-                tile_current=1,
-                tile_total=1,
+                label=label,
+                pass_current=pass_current,
+                proposals=len(morphology_candidates) + len(primary_candidates),
             )
 
-        # This is only coarse same-position suppression needed to keep the
-        # 30+ pass proposal set tractable. Logical-object deduplication remains
-        # Milestone 3 work.
-        return self._dedupe_det_boxes(candidates, overlap_thresh=0.62)
+        max_refinements = (
+            DETECTION_MAX_REFINEMENT_REGIONS
+            if getattr(self, "_text_detector_available", False)
+            else DETECTION_FALLBACK_MAX_REFINEMENT_REGIONS
+        )
+        refinement_regions = build_refinement_regions(
+            morphology_candidates,
+            primary_candidates,
+            source_size=prepared.image.size,
+            max_regions=max_refinements,
+        )
+        refinement_candidates: list[dict[str, Any]] = []
+        source_width, source_height = prepared.image.size
+        for region_index, region in enumerate(refinement_regions, start=1):
+            rotation = refinement_rotation(region)
+            label = (
+                f"local coverage gap {region_index}, {rotation} deg, "
+                f"{DETECTION_REFINEMENT_TARGET_EDGE}px"
+            )
+            emit(
+                phase="refining",
+                completed=region_index - 1,
+                total=len(refinement_regions),
+                state="running",
+                label=label,
+                pass_current=region_index,
+                proposals=(
+                    len(morphology_candidates)
+                    + len(primary_candidates)
+                    + len(refinement_candidates)
+                ),
+            )
+
+            x0 = max(0, int(region["x"]))
+            y0 = max(0, int(region["y"]))
+            x1 = min(
+                source_width,
+                max(x0 + 1, int(region["x"] + region["w"] + 0.999)),
+            )
+            y1 = min(
+                source_height,
+                max(y0 + 1, int(region["y"] + region["h"] + 0.999)),
+            )
+            crop = build_primary_detection_image(
+                prepared.image.crop((x0, y0, x1, y1))
+            )
+            rotated = rotate_for_detection(crop, rotation)
+            for box in self._detector_only_boxes(
+                rotated,
+                target_long_edge=DETECTION_REFINEMENT_TARGET_EDGE,
+            ):
+                local = map_quarter_turn_box_to_source(
+                    box,
+                    rotation,
+                    crop.size,
+                )
+                if local is None:
+                    continue
+                local["x"] = float(local["x"]) + x0
+                local["y"] = float(local["y"]) + y0
+                local["_detection_pass"] = label
+                refinement_candidates.append(local)
+
+            emit(
+                phase="refining",
+                completed=region_index,
+                total=len(refinement_regions),
+                state="completed",
+                label=label,
+                pass_current=region_index,
+                proposals=(
+                    len(morphology_candidates)
+                    + len(primary_candidates)
+                    + len(refinement_candidates)
+                ),
+            )
+
+        # All three proposal sources currently use deskewed coordinates. Restore
+        # them once, after the adaptive plan is complete, then apply only coarse
+        # same-position suppression. Logical-object deduplication is Milestone 3.
+        restored: list[dict[str, Any]] = []
+        for candidate in (
+            morphology_candidates + primary_candidates + refinement_candidates
+        ):
+            mapped = map_deskewed_box_to_original(
+                candidate,
+                prepared.image.size,
+                prepared.correction_angle,
+            )
+            if mapped is not None:
+                restored.append(mapped)
+        return self._dedupe_det_boxes(restored, overlap_thresh=0.62)
 
     def _detect_regions_quick(self, image: Image.Image) -> list[dict[str, Any]]:
         """Earlier two-orientation proposer used only for local refinement."""
@@ -775,6 +909,71 @@ class OcrPipeline:
 
         # Add substantial Paddle det boxes only when morphology missed a value.
         return self._merge_region_proposals(boxes, ocr_boxes)
+
+    def _detector_only_boxes(
+        self,
+        pil_img: Image.Image,
+        *,
+        target_long_edge: int,
+    ) -> list[dict[str, Any]]:
+        """Run bounded localization and restore boxes to ``pil_img`` pixels.
+
+        PaddleOCR 3.x uses its standalone ``TextDetection`` model here, so no
+        text recognition is performed.  Older compatible installations use
+        the same bounded image with the general OCR pipeline, but the adaptive
+        caller reduces their local retry cap separately.
+        """
+
+        pad = 24
+        padded = pad_image(pil_img, px=pad)
+        pw, ph = padded.size
+        edge = max(pw, ph)
+        factor = min(6.0, target_long_edge / max(edge, 1))
+        if abs(factor - 1.0) > 0.01:
+            detector_input = padded.resize(
+                (
+                    max(1, int(round(pw * factor))),
+                    max(1, int(round(ph * factor))),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        else:
+            factor = 1.0
+            detector_input = padded
+
+        detections: list[tuple[float, float, float, float, float, str]] = []
+        if getattr(self, "_text_detector_available", False):
+            detections = [
+                (x, y, width, height, confidence, "")
+                for x, y, width, height, confidence in self._run_text_detector(
+                    detector_input
+                )
+            ]
+        else:
+            _, _, words = self._run_paddle(detector_input, det=True)
+            detections = [
+                (
+                    float(word["x"]),
+                    float(word["y"]),
+                    float(word["width"]),
+                    float(word["height"]),
+                    float(word.get("confidence", 0.0)),
+                    str(word.get("text", "")),
+                )
+                for word in words
+            ]
+
+        return [
+            {
+                "x": x / factor - pad,
+                "y": y / factor - pad,
+                "w": width / factor,
+                "h": height / factor,
+                "text": text,
+                "conf": confidence,
+            }
+            for x, y, width, height, confidence, text in detections
+        ]
 
     def _paddle_det_boxes(
         self,
@@ -1140,13 +1339,14 @@ class OcrPipeline:
         )
         report(
             stage="detecting",
-            message="Building accuracy-first detection passes",
+            message="Starting bounded detector-only localization",
             percent=7,
         )
         detection_state = {"completed": 0, "total": 0}
 
         def report_detection_pass(
             *,
+            phase: str,
             completed: int,
             total: int,
             state: str,
@@ -1171,13 +1371,25 @@ class OcrPipeline:
                 else ""
             )
             action = "Running" if state == "running" else "Completed"
+            phase_progress = {
+                "proposing": (7, 3, "proposal"),
+                "detecting": (10, 12, "detection"),
+                "refining": (22, 8, "refinement"),
+            }
+            percent_start, percent_span, pass_name = phase_progress.get(
+                phase,
+                (7, 23, "detection"),
+            )
             report(
-                stage="detecting",
+                stage=phase,
                 message=(
-                    f"{action} detection pass {pass_current} of {pass_total}"
+                    f"{action} {pass_name} pass {pass_current} of {pass_total}"
                     f"{tile_text}: {label} ({proposals} proposals{deskew})"
                 ),
-                percent=7 + int(23 * completed / max(total, 1)),
+                percent=(
+                    percent_start
+                    + int(percent_span * completed / max(total, 1))
+                ),
                 completed=completed,
                 total=total,
                 pass_current=pass_current,

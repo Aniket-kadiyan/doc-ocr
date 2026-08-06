@@ -164,7 +164,9 @@ def test_heartbeat_and_area_aware_liveness_continue_during_blocking_work() -> No
         timing = manager.get(initial["job_id"])
         assert timing is not None
         assert timing["elapsed_seconds"] >= 10
-        assert 130 <= timing["estimated_remaining_seconds"] <= 136
+        # No unit has completed yet, so a multi-hour percent extrapolation is
+        # intentionally withheld while the UI says "Calculating estimate".
+        assert timing["estimated_remaining_seconds"] is None
 
         sleep(0.07)
         long_running = manager.get(initial["job_id"])
@@ -191,4 +193,54 @@ def test_heartbeat_and_area_aware_liveness_continue_during_blocking_work() -> No
         assert complete["finished_at"] is not None
     finally:
         release.set()
+        manager.shutdown()
+
+
+def test_eta_uses_completed_units_from_the_current_stage() -> None:
+    manager = ScanJobManager(max_workers=1)
+    started = Event()
+    finish = Event()
+
+    def work(report):
+        report(
+            stage="detecting",
+            message="Running primary detector 1 of 2",
+            percent=10,
+            completed=0,
+            total=2,
+            pass_current=1,
+            pass_total=2,
+        )
+        report(
+            stage="detecting",
+            message="Completed primary detector 1 of 2",
+            percent=16,
+            completed=1,
+            total=2,
+            pass_current=1,
+            pass_total=2,
+        )
+        started.set()
+        assert finish.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        initial = manager.submit(work)
+        assert started.wait(1.0)
+        with manager._lock:
+            job = manager._jobs[initial["job_id"]]
+            job.stage_started_at -= 10.0
+            job.started_at -= 100.0
+
+        snapshot = manager.get(initial["job_id"])
+        assert snapshot is not None
+        # One comparable unit took about ten seconds and one remains. The old
+        # global-percent formula would incorrectly project several minutes.
+        assert 9 <= snapshot["estimated_remaining_seconds"] <= 11
+
+        finish.set()
+        complete = _wait_for_terminal(manager, initial["job_id"])
+        assert complete["status"] == "succeeded"
+    finally:
+        finish.set()
         manager.shutdown()

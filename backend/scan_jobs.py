@@ -56,6 +56,8 @@ class _ScanJob:
     heartbeat_at: float = field(default_factory=time)
     last_progress_at: float = field(default_factory=time)
     step_started_at: float = field(default_factory=time)
+    stage_started_at: float = field(default_factory=time)
+    stage_start_completed: int = 0
 
 
 class ScanJobManager:
@@ -206,6 +208,8 @@ class ScanJobManager:
             if not job:
                 return
             now = time()
+            incoming_stage = changes.get("stage", job.stage)
+            stage_changed = incoming_stage != job.stage
             progress_fields = {
                 "stage",
                 "message",
@@ -231,6 +235,18 @@ class ScanJobManager:
                 if name in step_fields and getattr(job, name) != value:
                     started_step = True
                 setattr(job, name, value)
+            if stage_changed:
+                job.stage_started_at = now
+                job.stage_start_completed = int(changes.get("completed", 0))
+            elif (
+                "completed" in changes
+                and int(changes["completed"]) < job.stage_start_completed
+            ):
+                # A phase can discover a new work plan while retaining its
+                # public stage name. Restart its rate sample instead of mixing
+                # unrelated work-unit counts.
+                job.stage_started_at = now
+                job.stage_start_completed = int(changes["completed"])
             if made_progress:
                 job.last_progress_at = now
             if started_step:
@@ -302,11 +318,24 @@ class ScanJobManager:
         else:
             liveness = "working"
 
+        # ETA is intentionally stage-local. Global percent is weighted for UI
+        # presentation and made the former estimate explode into hours when one
+        # detector pass was slower than later work. A stage estimate appears
+        # only after at least one comparable unit has actually completed.
         eta_seconds: int | None = None
-        if job.status == "running" and 7 <= job.percent < 100 and elapsed >= 2:
+        stage_elapsed = max(0.0, now - job.stage_started_at)
+        stage_completed = max(0, job.completed - job.stage_start_completed)
+        stage_remaining = max(0, job.total - job.completed)
+        if (
+            job.status == "running"
+            and stage_remaining > 0
+            and stage_completed >= 1
+            and stage_elapsed >= 1.0
+        ):
+            seconds_per_unit = stage_elapsed / stage_completed
             eta_seconds = max(
                 0,
-                int(round(elapsed * (100 - job.percent) / job.percent)),
+                int(round(seconds_per_unit * stage_remaining)),
             )
 
         snapshot: dict[str, Any] = {

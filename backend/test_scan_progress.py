@@ -13,18 +13,46 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     def detect_regions(_image, *, progress_callback=None, **_kwargs):
         if progress_callback is not None:
             progress_callback(
+                phase="proposing",
+                completed=0,
+                total=1,
+                state="running",
+                label="source-resolution morphology proposals",
+                proposals=0,
+                deskew_angle=0.0,
+                pass_current=1,
+                pass_total=1,
+                tile_current=1,
+                tile_total=1,
+            )
+            progress_callback(
+                phase="proposing",
+                completed=1,
+                total=1,
+                state="completed",
+                label="source-resolution morphology proposals",
+                proposals=1,
+                deskew_angle=0.0,
+                pass_current=1,
+                pass_total=1,
+                tile_current=1,
+                tile_total=1,
+            )
+            progress_callback(
+                phase="detecting",
                 completed=0,
                 total=2,
                 state="running",
                 label="source contrast, 0 deg, 1100px",
-                proposals=0,
+                proposals=1,
                 deskew_angle=0.0,
                 pass_current=1,
                 pass_total=2,
                 tile_current=1,
-                tile_total=2,
+                tile_total=1,
             )
             progress_callback(
+                phase="detecting",
                 completed=1,
                 total=2,
                 state="completed",
@@ -34,13 +62,14 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
                 pass_current=1,
                 pass_total=2,
                 tile_current=1,
-                tile_total=2,
+                tile_total=1,
             )
             progress_callback(
+                phase="detecting",
                 completed=1,
                 total=2,
                 state="running",
-                label="morphology",
+                label="source contrast, 90 deg, 1100px",
                 proposals=1,
                 deskew_angle=0.0,
                 pass_current=2,
@@ -49,10 +78,11 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
                 tile_total=1,
             )
             progress_callback(
+                phase="detecting",
                 completed=2,
                 total=2,
                 state="completed",
-                label="morphology",
+                label="source contrast, 90 deg, 1100px",
                 proposals=1,
                 deskew_angle=0.0,
                 pass_current=2,
@@ -96,6 +126,8 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     assert [event["stage"] for event in events] == [
         "preparing",
         "detecting",
+        "proposing",
+        "proposing",
         "detecting",
         "detecting",
         "detecting",
@@ -118,7 +150,7 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     )
     assert detection_events[0]["pass_current"] == 1
     assert detection_events[0]["tile_current"] == 1
-    assert detection_events[0]["tile_total"] == 2
+    assert detection_events[0]["tile_total"] == 1
     assert detection_events[-1]["completed"] == 2
     assert detection_events[-1]["total"] == 2
     recognition_events = [
