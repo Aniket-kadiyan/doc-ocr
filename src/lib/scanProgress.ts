@@ -32,7 +32,8 @@ export const scanLivenessLabel: Record<ScanLiveness, string> = {
   queued: "Queued",
   working: "Working",
   long_running: "Long-running step",
-  possibly_stalled: "Possibly stalled",
+  slow_progress: "Service responsive — slow progress",
+  possibly_stalled: "Heartbeat missing — possibly stalled",
   complete: "Complete",
   failed: "Failed",
 };

@@ -32,6 +32,7 @@ interface ApiScanJobSnapshot {
   tile_total?: number;
   object_current?: number;
   object_total?: number;
+  candidate_count?: number;
   operation_label?: string;
   elapsed_seconds?: number;
   step_elapsed_seconds?: number;
@@ -70,6 +71,7 @@ function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
     tileTotal: snapshot.tile_total ?? 0,
     objectCurrent: snapshot.object_current ?? 0,
     objectTotal: snapshot.object_total ?? 0,
+    candidateCount: snapshot.candidate_count ?? 0,
     operationLabel: snapshot.operation_label ?? "",
     elapsedSeconds: snapshot.elapsed_seconds ?? 0,
     stepElapsedSeconds: snapshot.step_elapsed_seconds ?? 0,

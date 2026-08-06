@@ -466,6 +466,7 @@ export function DrawingViewer() {
         tileTotal: 0,
         objectCurrent: 0,
         objectTotal: 0,
+        candidateCount: 0,
         operationLabel: "",
         elapsedSeconds: 0,
         stepElapsedSeconds: 0,

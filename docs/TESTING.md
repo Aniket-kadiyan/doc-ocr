@@ -143,10 +143,20 @@ identify the offending balloon and block final output once the edit is saved.
   estimate**. Afterwards it shows **Stage ETA**; it must not extrapolate total
   runtime from the global weighted percentage.
 - Confirm the heartbeat normally stays current. A slow unit may change to
-  **Long-running step** and an unusually stale unit to **Possibly stalled**;
-  neither warning cancels the scan or commits partial balloons.
+  **Long-running step**. A current heartbeat with unusually old progress must
+  read **Service responsive — slow progress**; **Heartbeat missing — possibly
+  stalled** is reserved for a stale service heartbeat. None of these warnings
+  cancels the scan or commits partial balloons.
 - Confirm recognition reports `Object N/M`, finalization is visible, and all
   balloons still appear together only after the complete job succeeds.
+- During grouping, confirm the banner advances through bridge filtering,
+  spatial grouping, fragment merging, orientation splitting, bounded local
+  refinement, and overlap merging. The current candidate count must remain
+  visible instead of leaving the banner unchanged for the entire stage.
+- Oversized-cluster refinement may run at most eight standalone detector calls.
+  If more oversized candidates exist, or the standalone detector is unavailable,
+  the remaining candidates must be retained without launching full OCR inside
+  grouping.
 
 ## Milestone 2B performance gate
 

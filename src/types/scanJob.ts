@@ -6,6 +6,7 @@ export type ScanLiveness =
   | "queued"
   | "working"
   | "long_running"
+  | "slow_progress"
   | "possibly_stalled"
   | "complete"
   | "failed";
@@ -25,6 +26,7 @@ export interface ScanProgress {
   tileTotal: number;
   objectCurrent: number;
   objectTotal: number;
+  candidateCount: number;
   operationLabel: string;
   elapsedSeconds: number;
   stepElapsedSeconds: number;

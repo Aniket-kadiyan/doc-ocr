@@ -14,10 +14,119 @@ in the same selection cluster correctly without special-casing either.
 
 from __future__ import annotations
 
-from typing import Any
+from collections import defaultdict
+from math import floor
+from statistics import median
+from typing import Any, Iterator
 
 # Each box is a dict with at least: x, y, w, h. Extra keys (text, conf) ride along.
 Box = dict[str, Any]
+Rect = tuple[float, float, float, float]
+
+_MIN_SPATIAL_CELL = 32.0
+_MAX_SPATIAL_CELL = 256.0
+_MAX_GRID_CELLS_PER_RECT = 256
+
+
+def _normalise_rect(rect: Rect) -> Rect:
+    """Return a left-to-right, top-to-bottom rectangle."""
+
+    x0, y0, x1, y1 = (float(value) for value in rect)
+    return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+
+
+def _spatial_cell_size(rects: list[Rect]) -> float:
+    """Choose a stable grid size from the typical candidate extent."""
+
+    extents = [
+        max(abs(rect[2] - rect[0]), abs(rect[3] - rect[1]), 1.0)
+        for rect in rects
+    ]
+    if not extents:
+        return _MIN_SPATIAL_CELL
+    return max(
+        _MIN_SPATIAL_CELL,
+        min(_MAX_SPATIAL_CELL, float(median(extents)) * 2.0),
+    )
+
+
+class _SpatialRectIndex:
+    """Exact rectangle-neighbour lookup backed by a bounded uniform grid.
+
+    Very large drawing-geometry boxes are kept in a small fallback set instead
+    of being copied into thousands of cells. Queries still test them exactly,
+    so this changes comparison cost without changing grouping results.
+    """
+
+    def __init__(self, cell_size: float) -> None:
+        self._cell_size = max(float(cell_size), 1.0)
+        self._buckets: dict[tuple[int, int], set[int]] = defaultdict(set)
+        self._large: set[int] = set()
+        self._rects: dict[int, Rect] = {}
+
+    def _cell_bounds(self, rect: Rect) -> tuple[int, int, int, int]:
+        x0, y0, x1, y1 = _normalise_rect(rect)
+        return (
+            floor(x0 / self._cell_size),
+            floor(y0 / self._cell_size),
+            floor(x1 / self._cell_size),
+            floor(y1 / self._cell_size),
+        )
+
+    @staticmethod
+    def _cell_count(bounds: tuple[int, int, int, int]) -> int:
+        gx0, gy0, gx1, gy1 = bounds
+        return (gx1 - gx0 + 1) * (gy1 - gy0 + 1)
+
+    def insert(self, key: int, rect: Rect) -> None:
+        """Insert or expand one indexed rectangle.
+
+        Updated keys may remain referenced by an old bucket. Query performs an
+        exact final overlap check, so a stale bucket can add only a harmless
+        false candidate and avoids costly grid deletion during fragment merges.
+        """
+
+        normalised = _normalise_rect(rect)
+        self._rects[key] = normalised
+        bounds = self._cell_bounds(normalised)
+        if self._cell_count(bounds) > _MAX_GRID_CELLS_PER_RECT:
+            self._large.add(key)
+            return
+
+        gx0, gy0, gx1, gy1 = bounds
+        for gx in range(gx0, gx1 + 1):
+            for gy in range(gy0, gy1 + 1):
+                self._buckets[(gx, gy)].add(key)
+
+    def query(self, rect: Rect) -> list[int]:
+        """Return indexed keys whose current rectangles overlap ``rect``."""
+
+        normalised = _normalise_rect(rect)
+        bounds = self._cell_bounds(normalised)
+        if self._cell_count(bounds) > _MAX_GRID_CELLS_PER_RECT:
+            candidates = set(self._rects)
+        else:
+            candidates = set(self._large)
+            gx0, gy0, gx1, gy1 = bounds
+            for gx in range(gx0, gx1 + 1):
+                for gy in range(gy0, gy1 + 1):
+                    candidates.update(self._buckets.get((gx, gy), ()))
+
+        return sorted(
+            key
+            for key in candidates
+            if _overlap(normalised, self._rects[key])
+        )
+
+
+def _spatial_overlap_pairs(rects: list[Rect]) -> Iterator[tuple[int, int]]:
+    """Yield every exactly-overlapping pair without an all-pairs scan."""
+
+    index = _SpatialRectIndex(_spatial_cell_size(rects))
+    for right, rect in enumerate(rects):
+        for left in index.query(rect):
+            yield left, right
+        index.insert(right, rect)
 
 
 def _inflate(box: Box, margin_ratio: float) -> tuple[float, float, float, float]:
@@ -46,7 +155,7 @@ def _inflate(box: Box, margin_ratio: float) -> tuple[float, float, float, float]
     return (x - mx, y - my, x + w + mx, y + h + my)
 
 
-def _overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+def _overlap(a: Rect, b: Rect) -> bool:
     """Axis-aligned rectangle overlap test (touching edges count as overlap)."""
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
@@ -123,23 +232,38 @@ def drop_bridge_boxes(boxes: list[Box]) -> list[Box]:
     """
     if len(boxes) <= 2:
         return boxes
+
+    raw_rects = [_raw_rect(box) for box in boxes]
+    axes = [_reading_axis(box) for box in boxes]
+    crossed: list[list[int]] = [[] for _ in boxes]
+    for left, right in _spatial_overlap_pairs(raw_rects):
+        left_axis = axes[left]
+        right_axis = axes[right]
+        if (
+            left_axis == "square"
+            or right_axis == "square"
+            or left_axis == right_axis
+        ):
+            continue
+        crossed[left].append(right)
+        crossed[right].append(left)
+
     keep: list[Box] = []
     for i, b in enumerate(boxes):
-        ax = _reading_axis(b)
+        ax = axes[i]
         if ax == "square":
             keep.append(b)
             continue
-        crossed = [
-            o
-            for j, o in enumerate(boxes)
-            if j != i
-            and _reading_axis(o) not in (ax, "square")
-            and _overlap(_raw_rect(b), _raw_rect(o))
-        ]
-        bridge = any(
-            not _overlap(_raw_rect(crossed[m]), _raw_rect(crossed[n]))
-            for m in range(len(crossed))
-            for n in range(m + 1, len(crossed))
+
+        # Axis-aligned rectangles are pairwise-overlapping exactly when their
+        # x intervals and y intervals each share a common point. This replaces
+        # the former nested all-pairs test inside every candidate.
+        neighbours = [raw_rects[index] for index in crossed[i]]
+        bridge = len(neighbours) >= 2 and (
+            max(rect[0] for rect in neighbours)
+            > min(rect[2] for rect in neighbours)
+            or max(rect[1] for rect in neighbours)
+            > min(rect[3] for rect in neighbours)
         )
         if not bridge:
             keep.append(b)
@@ -182,15 +306,15 @@ def cluster_boxes(
     max_w = img_w * 0.34 if img_w else 0.0
     max_h = img_h * 0.42 if img_h else 0.0
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not _should_merge(boxes[i], boxes[j], margin_ratio):
+    inflated = [_inflate(box, margin_ratio) for box in boxes]
+    for i, j in _spatial_overlap_pairs(inflated):
+        if not _should_merge(boxes[i], boxes[j], margin_ratio):
+            continue
+        if max_w and max_h:
+            uw, uh = _union_size(boxes[i], boxes[j])
+            if uw > max_w or uh > max_h:
                 continue
-            if max_w and max_h:
-                uw, uh = _union_size(boxes[i], boxes[j])
-                if uw > max_w or uh > max_h:
-                    continue
-            union(i, j)
+        union(i, j)
 
     groups: dict[int, list[Box]] = {}
     for i, box in enumerate(boxes):
@@ -253,14 +377,36 @@ def merge_fragment_clusters(
     if not anchors:
         return clusters
 
+    anchor_set = set(anchors)
+    anchor_rects: list[Rect] = []
+    for index in anchors:
+        anchor = union_bbox(pools[index])
+        anchor_rects.append(
+            (
+                anchor["x"] - max_absorb_gap,
+                anchor["y"] - max_absorb_gap,
+                anchor["x"] + anchor["width"] + max_absorb_gap,
+                anchor["y"] + anchor["height"] + max_absorb_gap,
+            )
+        )
+    anchor_index = _SpatialRectIndex(_spatial_cell_size(anchor_rects))
+    for index, rect in zip(anchors, anchor_rects):
+        anchor_index.insert(index, rect)
+
     for i, area in enumerate(areas):
-        if i in anchors or not pools[i]:
+        if i in anchor_set or not pools[i]:
             continue
         frag_ub = union_bbox(pools[i])
         frag_axis = _reading_axis(pools[i][0])
         best: int | None = None
         best_gap = float("inf")
-        for j in anchors:
+        frag_rect = (
+            frag_ub["x"],
+            frag_ub["y"],
+            frag_ub["x"] + frag_ub["width"],
+            frag_ub["y"] + frag_ub["height"],
+        )
+        for j in anchor_index.query(frag_rect):
             if not pools[j]:
                 continue
             anchor_ub = union_bbox(pools[j])
@@ -293,6 +439,16 @@ def merge_fragment_clusters(
         if best is not None:
             pools[best].extend(pools[i])
             pools[i] = []
+            updated = union_bbox(pools[best])
+            anchor_index.insert(
+                best,
+                (
+                    updated["x"] - max_absorb_gap,
+                    updated["y"] - max_absorb_gap,
+                    updated["x"] + updated["width"] + max_absorb_gap,
+                    updated["y"] + updated["height"] + max_absorb_gap,
+                ),
+            )
 
     return [p for p in pools if p]
 
@@ -357,12 +513,20 @@ def merge_overlapping_clusters(
             i = parent[i]
         return i
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if _ubbox_overlap_frac(boxes[i], boxes[j]) >= min_overlap:
-                ri, rj = find(i), find(j)
-                if ri != rj:
-                    parent[ri] = rj
+    rects = [
+        (
+            box["x"],
+            box["y"],
+            box["x"] + box["width"],
+            box["y"] + box["height"],
+        )
+        for box in boxes
+    ]
+    for i, j in _spatial_overlap_pairs(rects):
+        if _ubbox_overlap_frac(boxes[i], boxes[j]) >= min_overlap:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
 
     groups: dict[int, list[Box]] = {}
     for i, cluster in enumerate(clusters):

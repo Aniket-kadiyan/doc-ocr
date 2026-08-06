@@ -123,23 +123,8 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     )
 
     assert result["count"] == 1
-    assert [event["stage"] for event in events] == [
-        "preparing",
-        "detecting",
-        "proposing",
-        "proposing",
-        "detecting",
-        "detecting",
-        "detecting",
-        "detecting",
-        "detecting",
-        "grouping",
-        "grouping",
-        "recognizing",
-        "recognizing",
-        "finalizing",
-        "finalizing",
-    ]
+    assert events[0]["stage"] == "preparing"
+    assert events[-1]["stage"] == "finalizing"
     detection_events = [
         event
         for event in events
@@ -153,6 +138,21 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     assert detection_events[0]["tile_total"] == 1
     assert detection_events[-1]["completed"] == 2
     assert detection_events[-1]["total"] == 2
+    grouping_events = [event for event in events if event["stage"] == "grouping"]
+    assert [event["operation_label"] for event in grouping_events] == [
+        "Bridge filtering",
+        "Bridge filtering",
+        "Spatial grouping",
+        "Spatial grouping",
+        "Fragment merging",
+        "Fragment merging",
+        "Orientation splitting",
+        "Orientation splitting",
+        "Overlap merging",
+        "Grouping complete",
+    ]
+    assert grouping_events[0]["candidate_count"] == 1
+    assert grouping_events[-1]["completed"] == grouping_events[-1]["total"] == 5
     recognition_events = [
         event for event in events if event["stage"] == "recognizing"
     ]
@@ -163,3 +163,73 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     assert [event["percent"] for event in events] == sorted(
         event["percent"] for event in events
     )
+
+
+def test_oversized_cluster_refinement_is_detector_only_and_capped() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    calls: list[tuple[int, int]] = []
+
+    def fake_detector(image, **_kwargs):
+        calls.append(image.size)
+        return []
+
+    pipeline._detector_only_boxes = fake_detector
+    clusters = [
+        [
+            {
+                "x": 20.0,
+                "y": float(20 + index * 70),
+                "w": 450.0,
+                "h": 20.0,
+                "text": "",
+                "conf": 0.0,
+            }
+        ]
+        for index in range(12)
+    ]
+    events: list[dict] = []
+
+    refined = pipeline._expand_clusters(
+        Image.new("RGB", (1000, 1000), "white"),
+        clusters,
+        cluster_margin=0.72,
+        max_refinements=3,
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert len(calls) == 3
+    assert len(refined) == len(clusters)
+    assert events[-1]["completed"] == events[-1]["total"] == 3
+
+
+def test_cluster_refinement_never_falls_back_to_full_ocr() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = False
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("full OCR must not run during grouping")
+
+    pipeline._run_paddle = fail_if_called
+    cluster = [
+        {
+            "x": 10.0,
+            "y": 10.0,
+            "w": 180.0,
+            "h": 20.0,
+            "text": "",
+            "conf": 0.0,
+        }
+    ]
+    events: list[dict] = []
+
+    refined = pipeline._expand_clusters(
+        Image.new("RGB", (200, 200), "white"),
+        [cluster],
+        cluster_margin=0.72,
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert refined == [cluster]
+    assert events[0]["state"] == "skipped"
+    assert events[0]["candidate_count"] == 1

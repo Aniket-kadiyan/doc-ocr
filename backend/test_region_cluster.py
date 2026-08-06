@@ -6,6 +6,8 @@ Run: PYTHONPATH=. .venv/bin/python -m pytest test_region_cluster.py
 
 from __future__ import annotations
 
+import region_cluster
+
 from region_cluster import (
     cluster_boxes,
     drop_bridge_boxes,
@@ -150,3 +152,59 @@ def test_drop_bridge_keeps_fragment_of_one_dimension():
     ref = _box(150, 120, 50, 20)     # REF. tag, overlaps only this column
     kept = drop_bridge_boxes([value, ref])
     assert value in kept and ref in kept
+
+
+def test_spatial_clustering_avoids_all_pairs_for_separated_candidates(monkeypatch):
+    """A dense page grid should compare local neighbours, not every box pair."""
+
+    boxes = [
+        _box(float(col * 80), float(row * 80), 14, 36)
+        for row in range(25)
+        for col in range(40)
+    ]
+    original = region_cluster._should_merge
+    comparisons = 0
+
+    def counted(a, b, margin_ratio):
+        nonlocal comparisons
+        comparisons += 1
+        return original(a, b, margin_ratio)
+
+    monkeypatch.setattr(region_cluster, "_should_merge", counted)
+    clusters = cluster_boxes(boxes, img_w=3200, img_h=2000)
+
+    assert len(clusters) == len(boxes)
+    assert comparisons < len(boxes) * 4
+
+
+def test_spatial_overlap_merge_avoids_all_pairs_for_separated_candidates(
+    monkeypatch,
+):
+    clusters = [
+        [_box(float(col * 80), float(row * 80), 14, 36)]
+        for row in range(25)
+        for col in range(40)
+    ]
+    original = region_cluster._ubbox_overlap_frac
+    comparisons = 0
+
+    def counted(a, b):
+        nonlocal comparisons
+        comparisons += 1
+        return original(a, b)
+
+    monkeypatch.setattr(region_cluster, "_ubbox_overlap_frac", counted)
+    merged = merge_overlapping_clusters(clusters)
+
+    assert len(merged) == len(clusters)
+    assert comparisons < len(clusters) * 4
+
+
+def test_bridge_filter_handles_many_crossed_columns_without_nested_pairs():
+    columns = [_box(float(index * 12), 0, 4, 120) for index in range(200)]
+    bridge = _box(0, 50, 2400, 8)
+
+    kept = drop_bridge_boxes([*columns, bridge])
+
+    assert bridge not in kept
+    assert kept == columns

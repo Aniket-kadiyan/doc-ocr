@@ -22,6 +22,7 @@ ScanLiveness = Literal[
     "queued",
     "working",
     "long_running",
+    "slow_progress",
     "possibly_stalled",
     "complete",
     "failed",
@@ -45,6 +46,7 @@ class _ScanJob:
     tile_total: int = 0
     object_current: int = 0
     object_total: int = 0
+    candidate_count: int = 0
     operation_label: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     result: dict[str, Any] | None = None
@@ -145,6 +147,7 @@ class ScanJobManager:
             tile_total: int = 0,
             object_current: int = 0,
             object_total: int = 0,
+            candidate_count: int = 0,
             operation_label: str = "",
         ) -> None:
             self._update(
@@ -161,6 +164,7 @@ class ScanJobManager:
                 tile_total=tile_total,
                 object_current=object_current,
                 object_total=object_total,
+                candidate_count=candidate_count,
                 operation_label=operation_label,
             )
 
@@ -222,6 +226,7 @@ class ScanJobManager:
                 "tile_total",
                 "object_current",
                 "object_total",
+                "candidate_count",
                 "operation_label",
             }
             step_fields = progress_fields - {"percent", "completed", "total"}
@@ -308,11 +313,12 @@ class ScanJobManager:
             liveness = "complete"
         elif job.status == "failed":
             liveness = "failed"
-        elif (
-            heartbeat_age > self._heartbeat_stale_seconds
-            or progress_age > stalled_after
-        ):
+        elif heartbeat_age > self._heartbeat_stale_seconds:
             liveness = "possibly_stalled"
+        elif progress_age > stalled_after:
+            # The independent service heartbeat is current, so distinguish a
+            # slow/hung work unit from an unavailable scan service.
+            liveness = "slow_progress"
         elif step_elapsed > long_running_after:
             liveness = "long_running"
         else:
@@ -352,6 +358,7 @@ class ScanJobManager:
             "tile_total": job.tile_total,
             "object_current": job.object_current,
             "object_total": job.object_total,
+            "candidate_count": job.candidate_count,
             "operation_label": job.operation_label,
             "metadata": deepcopy(job.metadata),
             "error": job.error,

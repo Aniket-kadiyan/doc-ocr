@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatScanDuration,
   heartbeatLabel,
+  scanLivenessLabel,
   scanWorkCounter,
 } from "@/lib/scanProgress";
 import type { ScanProgress } from "@/types/scanJob";
@@ -20,6 +21,7 @@ const progress = (overrides: Partial<ScanProgress> = {}): ScanProgress => ({
   tileTotal: 5,
   objectCurrent: 0,
   objectTotal: 0,
+  candidateCount: 17,
   operationLabel: "source contrast",
   elapsedSeconds: 70,
   stepElapsedSeconds: 8,
@@ -59,5 +61,14 @@ describe("scan progress display helpers", () => {
   it("reports heartbeat recency directly", () => {
     expect(heartbeatLabel(0)).toBe("heartbeat now");
     expect(heartbeatLabel(7.8)).toBe("heartbeat 7s ago");
+  });
+
+  it("distinguishes slow progress from a missing heartbeat", () => {
+    expect(scanLivenessLabel.slow_progress).toBe(
+      "Service responsive — slow progress"
+    );
+    expect(scanLivenessLabel.possibly_stalled).toBe(
+      "Heartbeat missing — possibly stalled"
+    );
   });
 });

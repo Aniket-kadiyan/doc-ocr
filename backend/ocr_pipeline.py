@@ -40,6 +40,10 @@ EARLY_ACCEPT_CONFIDENCE = 0.95
 # dedicated prefix OCR as a second opinion.
 PREFIX_RECHECK_PHI_SCORE = 0.20
 
+# Oversized-cluster refinement is a best-effort accuracy improvement. It must
+# never expand into unbounded OCR work during a whole-page scan.
+GROUPING_MAX_REFINEMENTS = 8
+
 
 def sort_reading_order(
     items: list[tuple[str, float, float, float, float, float]],
@@ -1219,11 +1223,28 @@ class OcrPipeline:
         clusters: list[list[dict[str, Any]]],
         *,
         cluster_margin: float,
+        max_refinements: int = GROUPING_MAX_REFINEMENTS,
+        progress_callback: Callable[..., None] | None = None,
     ) -> list[list[dict[str, Any]]]:
         """
-        Re-detect inside oversized clusters and replace them with finer groups.
+        Refine a bounded number of oversized clusters with detector-only calls.
+
+        Clusters beyond the cap, and all clusters when the standalone detector
+        is unavailable, remain in the result unchanged. Grouping therefore
+        cannot silently launch the complete OCR pipeline or discard candidates.
         """
-        from region_cluster import cluster_boxes, order_clusters, split_mixed_clusters, union_bbox
+        from detection_passes import (
+            DETECTION_REFINEMENT_TARGET_EDGE,
+            map_quarter_turn_box_to_source,
+            refinement_rotation,
+            rotate_for_detection,
+        )
+        from region_cluster import (
+            cluster_boxes,
+            order_clusters,
+            split_mixed_clusters,
+            union_bbox,
+        )
 
         iw, ih = image.size
         median_h = 0.0
@@ -1231,33 +1252,114 @@ class OcrPipeline:
             heights = [union_bbox(c)["height"] for c in clusters]
             median_h = sorted(heights)[len(heights) // 2]
 
-        out: list[list[dict[str, Any]]] = []
-        for cluster in clusters:
+        height_limit = max(median_h * 2.8, ih * 0.28)
+        width_limit = iw * 0.38
+        area_limit = max(float(iw * ih) * 0.07, 1.0)
+        oversized: list[tuple[float, int]] = []
+        for index, cluster in enumerate(clusters):
             ub = union_bbox(cluster)
-            oversized = (
-                ub["height"] > max(median_h * 2.8, ih * 0.28)
-                or ub["width"] > iw * 0.38
-                or ub["width"] * ub["height"] > iw * ih * 0.07
+            score = max(
+                ub["height"] / max(height_limit, 1.0),
+                ub["width"] / max(width_limit, 1.0),
+                (ub["width"] * ub["height"]) / area_limit,
             )
-            if not oversized:
+            if score > 1.0:
+                oversized.append((score, index))
+
+        detector_available = bool(
+            getattr(self, "_text_detector_available", False)
+        )
+        selected = (
+            {
+                index
+                for _score, index in sorted(
+                    oversized,
+                    key=lambda item: (-item[0], item[1]),
+                )[: max(0, max_refinements)]
+            }
+            if detector_available
+            else set()
+        )
+        refinement_total = len(selected)
+
+        def emit(
+            *,
+            completed: int,
+            state: str,
+            label: str,
+            candidate_count: int,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    completed=completed,
+                    total=refinement_total,
+                    state=state,
+                    label=label,
+                    candidate_count=candidate_count,
+                )
+
+        if not detector_available:
+            emit(
+                completed=0,
+                state="skipped",
+                label="Standalone detector unavailable; retaining oversized candidates",
+                candidate_count=len(clusters),
+            )
+        elif refinement_total == 0:
+            emit(
+                completed=0,
+                state="skipped",
+                label="No oversized candidates require local refinement",
+                candidate_count=len(clusters),
+            )
+
+        out: list[list[dict[str, Any]]] = []
+        refined = 0
+        for cluster_index, cluster in enumerate(clusters):
+            ub = union_bbox(cluster)
+            if cluster_index not in selected:
                 out.append(cluster)
                 continue
 
+            refined += 1
+            label = f"oversized candidate {refined} of {refinement_total}"
+            emit(
+                completed=refined - 1,
+                state="running",
+                label=label,
+                candidate_count=len(out) + len(clusters) - cluster_index,
+            )
             margin = 4
             cx0 = max(0, int(ub["x"] - margin))
             cy0 = max(0, int(ub["y"] - margin))
             cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
             cy1 = min(ih, int(ub["y"] + ub["height"] + margin))
             sub = image.crop((cx0, cy0, cx1, cy1))
-            # Refinement needs one local proposal pass, not another complete
-            # 33-pass accuracy scan inside the already-running scan.
-            sub_boxes = self.detect_regions(sub, thorough=False)
+            rotation = refinement_rotation(
+                {"w": float(sub.width), "h": float(sub.height)}
+            )
+            detector_input = rotate_for_detection(sub, rotation)
+            sub_boxes: list[dict[str, Any]] = []
+            for detected in self._detector_only_boxes(
+                detector_input,
+                target_long_edge=DETECTION_REFINEMENT_TARGET_EDGE,
+            ):
+                mapped = map_quarter_turn_box_to_source(
+                    detected,
+                    rotation,
+                    sub.size,
+                )
+                if mapped is not None:
+                    sub_boxes.append(mapped)
             if not sub_boxes:
                 out.append(cluster)
+                emit(
+                    completed=refined,
+                    state="completed",
+                    label=label,
+                    candidate_count=len(out) + len(clusters) - cluster_index - 1,
+                )
                 continue
-            for b in sub_boxes:
-                b["x"] = round(b["x"] + cx0, 1)
-                b["y"] = round(b["y"] + cy0, 1)
             sub_clusters = split_mixed_clusters(
                 cluster_boxes(
                     sub_boxes,
@@ -1269,7 +1371,17 @@ class OcrPipeline:
             if len(sub_clusters) <= 1:
                 out.append(cluster)
             else:
+                for sub_cluster in sub_clusters:
+                    for box in sub_cluster:
+                        box["x"] = round(float(box["x"]) + cx0, 1)
+                        box["y"] = round(float(box["y"]) + cy0, 1)
                 out.extend(sub_clusters)
+            emit(
+                completed=refined,
+                state="completed",
+                label=label,
+                candidate_count=len(out) + len(clusters) - cluster_index - 1,
+            )
         return order_clusters(out)
 
     def segment(
@@ -1315,6 +1427,7 @@ class OcrPipeline:
             object_current: int = 0,
             object_total: int = 0,
             operation_label: str = "",
+            candidate_count: int = 0,
         ) -> None:
             if progress_callback is not None:
                 progress_callback(
@@ -1330,6 +1443,7 @@ class OcrPipeline:
                     object_current=object_current,
                     object_total=object_total,
                     operation_label=operation_label,
+                    candidate_count=candidate_count,
                 )
 
         report(
@@ -1397,6 +1511,7 @@ class OcrPipeline:
                 tile_current=tile_current,
                 tile_total=tile_total,
                 operation_label=label,
+                candidate_count=proposals,
             )
 
         boxes = self.detect_regions(
@@ -1409,36 +1524,154 @@ class OcrPipeline:
             percent=30,
             completed=detection_state["completed"],
             total=detection_state["total"],
+            candidate_count=len(boxes),
         )
+
+        grouping_units = 5
         # Drop cross-column bridge boxes before clustering so separate
         # dimensions (e.g. Ø174,07 and Ø175,32) don't fuse into one cluster.
         report(
             stage="grouping",
-            message="Grouping related text fragments",
-            percent=34,
+            message=f"Filtering bridge boxes from {len(boxes)} proposals",
+            percent=30,
+            completed=0,
+            total=grouping_units,
+            operation_label="Bridge filtering",
+            candidate_count=len(boxes),
         )
         boxes = drop_bridge_boxes(boxes)
+        report(
+            stage="grouping",
+            message=f"Kept {len(boxes)} proposals after bridge filtering",
+            percent=32,
+            completed=1,
+            total=grouping_units,
+            operation_label="Bridge filtering",
+            candidate_count=len(boxes),
+        )
         iw, ih = image.size
+        report(
+            stage="grouping",
+            message=f"Spatially grouping {len(boxes)} nearby proposals",
+            percent=32,
+            completed=1,
+            total=grouping_units,
+            operation_label="Spatial grouping",
+            candidate_count=len(boxes),
+        )
         clustered = cluster_boxes(
             boxes,
             margin_ratio=cluster_margin,
             img_w=iw,
             img_h=ih,
         )
+        report(
+            stage="grouping",
+            message=f"Built {len(clustered)} initial candidate objects",
+            percent=34,
+            completed=2,
+            total=grouping_units,
+            operation_label="Spatial grouping",
+            candidate_count=len(clustered),
+        )
+        report(
+            stage="grouping",
+            message=f"Merging small fragments into {len(clustered)} candidates",
+            percent=34,
+            completed=2,
+            total=grouping_units,
+            operation_label="Fragment merging",
+            candidate_count=len(clustered),
+        )
         clustered = merge_fragment_clusters(clustered)
+        report(
+            stage="grouping",
+            message=f"Kept {len(clustered)} candidates after fragment merging",
+            percent=37,
+            completed=3,
+            total=grouping_units,
+            operation_label="Fragment merging",
+            candidate_count=len(clustered),
+        )
+        report(
+            stage="grouping",
+            message=f"Separating mixed orientations in {len(clustered)} candidates",
+            percent=37,
+            completed=3,
+            total=grouping_units,
+            operation_label="Orientation splitting",
+            candidate_count=len(clustered),
+        )
         clusters = order_clusters(split_mixed_clusters(clustered))
+
+        report(
+            stage="grouping",
+            message=f"Prepared {len(clusters)} candidates for bounded refinement",
+            percent=39,
+            completed=4,
+            total=grouping_units,
+            operation_label="Orientation splitting",
+            candidate_count=len(clusters),
+        )
+
+        def report_cluster_refinement(
+            *,
+            completed: int,
+            total: int,
+            state: str,
+            label: str,
+            candidate_count: int,
+        ) -> None:
+            action = "Refining" if state == "running" else "Completed"
+            if state == "skipped":
+                action = "Skipped"
+            pass_current = (
+                completed + 1
+                if state == "running"
+                else completed
+            )
+            report(
+                stage="grouping",
+                message=f"{action} detector-only {label}",
+                percent=(
+                    39 + int(2 * completed / max(total, 1))
+                    if total > 0
+                    else 39
+                ),
+                completed=4,
+                total=grouping_units,
+                pass_current=(min(pass_current, total) if total > 0 else 0),
+                pass_total=total,
+                operation_label="Detector-only cluster refinement",
+                candidate_count=candidate_count,
+            )
+
         clusters = self._expand_clusters(
-            image, clusters, cluster_margin=cluster_margin
+            image,
+            clusters,
+            cluster_margin=cluster_margin,
+            progress_callback=report_cluster_refinement,
         )
         # Re-join any fragments of one dimension that landed in overlapping
         # boxes (e.g. a value split from its REF. tag onto a perpendicular axis).
+        report(
+            stage="grouping",
+            message=f"Merging overlaps among {len(clusters)} candidate objects",
+            percent=41,
+            completed=4,
+            total=grouping_units,
+            operation_label="Overlap merging",
+            candidate_count=len(clusters),
+        )
         clusters = order_clusters(merge_overlapping_clusters(clusters))
         report(
             stage="grouping",
             message=f"Prepared {len(clusters)} candidate objects",
             percent=42,
-            completed=len(clusters),
-            total=len(clusters),
+            completed=grouping_units,
+            total=grouping_units,
+            operation_label="Grouping complete",
+            candidate_count=len(clusters),
         )
 
         if should_dump(request_override=debug_dump):
@@ -1465,6 +1698,7 @@ class OcrPipeline:
                 object_current=cluster_index,
                 object_total=cluster_total,
                 operation_label=f"Object {cluster_index}",
+                candidate_count=cluster_total,
             )
             ub = union_bbox(cluster)
             cx0 = max(0, int(ub["x"] - margin))
@@ -1517,6 +1751,7 @@ class OcrPipeline:
                 object_current=cluster_index,
                 object_total=cluster_total,
                 operation_label=f"Object {cluster_index}",
+                candidate_count=cluster_total,
             )
 
         report(
@@ -1525,6 +1760,7 @@ class OcrPipeline:
             percent=94,
             completed=cluster_total,
             total=cluster_total,
+            candidate_count=cluster_total,
         )
         regions = self._complete_angle_regions(image, regions)
         regions = dedupe_regions(regions)
@@ -1534,6 +1770,7 @@ class OcrPipeline:
             percent=99,
             completed=len(regions),
             total=len(regions),
+            candidate_count=len(regions),
         )
         return {"count": len(regions), "regions": regions}
 

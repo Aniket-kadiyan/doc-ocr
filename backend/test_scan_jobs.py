@@ -144,6 +144,7 @@ def test_heartbeat_and_area_aware_liveness_continue_during_blocking_work() -> No
             pass_total=33,
             tile_current=1,
             tile_total=1,
+            candidate_count=27,
             operation_label="source contrast",
         )
         started.set()
@@ -176,16 +177,25 @@ def test_heartbeat_and_area_aware_liveness_continue_during_blocking_work() -> No
         assert long_running["liveness"] == "long_running"
         assert long_running["pass_current"] == 1
         assert long_running["pass_total"] == 33
+        assert long_running["candidate_count"] == 27
         assert long_running["result"] is None
 
         # Move only the no-forward-progress timestamp beyond the configured
         # threshold. The independently ticking heartbeat remains current.
         with manager._lock:
             manager._jobs[initial["job_id"]].last_progress_at -= 3.0
-        possibly_stalled = manager.get(initial["job_id"])
-        assert possibly_stalled is not None
+        slow_progress = manager.get(initial["job_id"])
+        assert slow_progress is not None
+        assert slow_progress["liveness"] == "slow_progress"
+        assert slow_progress["heartbeat_age_seconds"] == 0
+        assert slow_progress["progress_age_seconds"] >= 3
+
+        # Only a stale service heartbeat is labelled possibly stalled.
+        with manager._lock:
+            job = manager._jobs[initial["job_id"]]
+            job.heartbeat_at -= 3.0
+            possibly_stalled = manager._snapshot(job)
         assert possibly_stalled["liveness"] == "possibly_stalled"
-        assert possibly_stalled["progress_age_seconds"] >= 3
 
         release.set()
         complete = _wait_for_terminal(manager, initial["job_id"])

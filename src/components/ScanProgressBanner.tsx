@@ -15,6 +15,7 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
   const counter = scanWorkCounter(progress);
   const needsAttention =
     progress.liveness === "long_running" ||
+    progress.liveness === "slow_progress" ||
     progress.liveness === "possibly_stalled";
   const stageTitle: Record<string, string> = {
     queued: "Queued",
@@ -47,6 +48,11 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
           {counter && (
             <span className="min-w-0 flex-1 truncate tabular-nums">
               {counter}
+            </span>
+          )}
+          {progress.candidateCount > 0 && (
+            <span className="tabular-nums">
+              Candidates {progress.candidateCount}
             </span>
           )}
           <span className="tabular-nums">
