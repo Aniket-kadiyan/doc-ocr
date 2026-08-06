@@ -1,5 +1,9 @@
 import type { BBox } from "@/types/annotation";
-import type { ScanProgress, ScanScopeKind } from "@/types/scanJob";
+import type {
+  ScanLiveness,
+  ScanProgress,
+  ScanScopeKind,
+} from "@/types/scanJob";
 import { cropRegion } from "@/lib/canvasUtils";
 import {
   getOcrApiUrl,
@@ -22,6 +26,19 @@ interface ApiScanJobSnapshot {
   percent: number;
   completed: number;
   total: number;
+  pass_current?: number;
+  pass_total?: number;
+  tile_current?: number;
+  tile_total?: number;
+  object_current?: number;
+  object_total?: number;
+  operation_label?: string;
+  elapsed_seconds?: number;
+  step_elapsed_seconds?: number;
+  heartbeat_age_seconds?: number;
+  progress_age_seconds?: number;
+  estimated_remaining_seconds?: number | null;
+  liveness?: ScanLiveness;
   error?: string | null;
   result?: ApiSegmentResponse | null;
 }
@@ -47,6 +64,22 @@ function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
     percent: snapshot.percent,
     completed: snapshot.completed,
     total: snapshot.total,
+    passCurrent: snapshot.pass_current ?? 0,
+    passTotal: snapshot.pass_total ?? 0,
+    tileCurrent: snapshot.tile_current ?? 0,
+    tileTotal: snapshot.tile_total ?? 0,
+    objectCurrent: snapshot.object_current ?? 0,
+    objectTotal: snapshot.object_total ?? 0,
+    operationLabel: snapshot.operation_label ?? "",
+    elapsedSeconds: snapshot.elapsed_seconds ?? 0,
+    stepElapsedSeconds: snapshot.step_elapsed_seconds ?? 0,
+    heartbeatAgeSeconds: snapshot.heartbeat_age_seconds ?? 0,
+    progressAgeSeconds: snapshot.progress_age_seconds ?? 0,
+    estimatedRemainingSeconds:
+      snapshot.estimated_remaining_seconds ?? null,
+    liveness:
+      snapshot.liveness ??
+      (snapshot.status === "queued" ? "queued" : "working"),
   };
 }
 

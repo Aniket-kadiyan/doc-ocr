@@ -58,6 +58,10 @@ The fast suite verifies:
   fits multi-digit numbers.
 - The developer balloon builder preserves enclosed white regions, round-trips
   one-file styles, and rejects corrupt or unsafe files.
+- Large auto-balloon selections split into overlapping, coordinate-safe work
+  tiles while small selections remain one tile.
+- Scan results remain hidden until success while heartbeat, liveness,
+  pass/tile/object counters, elapsed time, and ETA telemetry remain observable.
 
 Automated tests do not claim OCR accuracy on real manufacturing drawings or
 pixel-perfect browser rendering. Those remain manual acceptance checks.
@@ -117,6 +121,32 @@ identify the offending balloon and block final output once the edit is saved.
   decimal tolerance, and DMS angle from representative drawings.
 - Verify an OCR failure still opens an editable empty Value dialog without
   moving the user-drawn box.
+
+### Auto-balloon progress and liveness
+
+- Scan a small section and confirm each blocking detection pass is named before
+  PaddleOCR begins it; the indicator must continue pulsing while its percentage
+  is unchanged.
+- Scan a section wider or taller than 2000 source pixels and confirm progress
+  shows both `Pass N/M` and `Tile N/M`. Tile counts must increase with area.
+- Confirm elapsed time and current-step time continue advancing throughout the
+  job. ETA appears only after enough real progress exists and may adjust as the
+  scan discovers recognition work.
+- Confirm the heartbeat normally stays current. A slow unit may change to
+  **Long-running step** and an unusually stale unit to **Possibly stalled**;
+  neither warning cancels the scan or commits partial balloons.
+- Confirm recognition reports `Object N/M`, finalization is visible, and all
+  balloons still appear together only after the complete job succeeds.
+
+## Immediate post-auto-ballooning performance milestone
+
+After functional auto-ballooning is accepted, the first follow-up is to bring
+the complete click-to-insertion time to no more than five minutes on the actual
+deployment Windows machine. Measure an agreed representative worst-case drawing
+and maximum page resolution, exclude manual review time, and retain at least the
+accepted detection/recognition accuracy. Five minutes is an acceptance ceiling,
+not an automatic cancellation timeout. The progress telemetry above identifies
+the stages and work units to optimize.
 
 ## Explicitly deferred until after auto-ballooning
 

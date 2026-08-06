@@ -31,6 +31,8 @@ DETECTION_VARIANTS = (
     "inverted",
 )
 DETECTION_ROTATIONS_CW = (0, 90, 180, 270)
+DETECTION_TILE_MAX_EDGE = 2000
+DETECTION_TILE_OVERLAP = 160
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,97 @@ class PreparedDetectionSource:
 
     image: Image.Image
     correction_angle: float
+
+
+@dataclass(frozen=True)
+class DetectionTile:
+    """One overlapping work unit in a rotated detection image."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @property
+    def box(self) -> tuple[int, int, int, int]:
+        return (self.x, self.y, self.x + self.width, self.y + self.height)
+
+
+def _tile_starts(length: int, max_edge: int, overlap: int) -> list[int]:
+    """Return stable starts that cover one axis with the requested overlap."""
+
+    if length <= max_edge:
+        return [0]
+
+    stride = max_edge - overlap
+    starts = [0]
+    while starts[-1] + max_edge < length:
+        starts.append(starts[-1] + stride)
+    return starts
+
+
+def build_detection_tiles(
+    image_or_size: Image.Image | tuple[int, int],
+    *,
+    max_edge: int = DETECTION_TILE_MAX_EDGE,
+    overlap: int = DETECTION_TILE_OVERLAP,
+) -> list[DetectionTile]:
+    """Split a large pass into honest, overlapping progress work units.
+
+    Small sections remain one unit.  Large sections use overlap so text on a
+    tile boundary is still presented whole to PaddleOCR; the existing coarse
+    positional deduplication removes detections repeated in the overlap.
+    """
+
+    if max_edge < 64:
+        raise ValueError("Detection tile edge must be at least 64 pixels")
+    if overlap < 0 or overlap >= max_edge:
+        raise ValueError("Detection tile overlap must be within the tile edge")
+
+    width, height = (
+        image_or_size.size
+        if isinstance(image_or_size, Image.Image)
+        else image_or_size
+    )
+    x_starts = _tile_starts(width, max_edge, overlap)
+    y_starts = _tile_starts(height, max_edge, overlap)
+    return [
+        DetectionTile(
+            x=x,
+            y=y,
+            width=min(max_edge, width - x),
+            height=min(max_edge, height - y),
+        )
+        for y in y_starts
+        for x in x_starts
+    ]
+
+
+def detection_tile_target_edge(
+    tile: DetectionTile,
+    *,
+    full_size: tuple[int, int],
+    pass_target_edge: int,
+) -> int:
+    """Preserve a full-pass scale when PaddleOCR receives only one tile."""
+
+    full_long_edge = max(full_size)
+    tile_long_edge = max(tile.width, tile.height)
+    scale = max(1.0, pass_target_edge / max(full_long_edge, 1))
+    return max(tile_long_edge, int(round(tile_long_edge * scale)))
+
+
+def offset_tile_box(
+    box: dict[str, Any],
+    tile: DetectionTile,
+) -> dict[str, Any]:
+    """Restore a tile-local detection box to the rotated pass coordinates."""
+
+    return {
+        **box,
+        "x": float(box["x"]) + tile.x,
+        "y": float(box["y"]) + tile.y,
+    }
 
 
 def detection_target_edges(image: Image.Image) -> tuple[int, ...]:

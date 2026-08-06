@@ -13,18 +13,52 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     def detect_regions(_image, *, progress_callback=None, **_kwargs):
         if progress_callback is not None:
             progress_callback(
+                completed=0,
+                total=2,
+                state="running",
+                label="source contrast, 0 deg, 1100px",
+                proposals=0,
+                deskew_angle=0.0,
+                pass_current=1,
+                pass_total=2,
+                tile_current=1,
+                tile_total=2,
+            )
+            progress_callback(
                 completed=1,
                 total=2,
+                state="completed",
                 label="source contrast, 0 deg, 1100px",
                 proposals=1,
                 deskew_angle=0.0,
+                pass_current=1,
+                pass_total=2,
+                tile_current=1,
+                tile_total=2,
+            )
+            progress_callback(
+                completed=1,
+                total=2,
+                state="running",
+                label="morphology",
+                proposals=1,
+                deskew_angle=0.0,
+                pass_current=2,
+                pass_total=2,
+                tile_current=1,
+                tile_total=1,
             )
             progress_callback(
                 completed=2,
                 total=2,
+                state="completed",
                 label="morphology",
                 proposals=1,
                 deskew_angle=0.0,
+                pass_current=2,
+                pass_total=2,
+                tile_current=1,
+                tile_total=1,
             )
         return [
             {
@@ -65,6 +99,8 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
         "detecting",
         "detecting",
         "detecting",
+        "detecting",
+        "detecting",
         "grouping",
         "grouping",
         "recognizing",
@@ -77,7 +113,12 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
         for event in events
         if event["stage"] == "detecting" and event["total"] > 0
     ]
-    assert detection_events[0]["message"].startswith("Detection pass 1 of 2")
+    assert detection_events[0]["message"].startswith(
+        "Running detection pass 1 of 2"
+    )
+    assert detection_events[0]["pass_current"] == 1
+    assert detection_events[0]["tile_current"] == 1
+    assert detection_events[0]["tile_total"] == 2
     assert detection_events[-1]["completed"] == 2
     assert detection_events[-1]["total"] == 2
     recognition_events = [

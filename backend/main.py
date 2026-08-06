@@ -326,6 +326,9 @@ async def create_scan_job(
                 "width": scope_width,
                 "height": scope_height,
             },
+            # Liveness thresholds scale with the actual selected drawing area.
+            # This is telemetry only; it does not impose a scan timeout.
+            "scope_pixel_area": scope_width * scope_height,
             # This is not a resume checkpoint yet.  It gives the future
             # stop/resume design a stable identity for the exact scanned crop.
             "crop_fingerprint": hashlib.sha256(raw).hexdigest(),

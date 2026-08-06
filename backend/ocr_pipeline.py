@@ -619,8 +619,11 @@ class OcrPipeline:
 
         from detection_passes import (
             build_detection_pass_plan,
+            build_detection_tiles,
             build_detection_variants,
+            detection_tile_target_edge,
             map_detection_box_to_original,
+            offset_tile_box,
             prepare_detection_source,
             rotate_for_detection,
         )
@@ -632,6 +635,22 @@ class OcrPipeline:
         # Morphology is always included rather than only acting as a fallback;
         # it can recover faint objects missed by otherwise successful OCR passes.
         total_passes = len(pass_plan) + 1
+        source_width, source_height = prepared.image.size
+        pass_tile_counts = [
+            len(
+                build_detection_tiles(
+                    (source_height, source_width)
+                    if spec.rotation_cw in {90, 270}
+                    else (source_width, source_height)
+                )
+            )
+            for spec in pass_plan
+        ]
+        # Morphology is one final work unit.  This makes the progress denominator
+        # grow with the selected area instead of pretending every page-sized
+        # Paddle pass costs the same as one small-section pass.
+        total_units = sum(pass_tile_counts) + 1
+        completed_units = 0
         candidates: list[dict[str, Any]] = []
 
         for pass_index, spec in enumerate(pass_plan, start=1):
@@ -639,32 +658,72 @@ class OcrPipeline:
                 variants[spec.variant],
                 spec.rotation_cw,
             )
-            detected = self._paddle_det_boxes(
-                rotated,
-                target_long_edge=spec.target_long_edge,
-                preprocess=False,
+            tiles = build_detection_tiles(rotated)
+            for tile_index, tile in enumerate(tiles, start=1):
+                if progress_callback is not None:
+                    progress_callback(
+                        completed=completed_units,
+                        total=total_units,
+                        state="running",
+                        label=spec.label,
+                        proposals=len(candidates),
+                        deskew_angle=prepared.correction_angle,
+                        pass_current=pass_index,
+                        pass_total=total_passes,
+                        tile_current=tile_index,
+                        tile_total=len(tiles),
+                    )
+
+                tile_image = rotated.crop(tile.box)
+                detected = self._paddle_det_boxes(
+                    tile_image,
+                    target_long_edge=detection_tile_target_edge(
+                        tile,
+                        full_size=rotated.size,
+                        pass_target_edge=spec.target_long_edge,
+                    ),
+                    preprocess=False,
+                )
+                for box in detected:
+                    mapped = map_detection_box_to_original(
+                        offset_tile_box(box, tile),
+                        rotation_cw=spec.rotation_cw,
+                        source_size=prepared.image.size,
+                        correction_angle=prepared.correction_angle,
+                    )
+                    if mapped is None:
+                        continue
+                    mapped["_detection_pass"] = spec.label
+                    candidates.append(mapped)
+
+                completed_units += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        completed=completed_units,
+                        total=total_units,
+                        state="completed",
+                        label=spec.label,
+                        proposals=len(candidates),
+                        deskew_angle=prepared.correction_angle,
+                        pass_current=pass_index,
+                        pass_total=total_passes,
+                        tile_current=tile_index,
+                        tile_total=len(tiles),
+                    )
+
+        if progress_callback is not None:
+            progress_callback(
+                completed=completed_units,
+                total=total_units,
+                state="running",
+                label="morphology",
+                proposals=len(candidates),
+                deskew_angle=prepared.correction_angle,
+                pass_current=total_passes,
+                pass_total=total_passes,
+                tile_current=1,
+                tile_total=1,
             )
-            for box in detected:
-                mapped = map_detection_box_to_original(
-                    box,
-                    rotation_cw=spec.rotation_cw,
-                    source_size=prepared.image.size,
-                    correction_angle=prepared.correction_angle,
-                )
-                if mapped is None:
-                    continue
-                mapped["_detection_pass"] = spec.label
-                candidates.append(mapped)
-
-            if progress_callback is not None:
-                progress_callback(
-                    completed=pass_index,
-                    total=total_passes,
-                    label=spec.label,
-                    proposals=len(candidates),
-                    deskew_angle=prepared.correction_angle,
-                )
-
         morphology = propose_text_regions(image)
         for box in morphology:
             candidates.append(
@@ -675,13 +734,19 @@ class OcrPipeline:
                     "_detection_pass": "morphology",
                 }
             )
+        completed_units += 1
         if progress_callback is not None:
             progress_callback(
-                completed=total_passes,
-                total=total_passes,
+                completed=completed_units,
+                total=total_units,
+                state="completed",
                 label="morphology",
                 proposals=len(candidates),
                 deskew_angle=prepared.correction_angle,
+                pass_current=total_passes,
+                pass_total=total_passes,
+                tile_current=1,
+                tile_total=1,
             )
 
         # This is only coarse same-position suppression needed to keep the
@@ -1044,6 +1109,13 @@ class OcrPipeline:
             percent: int,
             completed: int = 0,
             total: int = 0,
+            pass_current: int = 0,
+            pass_total: int = 0,
+            tile_current: int = 0,
+            tile_total: int = 0,
+            object_current: int = 0,
+            object_total: int = 0,
+            operation_label: str = "",
         ) -> None:
             if progress_callback is not None:
                 progress_callback(
@@ -1052,6 +1124,13 @@ class OcrPipeline:
                     percent=percent,
                     completed=completed,
                     total=total,
+                    pass_current=pass_current,
+                    pass_total=pass_total,
+                    tile_current=tile_current,
+                    tile_total=tile_total,
+                    object_current=object_current,
+                    object_total=object_total,
+                    operation_label=operation_label,
                 )
 
         report(
@@ -1070,9 +1149,14 @@ class OcrPipeline:
             *,
             completed: int,
             total: int,
+            state: str,
             label: str,
             proposals: int,
             deskew_angle: float,
+            pass_current: int,
+            pass_total: int,
+            tile_current: int,
+            tile_total: int,
         ) -> None:
             detection_state["completed"] = completed
             detection_state["total"] = total
@@ -1081,15 +1165,26 @@ class OcrPipeline:
                 if deskew_angle != 0.0
                 else ""
             )
+            tile_text = (
+                f"; tile {tile_current} of {tile_total}"
+                if tile_total > 1
+                else ""
+            )
+            action = "Running" if state == "running" else "Completed"
             report(
                 stage="detecting",
                 message=(
-                    f"Detection pass {completed} of {total}: {label}"
-                    f" ({proposals} proposals{deskew})"
+                    f"{action} detection pass {pass_current} of {pass_total}"
+                    f"{tile_text}: {label} ({proposals} proposals{deskew})"
                 ),
                 percent=7 + int(23 * completed / max(total, 1)),
                 completed=completed,
                 total=total,
+                pass_current=pass_current,
+                pass_total=pass_total,
+                tile_current=tile_current,
+                tile_total=tile_total,
+                operation_label=label,
             )
 
         boxes = self.detect_regions(
@@ -1155,6 +1250,9 @@ class OcrPipeline:
                 percent=42 + int(48 * (cluster_index - 1) / max(cluster_total, 1)),
                 completed=cluster_index - 1,
                 total=cluster_total,
+                object_current=cluster_index,
+                object_total=cluster_total,
+                operation_label=f"Object {cluster_index}",
             )
             ub = union_bbox(cluster)
             cx0 = max(0, int(ub["x"] - margin))
@@ -1204,6 +1302,9 @@ class OcrPipeline:
                 percent=42 + int(48 * cluster_index / max(cluster_total, 1)),
                 completed=cluster_index,
                 total=cluster_total,
+                object_current=cluster_index,
+                object_total=cluster_total,
+                operation_label=f"Object {cluster_index}",
             )
 
         report(

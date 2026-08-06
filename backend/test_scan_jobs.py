@@ -120,3 +120,75 @@ def test_reported_percentage_never_moves_backwards() -> None:
     finally:
         release.set()
         manager.shutdown()
+
+
+def test_heartbeat_and_area_aware_liveness_continue_during_blocking_work() -> None:
+    manager = ScanJobManager(
+        max_workers=1,
+        heartbeat_interval_seconds=0.01,
+        heartbeat_stale_seconds=1.0,
+        long_step_base_seconds=0.02,
+        stalled_step_multiplier=2.0,
+    )
+    started = Event()
+    release = Event()
+
+    def work(report):
+        report(
+            stage="detecting",
+            message="Running detection pass 1 of 33",
+            percent=7,
+            completed=0,
+            total=33,
+            pass_current=1,
+            pass_total=33,
+            tile_current=1,
+            tile_total=1,
+            operation_label="source contrast",
+        )
+        started.set()
+        assert release.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        initial = manager.submit(
+            work,
+            metadata={"scope_pixel_area": 1},
+        )
+        assert started.wait(1.0)
+        first = manager.get(initial["job_id"])
+        assert first is not None
+        first_heartbeat = first["heartbeat_at"]
+        with manager._lock:
+            manager._jobs[initial["job_id"]].started_at -= 10.0
+        timing = manager.get(initial["job_id"])
+        assert timing is not None
+        assert timing["elapsed_seconds"] >= 10
+        assert 130 <= timing["estimated_remaining_seconds"] <= 136
+
+        sleep(0.07)
+        long_running = manager.get(initial["job_id"])
+        assert long_running is not None
+        assert long_running["heartbeat_at"] > first_heartbeat
+        assert long_running["heartbeat_age_seconds"] == 0
+        assert long_running["liveness"] == "long_running"
+        assert long_running["pass_current"] == 1
+        assert long_running["pass_total"] == 33
+        assert long_running["result"] is None
+
+        # Move only the no-forward-progress timestamp beyond the configured
+        # threshold. The independently ticking heartbeat remains current.
+        with manager._lock:
+            manager._jobs[initial["job_id"]].last_progress_at -= 3.0
+        possibly_stalled = manager.get(initial["job_id"])
+        assert possibly_stalled is not None
+        assert possibly_stalled["liveness"] == "possibly_stalled"
+        assert possibly_stalled["progress_age_seconds"] >= 3
+
+        release.set()
+        complete = _wait_for_terminal(manager, initial["job_id"])
+        assert complete["liveness"] == "complete"
+        assert complete["finished_at"] is not None
+    finally:
+        release.set()
+        manager.shutdown()

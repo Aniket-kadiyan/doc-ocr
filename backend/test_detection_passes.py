@@ -10,9 +10,12 @@ from detection_passes import (
     DETECTION_ROTATIONS_CW,
     DETECTION_VARIANTS,
     build_detection_pass_plan,
+    build_detection_tiles,
     build_detection_variants,
+    detection_tile_target_edge,
     map_deskewed_box_to_original,
     map_quarter_turn_box_to_source,
+    offset_tile_box,
 )
 from ocr_pipeline import OcrPipeline
 
@@ -57,6 +60,33 @@ def test_detection_variants_keep_size_and_include_inverse_threshold() -> None:
         threshold.getpixel((x, y)) + inverted.getpixel((x, y)) == 255
         for x, y in ((0, 0), (25, 20), (79, 39))
     )
+
+
+def test_large_images_use_overlapping_tiles_with_complete_coverage() -> None:
+    tiles = build_detection_tiles((4200, 2400), max_edge=2000, overlap=160)
+
+    assert len(tiles) == 6
+    assert tiles[0].box == (0, 0, 2000, 2000)
+    assert tiles[-1].box == (3680, 1840, 4200, 2400)
+    assert max(tile.x + tile.width for tile in tiles) == 4200
+    assert max(tile.y + tile.height for tile in tiles) == 2400
+    assert {tile.x for tile in tiles} == {0, 1840, 3680}
+    assert {tile.y for tile in tiles} == {0, 1840}
+
+
+def test_tile_boxes_and_pass_scale_restore_to_rotated_coordinates() -> None:
+    tile = build_detection_tiles((2500, 1000))[1]
+
+    assert tile.box == (1840, 0, 2500, 1000)
+    assert offset_tile_box(
+        {"x": 10, "y": 20, "w": 30, "h": 10},
+        tile,
+    ) == {"x": 1850.0, "y": 20.0, "w": 30, "h": 10}
+    assert detection_tile_target_edge(
+        tile,
+        full_size=(2500, 1000),
+        pass_target_edge=3750,
+    ) == 1500
 
 
 def test_every_quarter_turn_maps_back_to_the_original_box() -> None:
@@ -182,9 +212,37 @@ def test_accuracy_detector_runs_every_pass_and_keeps_low_confidence(
     assert all(preprocess is False for _, _, preprocess in calls)
     assert len(boxes) == 1
     assert boxes[0]["conf"] == 0.01
-    assert len(events) == 33  # 32 Paddle passes plus morphology.
+    # Every blocking unit announces both its start and completion so the UI can
+    # distinguish active work from the previously completed pass.
+    assert len(events) == 66
+    assert events[0]["state"] == "running"
+    assert events[1]["state"] == "completed"
     assert events[-1]["completed"] == events[-1]["total"] == 33
     assert events[-1]["label"] == "morphology"
+    assert events[-1]["pass_current"] == events[-1]["pass_total"] == 33
+
+
+def test_large_area_progress_counts_tiles_as_real_work_units(monkeypatch) -> None:
+    pipeline = object.__new__(OcrPipeline)
+    calls: list[tuple[int, int]] = []
+
+    def fake_paddle(image: Image.Image, **_kwargs) -> list[dict[str, Any]]:
+        calls.append(image.size)
+        return []
+
+    pipeline._paddle_det_boxes = fake_paddle
+    monkeypatch.setattr("region_detect.propose_text_regions", lambda _image: [])
+    events: list[dict[str, Any]] = []
+
+    pipeline.detect_regions(
+        Image.new("RGB", (2100, 100), "white"),
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    # 32 Paddle passes, each split into two overlapping tiles.
+    assert len(calls) == 64
+    assert events[0]["tile_total"] == 2
+    assert events[-1]["completed"] == events[-1]["total"] == 65
 
 
 def test_morphology_is_used_even_when_the_pass_plan_runs(monkeypatch) -> None:

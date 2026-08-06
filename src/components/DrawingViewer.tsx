@@ -460,6 +460,19 @@ export function DrawingViewer() {
         percent: 0,
         completed: 0,
         total: 0,
+        passCurrent: 0,
+        passTotal: 0,
+        tileCurrent: 0,
+        tileTotal: 0,
+        objectCurrent: 0,
+        objectTotal: 0,
+        operationLabel: "",
+        elapsedSeconds: 0,
+        stepElapsedSeconds: 0,
+        heartbeatAgeSeconds: 0,
+        progressAgeSeconds: 0,
+        estimatedRemainingSeconds: null,
+        liveness: "queued",
       });
       try {
         const regions = await runAutoBalloonScan({

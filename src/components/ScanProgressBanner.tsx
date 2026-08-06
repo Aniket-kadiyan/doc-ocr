@@ -1,4 +1,10 @@
 import type { ScanProgress } from "@/types/scanJob";
+import {
+  formatScanDuration,
+  heartbeatLabel,
+  scanLivenessLabel,
+  scanWorkCounter,
+} from "@/lib/scanProgress";
 
 interface ScanProgressBannerProps {
   progress: ScanProgress;
@@ -6,23 +12,76 @@ interface ScanProgressBannerProps {
 
 export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
   const percent = Math.max(0, Math.min(100, progress.percent));
-  const counter =
-    progress.total > 0
-      ? `${progress.completed} / ${progress.total}`
-      : null;
+  const counter = scanWorkCounter(progress);
+  const needsAttention =
+    progress.liveness === "long_running" ||
+    progress.liveness === "possibly_stalled";
+  const stageTitle: Record<string, string> = {
+    queued: "Queued",
+    preparing: "Preparing scan",
+    detecting: "Detecting objects",
+    grouping: "Grouping objects",
+    recognizing: "Recognizing values",
+    finalizing: "Finalizing balloons",
+    complete: "Scan complete",
+    failed: "Scan failed",
+  };
+  const tone = needsAttention
+    ? "border-amber-200 bg-amber-50 text-amber-950"
+    : "border-blue-200 bg-blue-50 text-blue-950";
+  const progressTone = needsAttention ? "bg-amber-500" : "bg-blue-600";
 
   return (
-    <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-blue-900">
-      <div className="mx-auto flex max-w-5xl items-center gap-3 text-xs">
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {progress.message}
-        </span>
-        {counter && <span className="tabular-nums">{counter}</span>}
-        <span className="w-10 text-right tabular-nums">{percent}%</span>
+    <div
+      className={`border-b px-4 py-2 ${tone}`}
+      aria-live="polite"
+      aria-label="Auto-balloon scan progress"
+    >
+      <div className="mx-auto max-w-5xl text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-semibold">
+            {stageTitle[progress.stage] ?? progress.stage}
+          </span>
+          {counter && (
+            <span className="min-w-0 flex-1 truncate tabular-nums">
+              {counter}
+            </span>
+          )}
+          <span className="tabular-nums">
+            Elapsed {formatScanDuration(progress.elapsedSeconds)}
+          </span>
+          {progress.estimatedRemainingSeconds !== null && (
+            <span className="tabular-nums">
+              ETA {formatScanDuration(progress.estimatedRemainingSeconds)}
+            </span>
+          )}
+          <span className="w-10 text-right font-medium tabular-nums">
+            {percent}%
+          </span>
+        </div>
+
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          <span className="min-w-0 flex-1 truncate">{progress.message}</span>
+          <span className="tabular-nums">
+            Current step {formatScanDuration(progress.stepElapsedSeconds)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <span
+              className={`h-2 w-2 rounded-full ${progressTone} ${
+                progress.status === "running" ? "animate-pulse" : ""
+              }`}
+            />
+            {scanLivenessLabel[progress.liveness]}
+            {progress.status === "running" && (
+              <> · {heartbeatLabel(progress.heartbeatAgeSeconds)}</>
+            )}
+          </span>
+        </div>
       </div>
-      <div className="mx-auto mt-1 h-1.5 max-w-5xl overflow-hidden rounded-full bg-blue-100">
+
+      <div className="mx-auto mt-1.5 h-1.5 max-w-5xl overflow-hidden rounded-full bg-black/10">
         <div
-          className="h-full rounded-full bg-blue-600 transition-[width] duration-300"
+          className={`h-full rounded-full transition-[width] duration-300 ${progressTone}`}
           style={{ width: `${percent}%` }}
         />
       </div>
