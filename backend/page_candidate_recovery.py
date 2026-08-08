@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from math import atan2, degrees
 import re
 from typing import Any, Mapping, Sequence
@@ -22,20 +23,22 @@ except ImportError:  # pragma: no cover - production OCR installs OpenCV
     cv2 = None  # type: ignore
 
 
-RECOVERY_CONFIDENCE_THRESHOLD = 0.90
-RECOVERY_ORIENTATION_THRESHOLD = 0.70
 RECOVERY_MAX_CANDIDATES = 96
-RECOVERY_VARIANTS_PER_CANDIDATE = 2
 CONTEXT_MAX_CANDIDATES = 48
 
 _DIGIT = re.compile(r"\d")
-_SUSPICIOUS_SINGLE = re.compile(r"^[018]$")
+_SUSPICIOUS_SINGLE = re.compile(r"^[018BDOQILSZG]$", re.IGNORECASE)
+_INCOMPLETE_PREFIX = re.compile(r"^[RØøφΦ⌀]$", re.IGNORECASE)
+_TRAILING_INCOMPLETE = re.compile(r"(?:[±+\-:/.]|\+/[-−])$")
+_NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)")
 _COMPACT_TOKEN = re.compile(r"[^A-Z0-9]+")
-_CONFUSABLE_PAIRS = (
+_CONFUSABLE_GROUPS = (
+    frozenset(("0", "O", "D", "Q")),
+    frozenset(("1", "I", "L")),
+    frozenset(("2", "Z")),
+    frozenset(("5", "S")),
+    frozenset(("6", "G")),
     frozenset(("8", "B")),
-    frozenset(("0", "O")),
-    frozenset(("1", "I")),
-    frozenset(("1", "L")),
 )
 
 
@@ -47,40 +50,103 @@ class RecoveryCrop:
     image: Image.Image
 
 
+def _normalize_engineering_text(text: str) -> str:
+    """Canonicalize harmless OCR formatting differences for comparison."""
+
+    from symbol_normalize import fix_engineering_symbols_light
+
+    normalized = fix_engineering_symbols_light(str(text or ""))
+    normalized = (
+        normalized.replace("º", "°")
+        .replace("˚", "°")
+        .replace("⁰", "°")
+        .replace("−", "-")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    normalized = re.sub(r"^[øφΦ⌀]", "Ø", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^r(?=\s*\d)", "R", normalized, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _is_incomplete_engineering_value(text: str) -> bool:
+    """Identify only explicit truncation, not merely low OCR confidence."""
+
+    normalized = _normalize_engineering_text(text)
+    compact = "".join(normalized.split())
+    if not compact:
+        return True
+    if _INCOMPLETE_PREFIX.fullmatch(compact):
+        return True
+    return bool(_DIGIT.search(compact) and _TRAILING_INCOMPLETE.search(compact))
+
+
+def is_usable_engineering_value(text: str) -> bool:
+    """Return whether text can safely proceed to the page exclusion rules.
+
+    Whole-page policy deliberately remains permissive: identifiers, ratios,
+    radii, diameters, angles, and plain numbers are all usable. Recovery is
+    reserved for explicit truncation or unread text.
+    """
+
+    normalized = _normalize_engineering_text(text)
+    return bool(_DIGIT.search(normalized)) and not _is_incomplete_engineering_value(
+        normalized
+    )
+
+
+def _characters_are_confusable(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return any(left in group and right in group for group in _CONFUSABLE_GROUPS)
+
+
+def _tokens_are_confusable(left: str, right: str) -> bool:
+    return bool(
+        left
+        and right
+        and left != right
+        and len(left) == len(right)
+        and all(
+            _characters_are_confusable(left_char, right_char)
+            for left_char, right_char in zip(left, right)
+        )
+    )
+
+
+def _result_has_confusable_evidence(result: Mapping[str, Any]) -> bool:
+    if result.get("confusable_corrected"):
+        return True
+    raw = _raw_token(result)
+    text = _COMPACT_TOKEN.sub(
+        "",
+        str(result.get("text") or "").upper(),
+    )
+    return _tokens_are_confusable(raw, text)
+
+
 def result_needs_recovery(result: Mapping[str, Any]) -> bool:
-    """Return whether the primary read is unsafe to decide automatically."""
+    """Select only unread, truncated, or genuinely confusable primary reads."""
 
     text = str(result.get("text") or "").strip()
-    confidence = float(result.get("confidence") or 0.0)
-    orientation_confidence = float(
-        result.get("orientation_confidence") or 0.0
-    )
-    return bool(
-        not text
-        or not _DIGIT.search(text)
-        or confidence < RECOVERY_CONFIDENCE_THRESHOLD
-        or result.get("confusable_corrected")
-        or _SUSPICIOUS_SINGLE.fullmatch(text)
-        or orientation_confidence < RECOVERY_ORIENTATION_THRESHOLD
-    )
+    if not text or _is_incomplete_engineering_value(text):
+        return True
+    if _result_has_confusable_evidence(result):
+        return True
+    return bool(_SUSPICIOUS_SINGLE.fullmatch(_normalize_engineering_text(text)))
 
 
 def recovery_priority(result: Mapping[str, Any]) -> int:
-    """Prioritize likely missed dimensions before long, stable text labels."""
+    """Prioritize unread and explicitly truncated dimensions."""
 
     text = str(result.get("text") or "").strip()
-    confidence = float(result.get("confidence") or 0.0)
     if not text:
         return 0
-    if _DIGIT.search(text) and (
-        confidence < RECOVERY_CONFIDENCE_THRESHOLD
-        or result.get("confusable_corrected")
-        or _SUSPICIOUS_SINGLE.fullmatch(text)
-    ):
+    if _is_incomplete_engineering_value(text):
         return 1
-    if len(text) <= 6:
+    if _result_has_confusable_evidence(result):
         return 2
-    return 3
+    return 3 if _SUSPICIOUS_SINGLE.fullmatch(text) else 4
 
 
 def select_recovery_record_indexes(
@@ -347,18 +413,94 @@ def build_context_crop(
     return image.crop((x0, y0, x1, y1)).convert("RGB")
 
 
-def _normalized_vote(text: str) -> str:
-    return "".join(text.upper().split())
-
-
 def _raw_token(result: Mapping[str, Any]) -> str:
     raw = str(result.get("raw_ocr") or result.get("text") or "").upper()
     return _COMPACT_TOKEN.sub("", raw)
 
 
 def _has_confusable_conflict(tokens: Sequence[str]) -> bool:
-    token_set = set(tokens)
-    return any(pair.issubset(token_set) for pair in _CONFUSABLE_PAIRS)
+    return any(
+        _tokens_are_confusable(left, right)
+        for index, left in enumerate(tokens)
+        for right in tokens[index + 1 :]
+    )
+
+
+def _semantic_signature(text: str) -> tuple[Decimal, ...] | None:
+    """Return ordered numeric meaning after harmless format normalization."""
+
+    normalized = _normalize_engineering_text(text)
+    if not is_usable_engineering_value(normalized):
+        return None
+    numbers: list[Decimal] = []
+    for match in _NUMBER.finditer(normalized):
+        token = match.group(0)
+        if token.endswith("."):
+            return None
+        try:
+            number = Decimal(token)
+        except InvalidOperation:
+            return None
+        numbers.append(Decimal(0) if number == 0 else number.normalize())
+    return tuple(numbers) if numbers else None
+
+
+def engineering_values_agree(left: str, right: str) -> bool:
+    """Compare OCR reads by ordered numeric content, not exact formatting."""
+
+    left_signature = _semantic_signature(left)
+    return bool(
+        left_signature is not None
+        and left_signature == _semantic_signature(right)
+    )
+
+
+def _format_quality(result: Mapping[str, Any]) -> tuple[float, ...]:
+    """Prefer the richest canonical rendering among numerically equal reads."""
+
+    text = _normalize_engineering_text(str(result.get("text") or ""))
+    canonical_symbols = sum(text.count(symbol) for symbol in "±°Ø'\"")
+    qualifiers = len(
+        re.findall(r"(?:^R(?=\d)|\bM(?=\d)|\bMAX\b|\bMIN\b)", text, re.I)
+    )
+    return (
+        float(canonical_symbols),
+        float(qualifiers),
+        float(len(_semantic_signature(text) or ())),
+        float(len(text.replace(" ", ""))),
+        float(result.get("confidence") or 0.0),
+    )
+
+
+def result_needs_second_recovery(
+    primary: Mapping[str, Any],
+    first_attempt: Mapping[str, Any],
+) -> bool:
+    """Run the expensive alternate crop only when pass one is unresolved."""
+
+    primary_text = str(primary.get("text") or "").strip()
+    attempt_text = str(first_attempt.get("text") or "").strip()
+    primary_raw = _raw_token(primary)
+    attempt_raw = _raw_token(first_attempt)
+
+    if not is_usable_engineering_value(attempt_text):
+        stable_confusable_alpha = bool(
+            primary_raw
+            and primary_raw == attempt_raw
+            and len(primary_raw) == 1
+            and primary_raw.isalpha()
+            and _SUSPICIOUS_SINGLE.fullmatch(primary_raw)
+        )
+        return not stable_confusable_alpha
+
+    if _has_confusable_conflict(
+        [token for token in (primary_raw, attempt_raw) if token]
+    ):
+        return True
+
+    if not is_usable_engineering_value(primary_text):
+        return False
+    return not engineering_values_agree(primary_text, attempt_text)
 
 
 def resolve_recovery_consensus(
@@ -409,6 +551,7 @@ def resolve_recovery_consensus(
         and len(set(raw_tokens)) == 1
         and len(raw_tokens[0]) == 1
         and raw_tokens[0].isalpha()
+        and _SUSPICIOUS_SINGLE.fullmatch(raw_tokens[0])
     )
     if stable_alpha:
         selected = max(
@@ -428,58 +571,92 @@ def resolve_recovery_consensus(
         return base
 
     confusable_conflict = _has_confusable_conflict(raw_tokens)
-    votes = Counter(
-        _normalized_vote(str(item.get("text") or "")) for item in nonempty
-    )
-    winner, winner_count = max(
-        votes.items(),
-        key=lambda item: (
-            item[1],
-            max(
-                float(candidate.get("confidence") or 0.0)
-                for candidate in nonempty
-                if _normalized_vote(str(candidate.get("text") or "")) == item[0]
-            ),
-        ),
-    )
-    winner_attempts = [
-        item
+    numeric_attempts = [
+        (item, signature)
         for item in nonempty
-        if _normalized_vote(str(item.get("text") or "")) == winner
+        if (signature := _semantic_signature(str(item.get("text") or "")))
+        is not None
     ]
+
+    if numeric_attempts:
+        votes = Counter(signature for _item, signature in numeric_attempts)
+        winner, winner_count = max(
+            votes.items(),
+            key=lambda item: (
+                item[1],
+                max(
+                    _format_quality(candidate)
+                    for candidate, signature in numeric_attempts
+                    if signature == item[0]
+                ),
+            ),
+        )
+        runner_up_count = max(
+            (count for signature, count in votes.items() if signature != winner),
+            default=0,
+        )
+        numeric_conflict = bool(
+            len(votes) > 1
+            and not (winner_count >= 2 and winner_count > runner_up_count)
+        )
+        selected = max(
+            (
+                item
+                for item, signature in numeric_attempts
+                if signature == winner
+            ),
+            key=_format_quality,
+        )
+        agreement = winner_count / len(numeric_attempts)
+        needs_review = bool(
+            confusable_conflict or numeric_conflict or budget_exhausted
+        )
+        if confusable_conflict:
+            reason = "Numeric and alphabetic recovery reads conflict"
+        elif numeric_conflict:
+            reason = "Recovery reads contain different numeric values"
+        elif budget_exhausted:
+            reason = "Recovery budget reached before this doubtful candidate"
+        else:
+            reason = ""
+
+        base.update(selected)
+        base.update(
+            text=_normalize_engineering_text(str(selected.get("text") or "")),
+            agreement=agreement,
+            needs_review=needs_review,
+            review_reason=reason,
+            stable_alpha=False,
+            confusable_conflict=confusable_conflict,
+            numeric_conflict=numeric_conflict,
+            ocr_profile=(
+                "recovery_consensus"
+                if attempted
+                else selected.get("ocr_profile")
+            ),
+        )
+        return base
+
     selected = max(
-        winner_attempts,
+        nonempty,
         key=lambda item: float(item.get("confidence") or 0.0),
     )
-    agreement = winner_count / max(len(nonempty), 1)
-    stable_consensus = bool(
-        attempted
-        and winner_count >= 2
-        and agreement >= (2 / 3)
-        and float(selected.get("confidence") or 0.0) >= 0.55
-    )
-    primary_was_safe = not result_needs_recovery(primary)
-    needs_review = bool(
-        confusable_conflict
-        or budget_exhausted
-        or not (stable_consensus or primary_was_safe)
-    )
-    if confusable_conflict:
-        reason = "Numeric and alphabetic recovery reads conflict"
-    elif budget_exhausted:
+    needs_review = bool(attempted or budget_exhausted)
+    if budget_exhausted:
         reason = "Recovery budget reached before this doubtful candidate"
     elif needs_review:
-        reason = "Recovery reads did not reach a stable consensus"
+        reason = "Recovery did not produce a usable numeric value"
     else:
         reason = ""
-
     base.update(selected)
     base.update(
-        agreement=agreement,
+        text=_normalize_engineering_text(str(selected.get("text") or "")),
+        agreement=1.0 if not attempted else 0.0,
         needs_review=needs_review,
         review_reason=reason,
         stable_alpha=False,
         confusable_conflict=confusable_conflict,
+        numeric_conflict=False,
         ocr_profile=(
             "recovery_consensus" if attempted else selected.get("ocr_profile")
         ),

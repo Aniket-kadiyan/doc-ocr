@@ -69,11 +69,15 @@ The fast suite verifies:
 - Whole-page crops use standalone orientation and recognition modules in
   batches; the slow full OCR pipeline is not a permitted fallback.
 - Detector quadrilaterals survive page-coordinate restoration and deduplication.
-  Doubtful primary reads use at most 96 candidates, two recognition-only
-  recovery variants per candidate, and batches of 16; detection is never rerun.
-- Recovery consensus keeps stable numeric reads, rejects stable alphabetic
-  confusables, and routes numeric/alphabetic conflicts or unresolved reads to
-  explicit review candidates instead of silently dropping them.
+  Only unread, explicitly truncated, or genuinely confusable primary reads enter
+  recovery. The rectified variant runs first; the expanded/sharpened variant runs
+  only when that result remains unusable or conflicts numerically. Recovery stays
+  capped at 96 candidates and uses batches of 16; detection is never rerun.
+- Recovery consensus compares ordered numeric meaning after normalizing spacing,
+  degree/diameter variants, primes, and `+/-`/`±`. Confidence, orientation score,
+  and panel-boundary contact are diagnostic or ranking data, not approval gates.
+  Stable alphabetic confusables are rejected while unresolved numeric or
+  alphabetic conflicts remain explicit review candidates.
 - Context OCR is limited to at most 48 exclusion-prone values and affects only
   filtering; it never replaces the candidate's recognized technical value.
 - Whole-page eligibility rules are isolated in
@@ -177,15 +181,16 @@ identify the offending balloon and block final output once the edit is saved.
   boxes have similar position and size. A large containing box and its smaller
   child objects must all survive for review.
 - Confirm primary recognition reports `Batch N/M` and uses the
-  `batch_recognition` profile with a batch size of 16. Only empty, no-digit,
-  low-confidence, corrected-confusable, suspicious single-character, or
-  orientation-uncertain candidates enter recovery. Recovery is capped at 96
-  objects and two variants each; standalone orientation and recognition receive
-  crop lists, and the complete PaddleOCR pipeline is never called per object.
-- Confirm angled detections are rectified from their detector polygons and the
-  second recovery variant uses a proportionally expanded, alternate-preprocessed
-  crop. Valid values such as `R5.00`, `R1.50`, and angular tolerances must become
-  either balloons or visible review boxes, never silently disappear.
+  `batch_recognition` profile with a batch size of 16. Low confidence, low
+  orientation confidence, and panel-boundary contact must not trigger recovery
+  or review for a usable numeric value. Pure text also skips recovery. Only
+  unread, explicitly truncated, corrected-confusable, or suspicious
+  letter/digit candidates enter the capped recovery route.
+- Confirm angled detections are rectified from their detector polygons. A usable
+  first recovery result must skip the expanded/sharpened variant; that second
+  variant runs only for unread or numerically conflicting first results. Valid
+  values such as `R5.00`, `R1.50`, and angular tolerances should be automatically
+  ballooned; review boxes are reserved for genuinely unresolved cases.
 - Confirm the completion banner reports detected, recognized, eligible,
   excluded, review-required, and unread counts, with
   `detected = eligible + excluded + review-required`. Unread is a diagnostic
@@ -226,8 +231,8 @@ identify the offending balloon and block final output once the edit is saved.
 Performance is now a prerequisite for the remaining auto-ballooning accuracy
 milestones. On the actual deployment Windows machine, complete click-to-balloon
 insertion must take no more than **10 minutes** for the agreed representative
-worst-case drawing and maximum page resolution; **5 minutes or less** is the
-preferred target. Use a warm OCR service, exclude manual review time, and retain
+worst-case drawing and maximum page resolution; **5–7 minutes** is the target.
+Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
 automatic cancellation timeout. For whole-page runs record total time plus
 layout analysis, masked panel detection, atomic deduplication, primary batched

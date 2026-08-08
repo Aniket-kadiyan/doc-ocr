@@ -6,9 +6,12 @@ from PIL import Image, ImageDraw
 
 from page_candidate_recovery import (
     build_recovery_crops,
+    engineering_values_agree,
+    is_usable_engineering_value,
     reconstruct_line_context,
     resolve_recovery_consensus,
     result_needs_recovery,
+    result_needs_second_recovery,
     select_recovery_record_indexes,
 )
 
@@ -19,13 +22,14 @@ def _result(
     raw: str | None = None,
     confidence: float = 0.96,
     corrected: bool = False,
+    orientation_confidence: float = 0.99,
 ) -> dict:
     return {
         "text": text,
         "raw_ocr": text if raw is None else raw,
         "confidence": confidence,
         "confusable_corrected": corrected,
-        "orientation_confidence": 0.99,
+        "orientation_confidence": orientation_confidence,
         "ocr_profile": "test",
     }
 
@@ -36,10 +40,81 @@ def test_recovery_selection_is_bounded_and_prioritizes_missing_values() -> None:
         {"result": _result("", confidence=0.0)},
         {"result": _result("25", confidence=0.55)},
         {"result": _result("NOTES")},
+        {"result": _result("15°±")},
+        {"result": _result("B")},
     ]
 
-    assert select_recovery_record_indexes(records, maximum=2) == [1, 2]
-    assert result_needs_recovery(records[0]["result"])
+    assert select_recovery_record_indexes(records, maximum=2) == [1, 4]
+    assert not result_needs_recovery(records[0]["result"])
+    assert not result_needs_recovery(records[2]["result"])
+    assert not result_needs_recovery(records[3]["result"])
+    assert result_needs_recovery(records[5]["result"])
+
+
+def test_confidence_orientation_and_spacing_are_not_approval_gates() -> None:
+    low_quality = _result(
+        "30 ° +/- 3 °",
+        confidence=0.31,
+        orientation_confidence=0.12,
+    )
+
+    assert is_usable_engineering_value(low_quality["text"])
+    assert not result_needs_recovery(low_quality)
+    assert engineering_values_agree("30°±3°", "30 +/- 3")
+    assert engineering_values_agree("R3", "r3.0")
+    assert not engineering_values_agree("15.0", "75.0")
+
+
+def test_second_recovery_runs_only_for_unresolved_or_conflicting_reads() -> None:
+    assert not result_needs_second_recovery(
+        _result("", confidence=0.0),
+        _result("R5.00", confidence=0.72),
+    )
+    assert not result_needs_second_recovery(
+        _result("30°±3°"),
+        _result("30 +/- 3"),
+    )
+    assert result_needs_second_recovery(
+        _result("15.0"),
+        _result("75.0"),
+    )
+    assert result_needs_second_recovery(
+        _result("8", raw="8"),
+        _result("B", raw="B"),
+    )
+
+
+def test_semantic_consensus_selects_the_richest_equivalent_value() -> None:
+    resolved = resolve_recovery_consensus(
+        _result("30 ± 3", confidence=0.62),
+        [
+            _result("30 +/- 3°", confidence=0.81),
+            _result("30°±3°", confidence=0.74),
+        ],
+        attempted=True,
+    )
+
+    assert resolved["text"] == "30°±3°"
+    assert resolved["agreement"] == 1.0
+    assert not resolved["needs_review"]
+
+
+def test_numeric_conflict_requires_review_until_a_recovery_majority_exists() -> None:
+    unresolved = resolve_recovery_consensus(
+        _result("15.0"),
+        [_result("75.0")],
+        attempted=True,
+    )
+    resolved = resolve_recovery_consensus(
+        _result("15.0"),
+        [_result("75.0"), _result("75")],
+        attempted=True,
+    )
+
+    assert unresolved["needs_review"]
+    assert unresolved["numeric_conflict"]
+    assert not resolved["needs_review"]
+    assert resolved["text"] == "75.0"
 
 
 def test_consensus_recovers_a_dimension_without_full_pipeline_fallback() -> None:

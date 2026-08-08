@@ -443,14 +443,9 @@ class OcrPipeline:
                     "confidence": float(confidence),
                     "confusable_corrected": bool(corrected),
                     "agreement": 1.0 if text else 0.0,
-                    "needs_review": bool(
-                        text
-                        and (
-                            float(confidence) < 0.90
-                            or corrected
-                            or float(orientation_score) < 0.70
-                        )
-                    ),
+                    # Confidence and orientation quality help rank alternative
+                    # reads; they are not approval gates for a usable value.
+                    "needs_review": False,
                     "type": composed.kind,
                     "engine": "paddleocr+compose"
                     if composed.applied
@@ -2133,12 +2128,12 @@ class OcrPipeline:
         from page_candidate_recovery import (
             CONTEXT_MAX_CANDIDATES,
             RECOVERY_MAX_CANDIDATES,
-            RECOVERY_VARIANTS_PER_CANDIDATE,
             build_context_crop,
             build_recovery_crops,
             reconstruct_line_context,
             resolve_recovery_consensus,
             result_needs_recovery,
+            result_needs_second_recovery,
             select_recovery_record_indexes,
         )
         from page_value_filters import (
@@ -2580,7 +2575,7 @@ class OcrPipeline:
             }
             for index, record in enumerate(ocr_records)
         ]
-        recovery_batches_per_variant = (
+        first_recovery_batch_total = (
             (
                 len(selected_recovery_indexes)
                 + PAGE_SCAN_RECOGNITION_BATCH_SIZE
@@ -2588,88 +2583,184 @@ class OcrPipeline:
             )
             // PAGE_SCAN_RECOGNITION_BATCH_SIZE
         )
-        recovery_batch_total = (
-            recovery_batches_per_variant * RECOVERY_VARIANTS_PER_CANDIDATE
-        )
-        recovery_batch_index = 0
-        for variant_index in range(RECOVERY_VARIANTS_PER_CANDIDATE):
-            for batch_start in range(
+        for first_batch_index, batch_start in enumerate(
+            range(
                 0,
                 len(selected_recovery_indexes),
                 PAGE_SCAN_RECOGNITION_BATCH_SIZE,
-            ):
-                recovery_batch_index += 1
-                batch_indexes = selected_recovery_indexes[
-                    batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
-                ]
-                batch_profile = recovery_crops[batch_indexes[0]][
-                    variant_index
-                ].profile
-                report(
-                    stage="recovering",
-                    message=(
-                        f"Recovery batch {recovery_batch_index} of "
-                        f"{recovery_batch_total}: {batch_profile.replace('_', ' ')}"
-                    ),
-                    percent=(
-                        77
-                        + int(
-                            12
-                            * (recovery_batch_index - 1)
-                            / max(recovery_batch_total, 1)
-                        )
-                    ),
-                    completed=recovery_batch_index - 1,
-                    total=recovery_batch_total,
-                    batch_current=recovery_batch_index,
-                    batch_total=recovery_batch_total,
-                    operation_label=(
-                        f"Recovery {recovery_batch_index}/{recovery_batch_total}"
-                    ),
-                    candidate_count=len(selected_recovery_indexes),
-                    overlay=layout.overlay(
-                        scope_kind="page",
-                        panel_states=panel_states,
-                        candidates=recovery_overlay_candidates,
-                    ),
-                )
-                results = self._recognize_page_batch(
-                    [
-                        recovery_crops[index][variant_index].image
-                        for index in batch_indexes
-                    ],
-                    batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
-                    profile=batch_profile,
-                )
-                if len(results) != len(batch_indexes):
-                    raise RuntimeError(
-                        "Page recovery batch returned an unexpected result count"
+            ),
+            start=1,
+        ):
+            batch_indexes = selected_recovery_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            batch_profile = recovery_crops[batch_indexes[0]][0].profile
+            report(
+                stage="recovering",
+                message=(
+                    f"Recovery pass 1 batch {first_batch_index} of "
+                    f"{first_recovery_batch_total}: "
+                    f"{batch_profile.replace('_', ' ')}"
+                ),
+                percent=(
+                    77
+                    + int(
+                        6
+                        * (first_batch_index - 1)
+                        / max(first_recovery_batch_total, 1)
                     )
-                for record_index, result in zip(batch_indexes, results):
-                    recovery_attempts[record_index].append(result)
-                report(
-                    stage="recovering",
-                    message=(
-                        f"Completed recovery batch {recovery_batch_index} of "
-                        f"{recovery_batch_total}"
-                    ),
-                    percent=(
-                        77
-                        + int(
-                            12
-                            * recovery_batch_index
-                            / max(recovery_batch_total, 1)
-                        )
-                    ),
-                    completed=recovery_batch_index,
-                    total=recovery_batch_total,
-                    batch_current=recovery_batch_index,
-                    batch_total=recovery_batch_total,
-                    operation_label=(
-                        f"Recovery {recovery_batch_index}/{recovery_batch_total}"
-                    ),
-                    candidate_count=len(selected_recovery_indexes),
+                ),
+                completed=first_batch_index - 1,
+                total=first_recovery_batch_total,
+                batch_current=first_batch_index,
+                batch_total=first_recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 1 "
+                    f"{first_batch_index}/{first_recovery_batch_total}"
+                ),
+                candidate_count=len(selected_recovery_indexes),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+            )
+            results = self._recognize_page_batch(
+                [recovery_crops[index][0].image for index in batch_indexes],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile=batch_profile,
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page recovery batch returned an unexpected result count"
                 )
+            for record_index, result in zip(batch_indexes, results):
+                recovery_attempts[record_index].append(result)
+            report(
+                stage="recovering",
+                message=(
+                    f"Completed recovery pass 1 batch {first_batch_index} of "
+                    f"{first_recovery_batch_total}"
+                ),
+                percent=(
+                    77
+                    + int(
+                        6
+                        * first_batch_index
+                        / max(first_recovery_batch_total, 1)
+                    )
+                ),
+                completed=first_batch_index,
+                total=first_recovery_batch_total,
+                batch_current=first_batch_index,
+                batch_total=first_recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 1 "
+                    f"{first_batch_index}/{first_recovery_batch_total}"
+                ),
+                candidate_count=len(selected_recovery_indexes),
+            )
+
+        second_recovery_indexes = [
+            index
+            for index in selected_recovery_indexes
+            if recovery_attempts[index]
+            and result_needs_second_recovery(
+                ocr_records[index]["result"],
+                recovery_attempts[index][0],
+            )
+        ]
+        second_recovery_batch_total = (
+            (
+                len(second_recovery_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        recovery_batch_total = (
+            first_recovery_batch_total + second_recovery_batch_total
+        )
+        for second_batch_index, batch_start in enumerate(
+            range(
+                0,
+                len(second_recovery_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ),
+            start=1,
+        ):
+            recovery_batch_index = (
+                first_recovery_batch_total + second_batch_index
+            )
+            batch_indexes = second_recovery_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            batch_profile = recovery_crops[batch_indexes[0]][1].profile
+            report(
+                stage="recovering",
+                message=(
+                    f"Recovery pass 2 batch {second_batch_index} of "
+                    f"{second_recovery_batch_total}: "
+                    f"{batch_profile.replace('_', ' ')}"
+                ),
+                percent=(
+                    83
+                    + int(
+                        6
+                        * (second_batch_index - 1)
+                        / max(second_recovery_batch_total, 1)
+                    )
+                ),
+                completed=recovery_batch_index - 1,
+                total=recovery_batch_total,
+                batch_current=recovery_batch_index,
+                batch_total=recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 2 "
+                    f"{second_batch_index}/{second_recovery_batch_total}"
+                ),
+                candidate_count=len(second_recovery_indexes),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+            )
+            results = self._recognize_page_batch(
+                [recovery_crops[index][1].image for index in batch_indexes],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile=batch_profile,
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page recovery batch returned an unexpected result count"
+                )
+            for record_index, result in zip(batch_indexes, results):
+                recovery_attempts[record_index].append(result)
+            report(
+                stage="recovering",
+                message=(
+                    f"Completed recovery pass 2 batch {second_batch_index} of "
+                    f"{second_recovery_batch_total}"
+                ),
+                percent=(
+                    83
+                    + int(
+                        6
+                        * second_batch_index
+                        / max(second_recovery_batch_total, 1)
+                    )
+                ),
+                completed=recovery_batch_index,
+                total=recovery_batch_total,
+                batch_current=recovery_batch_index,
+                batch_total=recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 2 "
+                    f"{second_batch_index}/{second_recovery_batch_total}"
+                ),
+                candidate_count=len(second_recovery_indexes),
+            )
 
         for index, record in enumerate(ocr_records):
             resolved = resolve_recovery_consensus(
@@ -2859,10 +2950,10 @@ class OcrPipeline:
                     final_reason = review_reason or (
                         "The detected object could not be read confidently"
                     )
-            elif result.get("needs_review", False) or candidate.boundary_review:
+            elif result.get("needs_review", False):
                 final_state = "review"
                 final_reason = review_reason or (
-                    "Detector geometry touches a processing-panel boundary"
+                    "Recognition remains genuinely ambiguous after recovery"
                 )
             else:
                 final_state = "eligible"

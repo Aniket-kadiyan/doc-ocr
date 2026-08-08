@@ -282,15 +282,21 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         recognition_batches.append((profile, len(crops)))
         if profile == "batch_recognition":
             texts = ("25.00", "SCALE 2:1", "NOTES", "")
+        elif profile == "recovery_rectified":
+            texts = ("R5.00",)
         else:
-            texts = ("NOTES", "R5.00")
+            raise AssertionError(
+                "a usable first recovery read must skip the second variant"
+            )
         return [
             {
                 "text": text,
                 "raw_ocr": text,
-                "confidence": 0.96 if text else 0.0,
+                "confidence": (
+                    0.35 if text == "25.00" else 0.96 if text else 0.0
+                ),
                 "confusable_corrected": False,
-                "orientation_confidence": 0.99,
+                "orientation_confidence": 0.15 if text == "25.00" else 0.99,
                 "type": "Linear" if text else "Unknown",
                 "orientation": "horizontal",
                 "rotation": 0,
@@ -333,8 +339,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
     )
     assert recognition_batches == [
         ("batch_recognition", 4),
-        ("recovery_rectified", 2),
-        ("recovery_expanded_sharp", 2),
+        ("recovery_rectified", 1),
     ]
     assert any(
         event["pass_total"] == 8 and event["tile_total"] == 4
@@ -381,11 +386,67 @@ def test_page_scan_never_falls_back_to_full_ocr_for_detection() -> None:
         raise AssertionError("missing standalone detector should fail clearly")
 
 
+def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    detector_calls = 0
+    layout = PageLayout(
+        width=200,
+        height=100,
+        table_masks=(),
+        panels=(
+            LayoutPanel("P1", LayoutBox(0, 0, 120, 100)),
+            LayoutPanel("P2", LayoutBox(80, 0, 120, 100)),
+        ),
+        overlaps=(),
+    )
+
+    def fake_detector(_image, **_kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return (
+            [{"x": 108, "y": 30, "w": 12, "h": 16, "conf": 0.9}]
+            if detector_calls == 1
+            else []
+        )
+
+    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+        assert batch_size == 16
+        assert profile == "batch_recognition"
+        return [
+            {
+                "text": "25.00",
+                "raw_ocr": "25.00",
+                "confidence": 0.41,
+                "confusable_corrected": False,
+                "orientation_confidence": 0.22,
+                "orientation": "horizontal",
+                "rotation": 0,
+                "ocr_profile": profile,
+            }
+            for _crop in crops
+        ]
+
+    pipeline._detector_only_boxes = fake_detector
+    pipeline._recognize_page_batch = fake_batch
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (200, 100), "white"),
+        layout=layout,
+    )
+
+    assert result["eligible_count"] == 1
+    assert result["review_count"] == 0
+    assert result["regions"][0]["boundary_review"]
+
+
 def test_page_scan_publishes_confusable_candidate_for_review() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
     pipeline._page_batch_recognition_available = True
     detector_calls = 0
+    recognition_profiles: list[str] = []
     layout = PageLayout(
         width=160,
         height=100,
@@ -407,6 +468,7 @@ def test_page_scan_publishes_confusable_candidate_for_review() -> None:
 
     def fake_batch(crops, *, batch_size, profile="batch_recognition"):
         assert batch_size == 16
+        recognition_profiles.append(profile)
         text = "8" if profile == "batch_recognition" else "B"
         return [
             {
@@ -437,6 +499,11 @@ def test_page_scan_publishes_confusable_candidate_for_review() -> None:
     assert result["review_candidates"][0]["candidate_id"] == "C0001"
     assert "conflict" in result["review_candidates"][0]["review_reason"].lower()
     assert result["candidate_outcomes"][0]["state"] == "review"
+    assert recognition_profiles == [
+        "batch_recognition",
+        "recovery_rectified",
+        "recovery_expanded_sharp",
+    ]
 
 
 def test_page_scan_never_falls_back_when_batch_recognition_is_unavailable() -> None:
