@@ -476,7 +476,7 @@ export function DrawingViewer() {
         liveness: "queued",
       });
       try {
-        const regions = await runAutoBalloonScan({
+        const scanResult = await runAutoBalloonScan({
           sourceCanvas: source,
           bbox,
           page: scanPage,
@@ -484,6 +484,7 @@ export function DrawingViewer() {
           displayScale: 1,
           onProgress: setScanProgress,
         });
+        const regions = scanResult.regions;
         if (projectIdRef.current !== projectAtStart) {
           throw new Error(
             "The drawing changed while the scan was running. No balloons were added."
@@ -499,19 +500,21 @@ export function DrawingViewer() {
         const filtered = filterNewScanRegions(
           regions,
           useAnnotationStore.getState().annotations,
-          scanPage
+          scanPage,
+          undefined,
+          scopeKind
         );
         const now = Date.now();
         const newAnnotations: Annotation[] = filtered.accepted
-          .filter((r) => r.text.trim())
           .map((r) => {
-            const type = classifyDimension(r.text);
+            const cleanValue = r.text.trim();
+            const type = classifyDimension(cleanValue);
             return {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
               label: "",
-              value: r.text.trim(),
+              value: cleanValue,
               type,
               confidence: r.confidence,
               bbox: r.valueBox,
@@ -519,13 +522,16 @@ export function DrawingViewer() {
               page: scanPage,
               createdAt: now,
               kind: "dimension",
-              needsReview: r.needsReview,
-              range: deriveRange(r.text.trim()) || undefined,
+              needsReview: r.needsReview || !r.recognized,
+              range: deriveRange(cleanValue) || undefined,
             };
           });
         if (newAnnotations.length === 0) {
           setScanSummary({
             added: 0,
+            detected: scanResult.detected,
+            recognized: scanResult.recognized,
+            unread: scanResult.unread,
             skippedExisting: filtered.skippedExisting,
             skippedDuplicates: filtered.skippedDuplicates,
           });
@@ -535,6 +541,9 @@ export function DrawingViewer() {
         addAnnotations(newAnnotations);
         setScanSummary({
           added: newAnnotations.length,
+          detected: scanResult.detected,
+          recognized: scanResult.recognized,
+          unread: scanResult.unread,
           skippedExisting: filtered.skippedExisting,
           skippedDuplicates: filtered.skippedDuplicates,
         });
@@ -685,6 +694,12 @@ export function DrawingViewer() {
       )}
       {scanSummary && (
         <div className="bg-emerald-50 px-4 py-1.5 text-center text-xs text-emerald-900">
+          {scanSummary.detected} detected
+          {" · "}
+          {scanSummary.recognized} recognized
+          {" · "}
+          {scanSummary.unread} unread
+          {" · "}
           {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
           {" · "}
           {scanSummary.skippedExisting} existing object

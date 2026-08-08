@@ -1,5 +1,6 @@
 import type { Annotation, BBox } from "@/types/annotation";
 import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type { ScanScopeKind } from "@/types/scanJob";
 
 const DEFAULT_OVERLAP_THRESHOLD = 0.55;
 
@@ -17,6 +18,36 @@ export function bboxOverlapFraction(left: BBox, right: BBox): number {
   return intersection / Math.min(leftArea, rightArea);
 }
 
+/** Strict page-duplicate match: similar size and the same centre/footprint. */
+export function isSamePageObject(left: BBox, right: BBox): boolean {
+  const leftWidth = Math.max(left.width, 1);
+  const leftHeight = Math.max(left.height, 1);
+  const rightWidth = Math.max(right.width, 1);
+  const rightHeight = Math.max(right.height, 1);
+  const widthRatio =
+    Math.min(leftWidth, rightWidth) / Math.max(leftWidth, rightWidth);
+  const heightRatio =
+    Math.min(leftHeight, rightHeight) / Math.max(leftHeight, rightHeight);
+  if (widthRatio < 0.65 || heightRatio < 0.65) return false;
+
+  const x0 = Math.max(left.x, right.x);
+  const y0 = Math.max(left.y, right.y);
+  const x1 = Math.min(left.x + leftWidth, right.x + rightWidth);
+  const y1 = Math.min(left.y + leftHeight, right.y + rightHeight);
+  const intersection =
+    x1 > x0 && y1 > y0 ? (x1 - x0) * (y1 - y0) : 0;
+  const union =
+    leftWidth * leftHeight + rightWidth * rightHeight - intersection;
+  const iou = intersection / Math.max(union, 1);
+
+  const centersAreClose =
+    Math.abs(left.x + leftWidth / 2 - (right.x + rightWidth / 2)) <=
+      0.35 * Math.max(leftWidth, rightWidth) &&
+    Math.abs(left.y + leftHeight / 2 - (right.y + rightHeight / 2)) <=
+      0.35 * Math.max(leftHeight, rightHeight);
+  return iou >= 0.45 || centersAreClose;
+}
+
 export interface FilteredScanRegions {
   accepted: SegmentRegion[];
   skippedExisting: number;
@@ -32,7 +63,8 @@ export function filterNewScanRegions(
   candidates: SegmentRegion[],
   existing: Annotation[],
   page: number,
-  overlapThreshold = DEFAULT_OVERLAP_THRESHOLD
+  overlapThreshold = DEFAULT_OVERLAP_THRESHOLD,
+  scopeKind: ScanScopeKind = "section"
 ): FilteredScanRegions {
   const existingBoxes = existing
     .filter(
@@ -61,8 +93,10 @@ export function filterNewScanRegions(
     }
     const duplicatesCandidate = accepted.some(
       (acceptedRegion) =>
-        bboxOverlapFraction(candidate.valueBox, acceptedRegion.valueBox) >=
-        overlapThreshold
+        scopeKind === "page"
+          ? isSamePageObject(candidate.valueBox, acceptedRegion.valueBox)
+          : bboxOverlapFraction(candidate.valueBox, acceptedRegion.valueBox) >=
+            overlapThreshold
     );
     if (duplicatesCandidate) {
       skippedDuplicates += 1;

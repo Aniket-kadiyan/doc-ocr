@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bboxOverlapFraction,
   filterNewScanRegions,
+  isSamePageObject,
 } from "@/lib/scanCandidates";
 import type { SegmentRegion } from "@/lib/paddleOcrClient";
 import type { BBox } from "@/types/annotation";
@@ -14,6 +15,7 @@ function makeRegion(text: string, valueBox: BBox): SegmentRegion {
     orientation: "horizontal",
     rotation: 0,
     needsReview: false,
+    recognized: true,
     valueBox,
   };
 }
@@ -83,5 +85,70 @@ describe("scan candidate duplicate protection", () => {
     ]);
     expect(result.skippedExisting).toBe(0);
     expect(result.skippedDuplicates).toBe(1);
+  });
+
+  it("keeps contained page objects when their sizes differ", () => {
+    const parent = makeRegion("parent", {
+      x: 10,
+      y: 10,
+      width: 160,
+      height: 100,
+    });
+    const child = makeRegion("child", {
+      x: 30,
+      y: 30,
+      width: 30,
+      height: 12,
+    });
+
+    expect(isSamePageObject(parent.valueBox, child.valueBox)).toBe(false);
+    const result = filterNewScanRegions(
+      [parent, child],
+      [],
+      1,
+      undefined,
+      "page"
+    );
+
+    expect(result.accepted.map((region) => region.text)).toEqual([
+      "parent",
+      "child",
+    ]);
+    expect(result.skippedDuplicates).toBe(0);
+  });
+
+  it("removes only similar-size repeated page candidates", () => {
+    const result = filterNewScanRegions(
+      [
+        makeRegion("first view", {
+          x: 40,
+          y: 10,
+          width: 30,
+          height: 12,
+        }),
+        makeRegion("overlap view", {
+          x: 41,
+          y: 10,
+          width: 29,
+          height: 12,
+        }),
+      ],
+      [],
+      1,
+      undefined,
+      "page"
+    );
+
+    expect(result.accepted).toHaveLength(1);
+    expect(result.skippedDuplicates).toBe(1);
+  });
+
+  it("does not merge parallel neighbouring page objects", () => {
+    expect(
+      isSamePageObject(
+        { x: 100, y: 100, width: 16, height: 100 },
+        { x: 125, y: 100, width: 16, height: 100 }
+      )
+    ).toBe(false);
   });
 });

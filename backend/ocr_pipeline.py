@@ -16,6 +16,7 @@ from image_preprocess import (
     bbox_from_oriented_to_original,
     is_vertical_dimension,
     pad_image,
+    prepare_primary_ocr_variant,
     prepare_ocr_variants,
     primary_oriented,
     upscale_min_edge,
@@ -315,9 +316,14 @@ class OcrPipeline:
         image: Image.Image,
         dumper: StepDumper | None = None,
         timings: list[dict[str, Any]] | None = None,
+        *,
+        max_predictions: int | None = None,
     ) -> tuple[str, float, list, float, bool]:
         """
-        Run every preprocessing variant and vote across the candidates.
+        Run preprocessing variants and vote across the candidates.
+
+        ``max_predictions=1`` selects the fast primary variant and does not
+        construct retry variants. The default preserves the accuracy profile.
 
         Returns (text, confidence, words, agreement, corrected) where
         `agreement` is the fraction of candidates that agree with the winning
@@ -328,6 +334,9 @@ class OcrPipeline:
         from dimension_digits import correct_numeric_confusables
         from ocr_select import digit_quality_score
 
+        if max_predictions is not None and max_predictions < 1:
+            raise ValueError("max_predictions must be at least one")
+
         # 3.x .predict() always detects, so det=False is redundant there.
         det_modes = (True,) if self._paddle_api == 3 else (True, False)
 
@@ -337,14 +346,26 @@ class OcrPipeline:
                      "words": [], "corrected": False}
         )
         total = 0
+        predictions_run = 0
 
         # A candidate above the strict confidence threshold wins immediately.
         # Variants still execute sequentially; no parallel model calls are introduced.
         early_winner: dict[str, Any] | None = None
         candidates_log: list[dict[str, Any]] = []
 
-        for _name, variant in prepare_ocr_variants(image):
+        variants = (
+            [prepare_primary_ocr_variant(image)]
+            if max_predictions == 1
+            else prepare_ocr_variants(image)
+        )
+        for _name, variant in variants:
             for det in det_modes:
+                if (
+                    max_predictions is not None
+                    and predictions_run >= max_predictions
+                ):
+                    break
+                predictions_run += 1
                 text, conf, words = self._run_paddle(
                     variant,
                     det=det,
@@ -407,7 +428,13 @@ class OcrPipeline:
                     break
 
             # Stop before constructing or running the next preprocessing variant.
-            if early_winner is not None:
+            if (
+                early_winner is not None
+                or (
+                    max_predictions is not None
+                    and predictions_run >= max_predictions
+                )
+            ):
                 break
 
         if dumper and dumper.active:
@@ -427,6 +454,8 @@ class OcrPipeline:
                         else None
                     ),
                     "total_passes": total,
+                    "predictions_run": predictions_run,
+                    "prediction_limit": max_predictions,
                     "candidates": candidates_log,
                     "groups": {
                         k: {
@@ -1392,15 +1421,20 @@ class OcrPipeline:
         debug_dump_force: bool = False,
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
+        detection_only: bool = False,
     ) -> dict[str, Any]:
         """
         Auto-segment a multi-value selection into individual dimensions.
 
         Detects all text regions, clusters fragments that belong to the same
         dimension, then runs the full single-value `recognize` pipeline on each
-        cluster's crop. Boxes are returned in received-image pixel coordinates
-        (same space `recognize`'s `text_bbox` uses) so the client can reuse its
-        existing value-box mapping.
+        cluster's crop. ``detection_only`` is reserved for whole-page
+        orchestration: it returns those same final clusters without OCR so
+        overlapping tile duplicates can be removed before recognition.
+
+        Boxes are returned in received-image pixel coordinates (same space
+        `recognize`'s `text_bbox` uses) so the client can reuse its existing
+        value-box mapping.
         """
         from region_cluster import (
             cluster_boxes,
@@ -1685,6 +1719,32 @@ class OcrPipeline:
                 force=dump_force() or debug_dump_force,
             )
 
+        if detection_only:
+            detected_regions: list[dict[str, Any]] = []
+            for cluster in clusters:
+                ub = union_bbox(cluster)
+                detected_regions.append(
+                    {
+                        "bbox": {
+                            "x": round(ub["x"], 1),
+                            "y": round(ub["y"], 1),
+                            "width": round(ub["width"], 1),
+                            "height": round(ub["height"], 1),
+                        },
+                        "detection_confidence": max(
+                            (
+                                float(box.get("conf", 0.0))
+                                for box in cluster
+                            ),
+                            default=0.0,
+                        ),
+                    }
+                )
+            return {
+                "count": len(detected_regions),
+                "regions": detected_regions,
+            }
+
         margin = 6  # a few px of context around each cluster crop
         regions: list[dict[str, Any]] = []
         cluster_total = len(clusters)
@@ -1774,6 +1834,299 @@ class OcrPipeline:
         )
         return {"count": len(regions), "regions": regions}
 
+    def segment_page(
+        self,
+        image: Image.Image,
+        *,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+        cluster_margin: float = 0.72,
+        progress_callback: Callable[..., None] | None = None,
+    ) -> dict[str, Any]:
+        """Auto-segment a whole page as overlapping selection-sized scans.
+
+        Each tile reuses :meth:`segment` through its detection-only boundary.
+        Final objects are restored to page coordinates and strictly deduplicated
+        before one, and only one, Paddle prediction is run for each object.
+        """
+
+        from page_scan import (
+            build_page_tiles,
+            deduplicate_page_candidates,
+            map_tile_candidate,
+        )
+        from segment_quality import is_segment_worthy
+
+        def report(
+            *,
+            stage: str,
+            message: str,
+            percent: int,
+            completed: int = 0,
+            total: int = 0,
+            pass_current: int = 0,
+            pass_total: int = 0,
+            tile_current: int = 0,
+            tile_total: int = 0,
+            object_current: int = 0,
+            object_total: int = 0,
+            operation_label: str = "",
+            candidate_count: int = 0,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    stage=stage,
+                    message=message,
+                    percent=percent,
+                    completed=completed,
+                    total=total,
+                    pass_current=pass_current,
+                    pass_total=pass_total,
+                    tile_current=tile_current,
+                    tile_total=tile_total,
+                    object_current=object_current,
+                    object_total=object_total,
+                    operation_label=operation_label,
+                    candidate_count=candidate_count,
+                )
+
+        page_size = image.size
+        tiles = build_page_tiles(page_size)
+        tile_total = len(tiles)
+        page_candidates = []
+        report(
+            stage="preparing",
+            message=f"Preparing {tile_total} overlapping page tiles",
+            percent=2,
+            completed=0,
+            total=tile_total,
+            tile_total=tile_total,
+        )
+
+        for tile_index, tile in enumerate(tiles, start=1):
+            tile_image = image.crop(tile.box)
+
+            def report_tile_progress(
+                *,
+                _tile_index: int = tile_index,
+                **event: Any,
+            ) -> None:
+                # A selection's detection/grouping spans 4..42%. Map that
+                # internal progress into this page tile's share of 4..60%.
+                local_percent = max(4, min(42, int(event.get("percent", 4))))
+                local_fraction = (local_percent - 4) / 38
+                page_fraction = (
+                    (_tile_index - 1) + local_fraction
+                ) / max(tile_total, 1)
+                local_stage = str(event.get("stage", "detecting"))
+                local_message = str(
+                    event.get("message", "Detecting tile objects")
+                )
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Tile {_tile_index} of {tile_total} · "
+                        f"{local_stage}: {local_message}"
+                    ),
+                    percent=4 + int(56 * page_fraction),
+                    completed=_tile_index - 1,
+                    total=tile_total,
+                    pass_current=int(event.get("pass_current", 0)),
+                    pass_total=int(event.get("pass_total", 0)),
+                    tile_current=_tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Tile {_tile_index}: "
+                        f"{event.get('operation_label', local_stage)}"
+                    ),
+                    candidate_count=(
+                        len(page_candidates)
+                        + int(event.get("candidate_count", 0))
+                    ),
+                )
+
+            tile_result = self.segment(
+                tile_image,
+                debug_dump=debug_dump,
+                debug_dump_force=debug_dump_force,
+                cluster_margin=cluster_margin,
+                progress_callback=report_tile_progress,
+                detection_only=True,
+            )
+            for detected in tile_result.get("regions", []):
+                mapped = map_tile_candidate(
+                    detected["bbox"],
+                    tile,
+                    tile_index=tile_index,
+                    page_size=page_size,
+                    detection_confidence=float(
+                        detected.get("detection_confidence", 0.0)
+                    ),
+                )
+                if mapped is not None:
+                    page_candidates.append(mapped)
+
+            report(
+                stage="detecting",
+                message=(
+                    f"Completed tile {tile_index} of {tile_total}; "
+                    f"collected {len(page_candidates)} candidates"
+                ),
+                percent=4 + int(56 * tile_index / max(tile_total, 1)),
+                completed=tile_index,
+                total=tile_total,
+                tile_current=tile_index,
+                tile_total=tile_total,
+                operation_label=f"Tile {tile_index} complete",
+                candidate_count=len(page_candidates),
+            )
+
+        report(
+            stage="grouping",
+            message=(
+                f"Strictly deduplicating {len(page_candidates)} "
+                "cross-tile candidates"
+            ),
+            percent=62,
+            completed=0,
+            total=1,
+            tile_current=tile_total,
+            tile_total=tile_total,
+            operation_label="Cross-tile deduplication",
+            candidate_count=len(page_candidates),
+        )
+        final_candidates = deduplicate_page_candidates(page_candidates)
+        duplicates_removed = len(page_candidates) - len(final_candidates)
+        report(
+            stage="grouping",
+            message=(
+                f"Prepared {len(final_candidates)} page objects; "
+                f"removed {duplicates_removed} overlap duplicates"
+            ),
+            percent=65,
+            completed=1,
+            total=1,
+            tile_current=tile_total,
+            tile_total=tile_total,
+            operation_label="Cross-tile deduplication complete",
+            candidate_count=len(final_candidates),
+        )
+
+        margin = 6
+        page_width, page_height = page_size
+        detected_count = len(final_candidates)
+        recognized_count = 0
+        regions: list[dict[str, Any]] = []
+        for object_index, candidate in enumerate(final_candidates, start=1):
+            report(
+                stage="recognizing",
+                message=(
+                    f"Single-pass OCR for object {object_index} "
+                    f"of {detected_count}"
+                ),
+                percent=(
+                    66
+                    + int(
+                        28
+                        * (object_index - 1)
+                        / max(detected_count, 1)
+                    )
+                ),
+                completed=object_index - 1,
+                total=detected_count,
+                object_current=object_index,
+                object_total=detected_count,
+                operation_label=f"Object {object_index} · single pass",
+                candidate_count=detected_count,
+            )
+            bbox = candidate.bbox
+            x0 = max(0, int(bbox["x"] - margin))
+            y0 = max(0, int(bbox["y"] - margin))
+            x1 = min(
+                page_width,
+                int(bbox["x"] + bbox["width"] + margin + 0.999),
+            )
+            y1 = min(
+                page_height,
+                int(bbox["y"] + bbox["height"] + margin + 0.999),
+            )
+
+            result: dict[str, Any] = {}
+            if x1 > x0 and y1 > y0:
+                result = self.recognize(
+                    image.crop((x0, y0, x1, y1)),
+                    debug_dump=debug_dump,
+                    debug_dump_force=debug_dump_force,
+                    compute_text_bbox=False,
+                    max_paddle_predictions=1,
+                    allow_prefix_ocr=False,
+                )
+
+            text = str(result.get("text") or "").strip()
+            recognized = bool(text and is_segment_worthy(text))
+            if recognized:
+                recognized_count += 1
+            regions.append(
+                {
+                    "bbox": bbox,
+                    "text": text,
+                    "confidence": result.get("confidence", 0.0),
+                    "type": result.get("type"),
+                    "orientation": result.get("orientation", "horizontal"),
+                    "rotation": result.get("rotation", 0),
+                    "needs_review": bool(
+                        result.get("needs_review", False)
+                        or candidate.boundary_review
+                        or not recognized
+                    ),
+                    "recognized": recognized,
+                    "boundary_review": candidate.boundary_review,
+                    "agreement": result.get("agreement", 0.0),
+                    "engine": result.get("engine", "paddleocr"),
+                    "symbols_detected": result.get("symbols_detected"),
+                    "ocr_profile": "single_pass",
+                }
+            )
+            report(
+                stage="recognizing",
+                message=(
+                    f"Processed object {object_index} of {detected_count}; "
+                    f"recognized {recognized_count}"
+                ),
+                percent=(
+                    66
+                    + int(28 * object_index / max(detected_count, 1))
+                ),
+                completed=object_index,
+                total=detected_count,
+                object_current=object_index,
+                object_total=detected_count,
+                operation_label=f"Object {object_index} · single pass",
+                candidate_count=detected_count,
+            )
+
+        unread_count = detected_count - recognized_count
+        report(
+            stage="finalizing",
+            message=(
+                f"Prepared {detected_count} objects: "
+                f"{recognized_count} recognized, {unread_count} unread"
+            ),
+            percent=99,
+            completed=detected_count,
+            total=detected_count,
+            candidate_count=detected_count,
+            operation_label="Page scan complete",
+        )
+        return {
+            "count": detected_count,
+            "detected_count": detected_count,
+            "recognized_count": recognized_count,
+            "unread_count": unread_count,
+            "duplicates_removed": duplicates_removed,
+            "regions": regions,
+        }
+
     def _complete_angle_regions(
         self, image: Image.Image, regions: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -1845,6 +2198,8 @@ class OcrPipeline:
         debug_dump: bool = False,
         debug_dump_force: bool = False,
         compute_text_bbox: bool = True,
+        max_paddle_predictions: int | None = None,
+        allow_prefix_ocr: bool = True,
     ) -> dict[str, Any]:
         pipeline_started = perf_counter()
         paddle_timings: list[dict[str, Any]] = []
@@ -1886,6 +2241,7 @@ class OcrPipeline:
             oriented,
             dumper=dumper,
             timings=paddle_timings,
+            max_predictions=max_paddle_predictions,
         )
 
         symbols, symbol_debug = detect_symbols(prep)
@@ -1918,7 +2274,8 @@ class OcrPipeline:
         # High-confidence plain values do not need a second Paddle prediction.
         # Keep the prefix pass for uncertain or symbol-ambiguous cases.
         prefix_ocr_used = bool(
-            raw_text.strip()
+            allow_prefix_ocr
+            and raw_text.strip()
             and not reusable_symbol_hints
             and (
                 confidence <= EARLY_ACCEPT_CONFIDENCE
@@ -1927,7 +2284,9 @@ class OcrPipeline:
             )
         )
 
-        if not raw_text.strip():
+        if not allow_prefix_ocr:
+            prefix_ocr_reason = "disabled_by_scan_profile"
+        elif not raw_text.strip():
             prefix_ocr_reason = "empty_main_result"
         elif reusable_symbol_hints:
             prefix_ocr_reason = "reused_main_or_visual_symbol"
@@ -2107,6 +2466,11 @@ class OcrPipeline:
             "symbols_detected": symbols_to_dict(symbols),
             "prefix_ocr": prefix_text,
             "prefix_ocr_used": prefix_ocr_used,
+            "ocr_profile": (
+                "single_pass"
+                if max_paddle_predictions == 1 and not allow_prefix_ocr
+                else "accuracy"
+            ),
             "timings_ms": timings_ms,
         }
 

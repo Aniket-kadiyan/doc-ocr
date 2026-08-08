@@ -257,15 +257,37 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     """Apply the API's dimension classification to one complete scan result."""
     regions: list[dict[str, Any]] = []
     for r in seg.get("regions", []):
-        dim_type = r.get("type") or classify_dimension(r["text"]).value
+        text = str(r.get("text") or "")
+        dim_type = r.get("type") or classify_dimension(text).value
         regions.append(
             {
                 **r,
+                "text": text,
                 "type": dim_type if isinstance(dim_type, str) else dim_type.value,
             }
         )
 
-    return {"count": len(regions), "regions": regions}
+    recognized_count = int(
+        seg.get(
+            "recognized_count",
+            sum(
+                1
+                for region in regions
+                if region.get("recognized", bool(region["text"].strip()))
+            ),
+        )
+    )
+    detected_count = int(seg.get("detected_count", len(regions)))
+    unread_count = int(
+        seg.get("unread_count", max(0, detected_count - recognized_count))
+    )
+    return {
+        "count": len(regions),
+        "detected_count": detected_count,
+        "recognized_count": recognized_count,
+        "unread_count": unread_count,
+        "regions": regions,
+    }
 
 
 @app.post("/ocr/scan-jobs", status_code=202)
@@ -307,12 +329,21 @@ async def create_scan_job(
 
     def run_scan(report_progress: ProgressReporter) -> dict[str, Any]:
         image = Image.open(io.BytesIO(raw)).convert("RGB")
-        seg = get_pipeline().segment(
-            image,
-            debug_dump=req_dump,
-            debug_dump_force=req_force,
-            progress_callback=report_progress,
-        )
+        pipeline = get_pipeline()
+        if scope_kind == "page":
+            seg = pipeline.segment_page(
+                image,
+                debug_dump=req_dump,
+                debug_dump_force=req_force,
+                progress_callback=report_progress,
+            )
+        else:
+            seg = pipeline.segment(
+                image,
+                debug_dump=req_dump,
+                debug_dump_force=req_force,
+                progress_callback=report_progress,
+            )
         return _serialize_segment_result(seg)
 
     return scan_job_manager.submit(

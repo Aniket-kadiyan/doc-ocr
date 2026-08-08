@@ -53,6 +53,13 @@ export interface RunScanJobOptions {
   onProgress?: (progress: ScanProgress) => void;
 }
 
+export interface ScanJobResult {
+  regions: SegmentRegion[];
+  detected: number;
+  recognized: number;
+  unread: number;
+}
+
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
@@ -122,7 +129,7 @@ export async function runScanJob({
   scopeKind,
   displayScale = 1,
   onProgress,
-}: RunScanJobOptions): Promise<SegmentRegion[]> {
+}: RunScanJobOptions): Promise<ScanJobResult> {
   const crop = cropRegion(sourceCanvas, bbox, displayScale);
   const blob = await new Promise<Blob>((resolve, reject) => {
     crop.toBlob((encoded) => {
@@ -181,9 +188,17 @@ export async function runScanJob({
     throw new Error("Auto-balloon scan completed without a result");
   }
 
-  return mapSegmentRegions(
+  const regions = mapSegmentRegions(
     snapshot.result.regions ?? [],
     bbox,
     displayScale
   );
+  const detected = snapshot.result.detected_count ?? regions.length;
+  const recognized =
+    snapshot.result.recognized_count ??
+    regions.filter((region) => region.recognized).length;
+  const unread =
+    snapshot.result.unread_count ?? Math.max(0, detected - recognized);
+
+  return { regions, detected, recognized, unread };
 }

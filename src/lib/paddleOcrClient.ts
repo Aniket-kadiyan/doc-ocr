@@ -124,6 +124,8 @@ export interface SegmentRegion {
   orientation: "horizontal" | "vertical" | "rotated";
   rotation: number;
   needsReview: boolean;
+  /** False when detection succeeded but the single OCR pass was empty/invalid. */
+  recognized: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
 }
@@ -136,10 +138,14 @@ export interface ApiSegmentRegion {
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
   needs_review?: boolean;
+  recognized?: boolean;
 }
 
 export interface ApiSegmentResponse {
   count: number;
+  detected_count?: number;
+  recognized_count?: number;
+  unread_count?: number;
   regions: ApiSegmentRegion[];
 }
 
@@ -185,6 +191,7 @@ export function mapSegmentRegions(
       orientation: r.orientation ?? "horizontal",
       rotation: r.rotation ?? 0,
       needsReview: r.needs_review ?? false,
+      recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
       valueBox,
     };
   });

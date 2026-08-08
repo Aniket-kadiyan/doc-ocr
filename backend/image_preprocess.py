@@ -126,3 +126,11 @@ def prepare_ocr_variants(img: Image.Image) -> list[tuple[str, Image.Image]]:
         )
 
     return variants
+
+
+def prepare_primary_ocr_variant(img: Image.Image) -> tuple[str, Image.Image]:
+    """Build only the first variant used by the fast single-pass profile."""
+
+    base = upscale_min_edge(pad_image(img))
+    orientation_name, oriented = orientations_for_ocr(base)[0]
+    return f"{orientation_name}_clahe", clahe_rgb(oriented)

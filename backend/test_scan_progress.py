@@ -233,3 +233,164 @@ def test_cluster_refinement_never_falls_back_to_full_ocr() -> None:
     assert refined == [cluster]
     assert events[0]["state"] == "skipped"
     assert events[0]["candidate_count"] == 1
+
+
+def test_page_scan_reuses_selection_detection_and_ocr_once_per_final_object() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    selection_calls: list[dict] = []
+    recognition_calls: list[dict] = []
+
+    def fake_selection(_image, **kwargs):
+        selection_calls.append(kwargs)
+        callback = kwargs["progress_callback"]
+        callback(
+            stage="detecting",
+            message="Running selection detector",
+            percent=10,
+            completed=0,
+            total=2,
+            pass_current=1,
+            pass_total=2,
+            tile_current=1,
+            tile_total=1,
+            object_current=0,
+            object_total=0,
+            operation_label="Selection detector",
+            candidate_count=1,
+        )
+        callback(
+            stage="grouping",
+            message="Grouping complete",
+            percent=42,
+            completed=5,
+            total=5,
+            pass_current=0,
+            pass_total=0,
+            tile_current=1,
+            tile_total=1,
+            object_current=0,
+            object_total=0,
+            operation_label="Grouping complete",
+            candidate_count=2,
+        )
+        if len(selection_calls) == 1:
+            return {
+                "count": 1,
+                "regions": [
+                    {
+                        "bbox": {
+                            "x": 690,
+                            "y": 200,
+                            "width": 40,
+                            "height": 16,
+                        },
+                        "detection_confidence": 0.99,
+                    }
+                ],
+            }
+        return {
+            "count": 2,
+            "regions": [
+                {
+                    "bbox": {
+                        "x": 139,
+                        "y": 200,
+                        "width": 40,
+                        "height": 16,
+                    },
+                    "detection_confidence": 0.80,
+                },
+                {
+                    "bbox": {
+                        "x": 400,
+                        "y": 100,
+                        "width": 50,
+                        "height": 18,
+                    },
+                    "detection_confidence": 0.90,
+                },
+            ],
+        }
+
+    def fake_recognize(_image, **kwargs):
+        recognition_calls.append(kwargs)
+        if len(recognition_calls) == 1:
+            return {
+                "text": "25.00",
+                "confidence": 0.96,
+                "type": "Linear",
+                "orientation": "horizontal",
+                "rotation": 0,
+                "needs_review": False,
+            }
+        return {
+            "text": "",
+            "confidence": 0.0,
+            "type": "Unknown",
+            "orientation": "horizontal",
+            "rotation": 0,
+            "needs_review": True,
+        }
+
+    def fail_angle_completion(*_args, **_kwargs):
+        raise AssertionError("page scan must not run angle-completion OCR")
+
+    pipeline.segment = fake_selection
+    pipeline.recognize = fake_recognize
+    pipeline._complete_angle_regions = fail_angle_completion
+    events: list[dict] = []
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (1263, 400), "white"),
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert len(selection_calls) == 2
+    assert all(call["detection_only"] for call in selection_calls)
+    assert result["detected_count"] == 2
+    assert result["recognized_count"] == 1
+    assert result["unread_count"] == 1
+    assert result["detected_count"] == (
+        result["recognized_count"] + result["unread_count"]
+    )
+    assert len(recognition_calls) == result["detected_count"]
+    assert all(
+        call["max_paddle_predictions"] == 1
+        and call["allow_prefix_ocr"] is False
+        and call["compute_text_bbox"] is False
+        for call in recognition_calls
+    )
+    assert any(event["tile_total"] == 2 for event in events)
+    assert events[-1]["candidate_count"] == 2
+    assert [event["percent"] for event in events] == sorted(
+        event["percent"] for event in events
+    )
+    assert result["regions"][1]["recognized"] is False
+    assert result["regions"][1]["needs_review"] is True
+
+
+def test_paddle_prediction_limit_stops_after_one_call(monkeypatch) -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._paddle_api = 3
+    calls: list[tuple[tuple[int, int], bool]] = []
+
+    def fail_full_variant_plan(_image):
+        raise AssertionError("single-pass OCR must not build retry variants")
+
+    monkeypatch.setattr(
+        "ocr_pipeline.prepare_ocr_variants",
+        fail_full_variant_plan,
+    )
+
+    def fake_run(image, det=True, **_kwargs):
+        calls.append((image.size, det))
+        return "25.00", 0.70, []
+
+    pipeline._run_paddle = fake_run
+    result = pipeline.recognize_paddle(
+        Image.new("RGB", (80, 30), "white"),
+        max_predictions=1,
+    )
+
+    assert len(calls) == 1
+    assert result[0] == "25.00"

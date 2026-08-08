@@ -4,7 +4,10 @@
  */
 
 import type { BBox, OCRResult } from "@/types/annotation";
-import type { RunScanJobOptions } from "@/lib/scanJobClient";
+import type {
+  RunScanJobOptions,
+  ScanJobResult,
+} from "@/lib/scanJobClient";
 import { runScanJob } from "@/lib/scanJobClient";
 import {
   checkOcrApiHealth,
@@ -84,7 +87,7 @@ export async function runSegment(
 
 export async function runAutoBalloonScan(
   options: RunScanJobOptions
-): Promise<SegmentRegion[]> {
+): Promise<ScanJobResult> {
   apiHealth = await checkOcrApiHealth();
 
   if (!apiHealth.available) {

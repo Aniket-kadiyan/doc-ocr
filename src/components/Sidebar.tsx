@@ -80,7 +80,7 @@ export function Sidebar({
                             />
                           )}
                           <span className="truncate font-mono text-xs text-slate-800">
-                            {annotation.value}
+                            {annotation.value || "Unread — review"}
                           </span>
                         </span>
                         {annotation.label && (

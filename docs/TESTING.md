@@ -128,13 +128,16 @@ identify the offending balloon and block final output once the edit is saved.
 
 ### Auto-balloon progress and liveness
 
-- Scan a small section and confirm each blocking detection pass is named before
-  PaddleOCR begins it; the indicator must continue pulsing while its percentage
-  is unchanged.
-- Scan a large section and a whole page. Confirm localization shows one
-  morphology-proposal stage followed by only two primary detector passes. A
-  large source is labelled with a bounded `2400px` primary target rather than
-  multiplying the page into repeated OCR tiles.
+- Scan the same small and large sections used before the page-orchestration
+  change. Confirm their object boxes and OCR results are unchanged and each
+  blocking detection pass is named before PaddleOCR begins it.
+- Scan a whole page and confirm it reports `Tile N/M`. Each overlapping tile
+  must run the same detection/grouping route as a manual section; neighbouring
+  objects from separate tiles must never be merged.
+- Confirm each tile shows one morphology-proposal stage followed by only two
+  primary detector passes. A normal rendered drawing is split into roughly
+  four overlapping selections; high-resolution tiles remain bounded to
+  `2000×1400px` rather than treating the entire page as one detection region.
 - If morphology finds uncovered areas, confirm a separate **Refining coverage
   gaps** stage appears and advances one local gap at a time. The retry count is
   bounded; morphology proposals remain available even beyond that retry cap.
@@ -147,8 +150,17 @@ identify the offending balloon and block final output once the edit is saved.
   read **Service responsive — slow progress**; **Heartbeat missing — possibly
   stalled** is reserved for a stale service heartbeat. None of these warnings
   cancels the scan or commits partial balloons.
-- Confirm recognition reports `Object N/M`, finalization is visible, and all
-  balloons still appear together only after the complete job succeeds.
+- Confirm cross-tile deduplication removes repeated overlap views only when the
+  boxes have similar position and size. A large containing box and its smaller
+  child objects must all survive for review.
+- Confirm recognition reports `Object N/M` and uses the `single_pass` profile:
+  at most one Paddle prediction per final detected object, with prefix OCR,
+  consensus variants, text-bbox fallback, and angle completion disabled.
+- Confirm the completion banner reports detected, recognized, and unread
+  counts, with `detected = recognized + unread`. Empty or invalid OCR must still
+  create a numbered review balloon; the sidebar labels it **Unread — review**.
+- Confirm finalization is visible and all balloons still appear together only
+  after the complete job succeeds.
 - During grouping, confirm the banner advances through bridge filtering,
   spatial grouping, fragment merging, orientation splitting, bounded local
   refinement, and overlap merging. The current candidate count must remain
@@ -167,8 +179,11 @@ worst-case drawing and maximum page resolution; **5 minutes or less** is the
 preferred target. Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
 automatic cancellation timeout. Record total time plus proposal, primary
-detection, local refinement, recognition, and finalization times so the next
-optimization targets measured work.
+detection, local refinement, page deduplication, single-pass recognition, and
+finalization times so the next optimization targets measured work.
+
+Frontend job cancellation remains queued after this detection correction and
+is not part of the current acceptance run.
 
 ## Explicitly deferred until after auto-ballooning
 

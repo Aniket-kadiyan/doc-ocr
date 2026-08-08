@@ -38,6 +38,9 @@ export interface ScanProgress {
 
 export interface ScanCompletionSummary {
   added: number;
+  detected: number;
+  recognized: number;
+  unread: number;
   skippedExisting: number;
   skippedDuplicates: number;
 }
