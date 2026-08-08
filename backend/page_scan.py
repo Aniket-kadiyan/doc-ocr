@@ -1,9 +1,8 @@
 """Bounded whole-page detector planning and strict candidate deduplication.
 
-Whole-page auto-ballooning has a dedicated, detector-only route.  A normal
-rendered page is one detector tile; genuinely large images are split into no
-more than four overlapping tiles.  Each tile is inspected at 0 and 90 degrees,
-so the complete page can launch at most eight detector calls.
+Whole-page auto-ballooning has a dedicated, detector-only route.  Page layout
+analysis now supplies four to eight adaptive overlapping panels; each panel is
+inspected at 0 and 90 degrees before candidates are deduplicated globally.
 
 This module owns only page orchestration geometry.  It does not perform model
 inference, recognition, or value filtering.
@@ -12,22 +11,18 @@ inference, recognition, or value filtering.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, inf
-from typing import Any
+from math import inf
 
 from detection_passes import DetectionTile
 
 
-PAGE_SCAN_SPLIT_WIDTH = 2000
-PAGE_SCAN_SPLIT_HEIGHT = 1400
-PAGE_SCAN_TILE_OVERLAP_X = 160
-PAGE_SCAN_TILE_OVERLAP_Y = 120
 PAGE_SCAN_ROTATIONS_CW = (0, 90)
-PAGE_SCAN_MAX_TILES = 4
-PAGE_SCAN_MAX_DETECTOR_CALLS = 8
+PAGE_SCAN_MAX_TILES = 8
+PAGE_SCAN_MAX_DETECTOR_CALLS = 16
 # Preserve approximately the text scale that worked in selection scans without
 # restoring the selection cascade. The shared detector still caps at 2400px.
 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
+PAGE_SCAN_RECOGNITION_BATCH_SIZE = 16
 
 
 @dataclass(frozen=True)
@@ -42,106 +37,6 @@ class PageCandidate:
     detection_confidence: float = 0.0
     pass_index: int = 0
     rotation_cw: int = 0
-
-
-def _axis_starts(
-    length: int,
-    *,
-    max_edge: int,
-    overlap: int,
-) -> list[int]:
-    """Return balanced starts with at least the requested overlap."""
-
-    if length <= max_edge:
-        return [0]
-
-    stride = max_edge - overlap
-    tile_count = ceil((length - max_edge) / stride) + 1
-    travel = length - max_edge
-    return [
-        int(round(index * travel / max(tile_count - 1, 1)))
-        for index in range(tile_count)
-    ]
-
-
-def build_page_tiles(
-    image_or_size: Any,
-    *,
-    max_edge: int | None = None,
-    overlap: int | None = None,
-) -> list[DetectionTile]:
-    """Cover a page with at most four balanced detector tiles.
-
-    Production defaults keep a normal rendered drawing as one tile.  Each axis
-    is split once only when it exceeds the detector threshold, which produces
-    at most a 2x2 plan. ``max_edge``/``overlap`` retain the original explicit
-    square-grid behavior for geometry tests and tuning experiments.
-    """
-
-    width, height = (
-        image_or_size.size
-        if hasattr(image_or_size, "size")
-        else image_or_size
-    )
-    width, height = int(width), int(height)
-    if width < 1 or height < 1:
-        raise ValueError("Page dimensions must be positive")
-
-    if max_edge is not None:
-        if max_edge < 64:
-            raise ValueError("Page tile edge must be at least 64 pixels")
-        overlap_x = overlap_y = (
-            PAGE_SCAN_TILE_OVERLAP_X if overlap is None else overlap
-        )
-        tile_width = tile_height = max_edge
-        x_starts = _axis_starts(
-            width,
-            max_edge=tile_width,
-            overlap=overlap_x,
-        )
-        y_starts = _axis_starts(
-            height,
-            max_edge=tile_height,
-            overlap=overlap_y,
-        )
-    else:
-        if overlap is not None:
-            raise ValueError("overlap requires an explicit max_edge")
-        overlap_x = PAGE_SCAN_TILE_OVERLAP_X
-        overlap_y = PAGE_SCAN_TILE_OVERLAP_Y
-        split_x = width > PAGE_SCAN_SPLIT_WIDTH
-        split_y = height > PAGE_SCAN_SPLIT_HEIGHT
-        tile_width = (
-            ceil((width + overlap_x) / 2)
-            if split_x
-            else width
-        )
-        tile_height = (
-            ceil((height + overlap_y) / 2)
-            if split_y
-            else height
-        )
-        x_starts = [0, width - tile_width] if split_x else [0]
-        y_starts = [0, height - tile_height] if split_y else [0]
-
-    if overlap_x < 0 or (len(x_starts) > 1 and overlap_x >= tile_width):
-        raise ValueError("Horizontal page overlap must be within the tile width")
-    if overlap_y < 0 or (len(y_starts) > 1 and overlap_y >= tile_height):
-        raise ValueError("Vertical page overlap must be within the tile height")
-
-    tiles = [
-        DetectionTile(
-            x=x,
-            y=y,
-            width=min(tile_width, width - x),
-            height=min(tile_height, height - y),
-        )
-        for y in y_starts
-        for x in x_starts
-    ]
-    if max_edge is None and len(tiles) > PAGE_SCAN_MAX_TILES:
-        raise AssertionError("Whole-page detector plan exceeded four tiles")
-    return tiles
 
 
 def _candidate_boundary_clearance(

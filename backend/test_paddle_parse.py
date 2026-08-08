@@ -4,7 +4,12 @@ Run from backend/:
     python test_paddle_parse.py
 """
 
-from paddle_parse import extract_paddle_detection_boxes, extract_paddle_lines
+from paddle_parse import (
+    extract_paddle_detection_boxes,
+    extract_paddle_lines,
+    extract_text_orientation_result,
+    extract_text_recognition_result,
+)
 
 
 BOX = [[1, 2], [21, 2], [21, 10], [1, 10]]
@@ -37,6 +42,24 @@ class Paddle3DetectionResult:
         }
 
 
+class Paddle3TextRecognitionResult:
+    @property
+    def json(self):
+        return {"res": {"rec_text": "M8", "rec_score": 0.97}}
+
+
+class Paddle3OrientationResult:
+    @property
+    def json(self):
+        return {
+            "res": {
+                "class_ids": [1],
+                "scores": [0.998],
+                "label_names": ["180_degree"],
+            }
+        }
+
+
 def assert_one_line(result, expected_text: str, expected_confidence: float) -> None:
     parsed = extract_paddle_lines(result)
     assert len(parsed) == 1, parsed
@@ -65,6 +88,17 @@ def test_paddle_2_recognition_only_result() -> None:
 def test_paddle_3_detector_only_result_keeps_low_confidence_box() -> None:
     parsed = extract_paddle_detection_boxes(iter([Paddle3DetectionResult()]))
     assert parsed == [(1.0, 2.0, 20.0, 8.0, 0.03)]
+
+
+def test_standalone_text_modules_are_parsed_per_input_crop() -> None:
+    assert extract_text_recognition_result(Paddle3TextRecognitionResult()) == (
+        "M8",
+        0.97,
+    )
+    assert extract_text_orientation_result(Paddle3OrientationResult()) == (
+        180,
+        0.998,
+    )
 
 
 if __name__ == "__main__":

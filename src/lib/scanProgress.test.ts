@@ -21,6 +21,8 @@ const progress = (overrides: Partial<ScanProgress> = {}): ScanProgress => ({
   tileTotal: 5,
   objectCurrent: 0,
   objectTotal: 0,
+  batchCurrent: 0,
+  batchTotal: 0,
   candidateCount: 17,
   operationLabel: "source contrast",
   elapsedSeconds: 70,
@@ -29,6 +31,7 @@ const progress = (overrides: Partial<ScanProgress> = {}): ScanProgress => ({
   progressAgeSeconds: 8,
   estimatedRemainingSeconds: 120,
   liveness: "working",
+  overlay: null,
   ...overrides,
 });
 
@@ -56,6 +59,20 @@ describe("scan progress display helpers", () => {
         })
       )
     ).toBe("Object 7/19");
+  });
+
+  it("shows recognition batches before object/pass counters", () => {
+    expect(
+      scanWorkCounter(
+        progress({
+          stage: "recognizing",
+          batchCurrent: 2,
+          batchTotal: 7,
+          objectCurrent: 12,
+          objectTotal: 40,
+        })
+      )
+    ).toBe("Batch 2/7");
   });
 
   it("reports heartbeat recency directly", () => {

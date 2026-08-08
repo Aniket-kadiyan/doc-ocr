@@ -254,3 +254,46 @@ def test_eta_uses_completed_units_from_the_current_stage() -> None:
     finally:
         finish.set()
         manager.shutdown()
+
+
+def test_debug_overlay_is_visible_during_work_without_partial_results() -> None:
+    manager = ScanJobManager(max_workers=1)
+    started = Event()
+    finish = Event()
+    overlay = {
+        "enabled": True,
+        "page_width": 100,
+        "page_height": 60,
+        "scope_kind": "page",
+        "table_masks": [{"x": 70, "y": 0, "width": 30, "height": 60}],
+        "panels": [],
+        "overlaps": [],
+        "candidates": [],
+    }
+
+    def work(report):
+        report(
+            stage="layout",
+            message="Layout ready",
+            percent=8,
+            overlay=overlay,
+        )
+        started.set()
+        assert finish.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        initial = manager.submit(work)
+        assert started.wait(1.0)
+        running = manager.get(initial["job_id"])
+        assert running is not None
+        assert running["overlay"] == overlay
+        assert running["result"] is None
+
+        finish.set()
+        complete = _wait_for_terminal(manager, initial["job_id"])
+        assert complete["overlay"] == overlay
+        assert complete["result"] == {"count": 0, "regions": []}
+    finally:
+        finish.set()
+        manager.shutdown()

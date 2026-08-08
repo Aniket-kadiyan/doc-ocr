@@ -7,7 +7,9 @@ from dataclasses import replace
 from page_value_filters import (
     NEVER_BALLOON_RULES,
     PageValueCandidate,
+    candidate_is_in_table,
     evaluate_page_value,
+    evaluate_scan_value,
 )
 
 
@@ -101,3 +103,33 @@ def test_each_never_balloon_rule_can_be_disabled_in_code() -> None:
     )
 
     assert decision.accepted
+
+
+def test_table_region_is_a_global_hard_exclusion() -> None:
+    mask = {"x": 100, "y": 100, "width": 200, "height": 120}
+    inside = candidate("50", x=120, y=130, width=30, height=14)
+
+    for scope_kind in ("page", "section"):
+        decision = evaluate_scan_value(
+            inside,
+            scope_kind=scope_kind,
+            table_masks=(mask,),
+        )
+        assert not decision.accepted
+        assert decision.rule_name == "table_region"
+
+
+def test_mixed_section_rejects_only_candidate_inside_the_table() -> None:
+    mask = {"x": 100, "y": 100, "width": 200, "height": 120}
+    table_value = candidate("50", x=120, y=130, width=30, height=14)
+    drawing_text = candidate("DATUM A", x=20, y=30, width=70, height=14)
+
+    assert candidate_is_in_table(table_value.bbox, (mask,))
+    assert not candidate_is_in_table(drawing_text.bbox, (mask,))
+    decision = evaluate_scan_value(
+        drawing_text,
+        scope_kind="section",
+        table_masks=(mask,),
+    )
+    assert decision.accepted
+    assert decision.rule_name == "section_passthrough"

@@ -19,6 +19,7 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
     progress.liveness === "possibly_stalled";
   const stageTitle: Record<string, string> = {
     queued: "Queued",
+    layout: "Analysing page layout",
     preparing: "Preparing scan",
     proposing: "Finding candidate regions",
     detecting: "Detecting objects",

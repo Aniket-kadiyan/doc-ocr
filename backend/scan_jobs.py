@@ -46,8 +46,11 @@ class _ScanJob:
     tile_total: int = 0
     object_current: int = 0
     object_total: int = 0
+    batch_current: int = 0
+    batch_total: int = 0
     candidate_count: int = 0
     operation_label: str = ""
+    overlay: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -147,26 +150,35 @@ class ScanJobManager:
             tile_total: int = 0,
             object_current: int = 0,
             object_total: int = 0,
+            batch_current: int = 0,
+            batch_total: int = 0,
             candidate_count: int = 0,
             operation_label: str = "",
+            overlay: dict[str, Any] | None = None,
         ) -> None:
-            self._update(
-                job_id,
-                status="running",
-                stage=stage,
-                message=message,
-                percent=percent,
-                completed=completed,
-                total=total,
-                pass_current=pass_current,
-                pass_total=pass_total,
-                tile_current=tile_current,
-                tile_total=tile_total,
-                object_current=object_current,
-                object_total=object_total,
-                candidate_count=candidate_count,
-                operation_label=operation_label,
-            )
+            changes: dict[str, Any] = {
+                "status": "running",
+                "stage": stage,
+                "message": message,
+                "percent": percent,
+                "completed": completed,
+                "total": total,
+                "pass_current": pass_current,
+                "pass_total": pass_total,
+                "tile_current": tile_current,
+                "tile_total": tile_total,
+                "object_current": object_current,
+                "object_total": object_total,
+                "batch_current": batch_current,
+                "batch_total": batch_total,
+                "candidate_count": candidate_count,
+                "operation_label": operation_label,
+            }
+            # Omitted overlay data preserves the latest layout/candidate view.
+            # The frontend clears it only after success or explicit dismissal.
+            if overlay is not None:
+                changes["overlay"] = deepcopy(overlay)
+            self._update(job_id, **changes)
 
         try:
             result = work(report_progress)
@@ -226,8 +238,11 @@ class ScanJobManager:
                 "tile_total",
                 "object_current",
                 "object_total",
+                "batch_current",
+                "batch_total",
                 "candidate_count",
                 "operation_label",
+                "overlay",
             }
             step_fields = progress_fields - {"percent", "completed", "total"}
             made_progress = False
@@ -358,8 +373,11 @@ class ScanJobManager:
             "tile_total": job.tile_total,
             "object_current": job.object_current,
             "object_total": job.object_total,
+            "batch_current": job.batch_current,
+            "batch_total": job.batch_total,
             "candidate_count": job.candidate_count,
             "operation_label": job.operation_label,
+            "overlay": deepcopy(job.overlay),
             "metadata": deepcopy(job.metadata),
             "error": job.error,
             "created_at": job.created_at,

@@ -43,9 +43,12 @@ import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
 import { ScanProgressBanner } from "@/components/ScanProgressBanner";
+import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
+import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
 import type { Annotation, BBox } from "@/types/annotation";
 import type {
   ScanCompletionSummary,
+  ScanDebugOverlay as ScanDebugOverlayModel,
   ScanProgress,
   ScanScopeKind,
 } from "@/types/scanJob";
@@ -87,6 +90,8 @@ export function DrawingViewer() {
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [lastDebugDump, setLastDebugDump] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanOverlay, setScanOverlay] =
+    useState<ScanDebugOverlayModel | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -150,6 +155,11 @@ export function DrawingViewer() {
     if (!pdfDoc) return;
     void renderCurrentPage(pdfDoc, currentPage);
   }, [pdfDoc, currentPage, renderCurrentPage]);
+
+  useEffect(() => {
+    // Overlay geometry belongs to one exact page/project and is never persisted.
+    setScanOverlay(null);
+  }, [currentPage, projectId]);
 
   useEffect(() => {
     void preloadOcr();
@@ -257,6 +267,7 @@ export function DrawingViewer() {
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setScanProgress(null);
+    setScanOverlay(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = file.type === "application/pdf" ? "pdf" : "image";
@@ -452,6 +463,7 @@ export function DrawingViewer() {
       setIsProcessing(true);
       setSelectionError(null);
       setScanSummary(null);
+      setScanOverlay(null);
       setScanProgress({
         jobId: "",
         status: "queued",
@@ -466,6 +478,8 @@ export function DrawingViewer() {
         tileTotal: 0,
         objectCurrent: 0,
         objectTotal: 0,
+        batchCurrent: 0,
+        batchTotal: 0,
         candidateCount: 0,
         operationLabel: "",
         elapsedSeconds: 0,
@@ -474,6 +488,7 @@ export function DrawingViewer() {
         progressAgeSeconds: 0,
         estimatedRemainingSeconds: null,
         liveness: "queued",
+        overlay: null,
       });
       try {
         const scanResult = await runAutoBalloonScan({
@@ -482,7 +497,12 @@ export function DrawingViewer() {
           page: scanPage,
           scopeKind,
           displayScale: 1,
-          onProgress: setScanProgress,
+          onProgress: (progress) => {
+            setScanProgress(progress);
+            if (SCAN_DEBUG_OVERLAY_ENABLED && progress.overlay) {
+              setScanOverlay(progress.overlay);
+            }
+          },
         });
         const regions = scanResult.regions;
         if (projectIdRef.current !== projectAtStart) {
@@ -491,23 +511,22 @@ export function DrawingViewer() {
           );
         }
         if (regions.length === 0) {
-          if (scopeKind === "page") {
-            setScanSummary({
-              scopeKind,
-              added: 0,
-              detected: scanResult.detected,
-              recognized: scanResult.recognized,
-              eligible: scanResult.eligible,
-              excluded: scanResult.excluded,
-              unread: scanResult.unread,
-              skippedExisting: 0,
-              skippedDuplicates: 0,
-            });
-          }
+          setScanOverlay(null);
+          setScanSummary({
+            scopeKind,
+            added: 0,
+            detected: scanResult.detected,
+            recognized: scanResult.recognized,
+            eligible: scanResult.eligible,
+            excluded: scanResult.excluded,
+            unread: scanResult.unread,
+            skippedExisting: 0,
+            skippedDuplicates: 0,
+          });
           setSelectionError(
             scopeKind === "page"
               ? "No eligible numeric values remained after whole-page filtering."
-              : "No values were detected in the scanned area."
+              : "No values were detected outside excluded table regions in the scanned area."
           );
           return;
         }
@@ -544,6 +563,7 @@ export function DrawingViewer() {
             };
           });
         if (newAnnotations.length === 0) {
+          setScanOverlay(null);
           setScanSummary({
             scopeKind,
             added: 0,
@@ -559,6 +579,7 @@ export function DrawingViewer() {
         }
         // Atomic frontend commit: annotations become visible only here.
         addAnnotations(newAnnotations);
+        setScanOverlay(null);
         setScanSummary({
           scopeKind,
           added: newAnnotations.length,
@@ -711,8 +732,17 @@ export function DrawingViewer() {
         </div>
       )}
       {selectionError && (
-        <div className="bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
-          {selectionError}
+        <div className="flex items-center justify-center gap-3 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
+          <span>{selectionError}</span>
+          {scanOverlay && (
+            <button
+              type="button"
+              onClick={() => setScanOverlay(null)}
+              className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
+            >
+              Dismiss scan overlay
+            </button>
+          )}
         </div>
       )}
       {scanSummary && (
@@ -721,14 +751,10 @@ export function DrawingViewer() {
           {" · "}
           {scanSummary.recognized} recognized
           {" · "}
-          {scanSummary.scopeKind === "page" && (
-            <>
-              {scanSummary.eligible} eligible
-              {" · "}
-              {scanSummary.excluded} excluded
-              {" · "}
-            </>
-          )}
+          {scanSummary.eligible} eligible
+          {" · "}
+          {scanSummary.excluded} excluded
+          {" · "}
           {scanSummary.unread} unread
           {" · "}
           {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
@@ -852,6 +878,10 @@ export function DrawingViewer() {
                       height={stageSize.height}
                       listening={!drawingActive}
                     />
+
+                    {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
+                      <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
+                    )}
 
                     {pageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;

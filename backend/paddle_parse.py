@@ -100,6 +100,39 @@ def _unwrap_result(obj: Any) -> Any:
     return obj
 
 
+def unwrap_paddle_result(obj: Any) -> Any:
+    """Public wrapper used by standalone PaddleOCR module integrations."""
+
+    return _unwrap_result(obj)
+
+
+def extract_text_recognition_result(obj: Any) -> tuple[str, float]:
+    """Return one standalone ``TextRecognition`` result as text/confidence."""
+
+    payload = _unwrap_result(obj)
+    if not isinstance(payload, dict):
+        return "", 0.0
+    texts = _as_list(_first_present(payload, "rec_text", "rec_texts"))
+    scores = _as_list(_first_present(payload, "rec_score", "rec_scores"))
+    text = str(texts[0]).strip() if texts else ""
+    score = float(scores[0]) if scores else 0.0
+    return text, score
+
+
+def extract_text_orientation_result(obj: Any) -> tuple[int, float]:
+    """Return one standalone text-line orientation as degrees/confidence."""
+
+    payload = _unwrap_result(obj)
+    if not isinstance(payload, dict):
+        return 0, 0.0
+    labels = _as_list(_first_present(payload, "label_names", "label_name"))
+    scores = _as_list(_first_present(payload, "scores", "score"))
+    label = str(labels[0]).lower() if labels else ""
+    degrees = 180 if "180" in label else 0
+    score = float(scores[0]) if scores else 0.0
+    return degrees, score
+
+
 def _yield_from_dict_page(
     page: dict[str, Any],
 ) -> Iterator[tuple[str, float, float, float, float, float]]:

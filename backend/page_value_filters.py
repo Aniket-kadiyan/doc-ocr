@@ -1,14 +1,16 @@
 """Editable whole-page balloon eligibility rules.
 
 This file is deliberately independent from detection, OCR, and annotation
-code.  To change whole-page filtering, edit the enabled rules or their Python
-predicates here and restart the backend.  Section scans never call this module.
+code.  To change filtering, edit the enabled rules or their Python predicates
+here and restart the backend.
 
 Policy order:
 
-1. Reject an enabled never-balloon rule.
-2. Reject recognized text with no numeric component.
-3. Accept every other recognized value containing at least one digit.
+1. Reject table-region content for every auto-balloon scope.
+2. For section scans, accept every remaining recognized value.
+3. For whole-page scans, reject an enabled never-balloon rule.
+4. Reject whole-page text with no numeric component.
+5. Accept every other whole-page value containing at least one digit.
 
 Units and drawing geometry are not required.
 """
@@ -17,10 +19,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Literal, Mapping, Sequence
 
 
 BBox = Mapping[str, float]
+ScanScopeKind = Literal["page", "section"]
 
 
 @dataclass(frozen=True)
@@ -242,25 +245,89 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
 
 REQUIRE_NUMERIC_COMPONENT = True
 
+# Global table policy.  Changing these values affects page and section scans,
+# but never manual Draw Value OCR.
+EXCLUDE_TABLE_REGIONS = True
+TABLE_OVERLAP_REJECTION_RATIO = 0.50
+TABLE_CENTER_REJECTION = True
 
-def evaluate_page_value(
+
+def _bbox_intersection_area(left: BBox, right: BBox) -> float:
+    x0 = max(float(left["x"]), float(right["x"]))
+    y0 = max(float(left["y"]), float(right["y"]))
+    x1 = min(
+        float(left["x"]) + float(left["width"]),
+        float(right["x"]) + float(right["width"]),
+    )
+    y1 = min(
+        float(left["y"]) + float(left["height"]),
+        float(right["y"]) + float(right["height"]),
+    )
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def candidate_is_in_table(
+    bbox: BBox,
+    table_masks: Sequence[BBox],
+    *,
+    overlap_rejection_ratio: float = TABLE_OVERLAP_REJECTION_RATIO,
+    center_rejection: bool = TABLE_CENTER_REJECTION,
+) -> bool:
+    """Reject a candidate, not its complete mixed-content scan section."""
+
+    width = max(float(bbox["width"]), 1.0)
+    height = max(float(bbox["height"]), 1.0)
+    area = width * height
+    center_x = float(bbox["x"]) + width / 2
+    center_y = float(bbox["y"]) + height / 2
+    for mask in table_masks:
+        center_inside = (
+            float(mask["x"]) <= center_x <= float(mask["x"]) + float(mask["width"])
+            and float(mask["y"]) <= center_y <= float(mask["y"]) + float(mask["height"])
+        )
+        if center_rejection and center_inside:
+            return True
+        if _bbox_intersection_area(bbox, mask) / area >= overlap_rejection_ratio:
+            return True
+    return False
+
+
+def evaluate_scan_value(
     candidate: PageValueCandidate,
     *,
+    scope_kind: ScanScopeKind,
+    table_masks: Sequence[BBox] = (),
     page_candidates: Sequence[PageValueCandidate] = (),
     rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
     require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
 ) -> PageValueFilterDecision:
-    """Evaluate one recognized value using the editable page policy."""
+    """Apply the global table rule, then the scope-specific value policy."""
 
     normalized = PageValueCandidate(
         text=" ".join(candidate.text.strip().split()),
         bbox=candidate.bbox,
     )
+    if EXCLUDE_TABLE_REGIONS and candidate_is_in_table(
+        normalized.bbox,
+        table_masks,
+    ):
+        return PageValueFilterDecision(
+            accepted=False,
+            rule_name="table_region",
+            reason="Candidate lies inside a detected table region",
+        )
+
+    if scope_kind == "section":
+        return PageValueFilterDecision(
+            accepted=True,
+            rule_name="section_passthrough",
+            reason="Section scans bypass whole-page value exclusions",
+        )
+
     context = tuple(
         normalized if item is candidate else item
         for item in page_candidates
     )
-
     for rule in rules:
         if rule.enabled and rule.predicate(normalized, context):
             return PageValueFilterDecision(
@@ -280,4 +347,24 @@ def evaluate_page_value(
         accepted=True,
         rule_name="numeric_component",
         reason="Contains a numeric component and matches no exclusion",
+    )
+
+
+def evaluate_page_value(
+    candidate: PageValueCandidate,
+    *,
+    page_candidates: Sequence[PageValueCandidate] = (),
+    table_masks: Sequence[BBox] = (),
+    rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
+    require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
+) -> PageValueFilterDecision:
+    """Evaluate one recognized value using the editable page policy."""
+
+    return evaluate_scan_value(
+        candidate,
+        scope_kind="page",
+        table_masks=table_masks,
+        page_candidates=page_candidates,
+        rules=rules,
+        require_numeric_component=require_numeric_component,
     )

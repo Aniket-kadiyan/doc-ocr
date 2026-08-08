@@ -22,7 +22,12 @@ from image_preprocess import (
     upscale_min_edge,
     clahe_rgb,
 )
-from paddle_parse import extract_paddle_detection_boxes, extract_paddle_lines
+from paddle_parse import (
+    extract_paddle_detection_boxes,
+    extract_paddle_lines,
+    extract_text_orientation_result,
+    extract_text_recognition_result,
+)
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_regions import enlarge_zone, split_symbol_zones
 from symbol_vision import (
@@ -94,6 +99,11 @@ class OcrPipeline:
         self._paddle_api = 0  # 3 = PaddleOCR 3.x (.predict), 2 = 2.x (.ocr)
         self._text_detector = None
         self._text_detector_available = False
+        self._text_recognizer = None
+        self._text_recognizer_available = False
+        self._text_orientation = None
+        self._text_orientation_available = False
+        self._page_batch_recognition_available = False
         self._paddle_version = "unknown"
         self._init_errors: list[str] = []
 
@@ -141,6 +151,7 @@ class OcrPipeline:
                 self._paddle_api = 3
                 self._paddle_available = True
                 self._load_text_detector(paddleocr)
+                self._load_page_recognition_models(paddleocr)
                 return
             except Exception as exc:  # noqa: BLE001
                 self._init_errors.append(f"PaddleOCR 3.x: {exc}")
@@ -187,6 +198,45 @@ class OcrPipeline:
         except Exception as exc:  # noqa: BLE001
             self._init_errors.append(f"PaddleOCR TextDetection: {exc}")
 
+    def _load_page_recognition_models(self, paddleocr_module: Any) -> None:
+        """Load reusable recognition-only modules for whole-page batches."""
+
+        recognizer_class = getattr(paddleocr_module, "TextRecognition", None)
+        orientation_class = getattr(
+            paddleocr_module,
+            "TextLineOrientationClassification",
+            None,
+        )
+        if recognizer_class is None or orientation_class is None:
+            self._init_errors.append(
+                "PaddleOCR standalone TextRecognition/TextLineOrientationClassification "
+                "modules are unavailable"
+            )
+            return
+
+        try:
+            self._text_recognizer = recognizer_class(
+                model_name="PP-OCRv6_medium_rec",
+            )
+            self._text_recognizer_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(f"PaddleOCR TextRecognition: {exc}")
+
+        try:
+            self._text_orientation = orientation_class(
+                model_name="PP-LCNet_x1_0_textline_ori",
+            )
+            self._text_orientation_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(
+                f"PaddleOCR TextLineOrientationClassification: {exc}"
+            )
+
+        self._page_batch_recognition_available = bool(
+            self._text_recognizer_available
+            and self._text_orientation_available
+        )
+
     @property
     def status(self) -> dict[str, Any]:
         return {
@@ -194,6 +244,9 @@ class OcrPipeline:
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
             "text_detector": self._text_detector_available,
+            "text_recognizer": self._text_recognizer_available,
+            "text_line_orientation": self._text_orientation_available,
+            "page_batch_recognition": self._page_batch_recognition_available,
             "auto_balloon_detection_mode": (
                 "detector_only"
                 if self._text_detector_available
@@ -236,6 +289,155 @@ class OcrPipeline:
                 f"PaddleOCR {self._paddle_version} detector-only inference failed: {exc}"
             ) from exc
         return extract_paddle_detection_boxes(result)
+
+    @staticmethod
+    def _module_inputs(images: list[Image.Image]) -> list[np.ndarray]:
+        return [np.asarray(image.convert("RGB")) for image in images]
+
+    def _predict_text_orientations(
+        self,
+        images: list[Image.Image],
+        *,
+        batch_size: int,
+    ) -> list[tuple[int, float]]:
+        if (
+            not getattr(self, "_text_orientation_available", False)
+            or self._text_orientation is None
+        ):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires PaddleOCR's standalone "
+                "text-line orientation model"
+            )
+        try:
+            output = list(
+                self._text_orientation.predict(
+                    input=self._module_inputs(images),
+                    batch_size=batch_size,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "PaddleOCR standalone text-line orientation inference failed: "
+                f"{exc}"
+            ) from exc
+        if len(output) != len(images):
+            raise RuntimeError(
+                "PaddleOCR text-line orientation returned "
+                f"{len(output)} results for {len(images)} crops"
+            )
+        return [extract_text_orientation_result(item) for item in output]
+
+    def _predict_text_recognition(
+        self,
+        images: list[Image.Image],
+        *,
+        batch_size: int,
+    ) -> list[tuple[str, float]]:
+        if (
+            not getattr(self, "_text_recognizer_available", False)
+            or self._text_recognizer is None
+        ):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires PaddleOCR's standalone "
+                "text recognition model"
+            )
+        try:
+            output = list(
+                self._text_recognizer.predict(
+                    input=self._module_inputs(images),
+                    batch_size=batch_size,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "PaddleOCR standalone text recognition inference failed: "
+                f"{exc}"
+            ) from exc
+        if len(output) != len(images):
+            raise RuntimeError(
+                "PaddleOCR text recognition returned "
+                f"{len(output)} results for {len(images)} crops"
+            )
+        return [extract_text_recognition_result(item) for item in output]
+
+    def _recognize_page_batch(
+        self,
+        crops: list[Image.Image],
+        *,
+        batch_size: int,
+    ) -> list[dict[str, Any]]:
+        """Orient and recognize a crop batch without running text detection."""
+
+        if not getattr(self, "_page_batch_recognition_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires standalone PaddleOCR "
+                "orientation and recognition models; the slow full-pipeline "
+                "fallback is intentionally disabled"
+            )
+        if not crops:
+            return []
+
+        from dimension_digits import correct_numeric_confusables
+
+        prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
+        orientations = self._predict_text_orientations(
+            prepared,
+            batch_size=batch_size,
+        )
+        oriented_images = [
+            image.rotate(180, expand=False, fillcolor=(255, 255, 255))
+            if degrees == 180
+            else image
+            for image, (degrees, _score) in zip(prepared, orientations)
+        ]
+        recognized = self._predict_text_recognition(
+            oriented_images,
+            batch_size=batch_size,
+        )
+
+        results: list[dict[str, Any]] = []
+        for crop, (raw_text, confidence), (degrees, orientation_score) in zip(
+            crops,
+            recognized,
+            orientations,
+        ):
+            fixed, corrected = correct_numeric_confusables(raw_text)
+            text_hints = detect_prefix_from_ocr_text(fixed)
+            composed = compose_engineering_dimension(
+                fixed,
+                crop,
+                text_hints,
+            )
+            text = fix_engineering_symbols_light(composed.text).strip()
+            results.append(
+                {
+                    "text": text,
+                    "raw_ocr": raw_text,
+                    "confidence": float(confidence),
+                    "agreement": 1.0 if text else 0.0,
+                    "needs_review": bool(
+                        text
+                        and (
+                            float(confidence) < 0.90
+                            or corrected
+                            or float(orientation_score) < 0.70
+                        )
+                    ),
+                    "type": composed.kind,
+                    "engine": "paddleocr+compose"
+                    if composed.applied
+                    else "paddleocr",
+                    "orientation": (
+                        "vertical" if is_vertical_dimension(crop) else "horizontal"
+                    ),
+                    "rotation": 0,
+                    "symbols_detected": symbols_to_dict(text_hints),
+                    "orientation_correction": degrees,
+                    "orientation_confidence": float(orientation_score),
+                    "ocr_profile": "batch_recognition",
+                }
+            )
+        return results
 
     def _run_paddle(
         self,
@@ -1838,6 +2040,7 @@ class OcrPipeline:
         self,
         image: Image.Image,
         *,
+        layout: Any | None = None,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
         cluster_margin: float = 0.72,
@@ -1846,24 +2049,32 @@ class OcrPipeline:
         """Scan a whole page through the bounded technical-value route.
 
         Section scanning intentionally remains in :meth:`segment`.  This page
-        path runs only standalone detection (0/90 degrees), deduplicates atomic
-        boxes without grouping neighbours, performs one fast OCR prediction per
-        final box, then applies the editable rules in ``page_value_filters.py``.
+        path runs only standalone detection (0/90 degrees) on adaptive panels,
+        deduplicates atomic boxes without grouping neighbours, recognizes crops
+        in standalone model batches, then applies ``page_value_filters.py``.
         """
 
         from collections import Counter
 
         from detection_passes import (
+            DetectionTile,
             build_primary_detection_image,
             detection_primary_target_edge,
+            detection_tile_target_edge,
             map_quarter_turn_box_to_source,
             rotate_for_detection,
+        )
+        from page_layout import (
+            PageLayout,
+            analyze_page_layout,
+            mask_table_regions,
         )
         from page_scan import (
             PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
             PAGE_SCAN_MAX_DETECTOR_CALLS,
+            PAGE_SCAN_MAX_TILES,
+            PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             PAGE_SCAN_ROTATIONS_CW,
-            build_page_tiles,
             deduplicate_page_candidates,
             map_tile_candidate,
         )
@@ -1882,8 +2093,11 @@ class OcrPipeline:
             tile_total: int = 0,
             object_current: int = 0,
             object_total: int = 0,
+            batch_current: int = 0,
+            batch_total: int = 0,
             operation_label: str = "",
             candidate_count: int = 0,
+            overlay: dict[str, object] | None = None,
         ) -> None:
             if progress_callback is not None:
                 progress_callback(
@@ -1898,8 +2112,11 @@ class OcrPipeline:
                     tile_total=tile_total,
                     object_current=object_current,
                     object_total=object_total,
+                    batch_current=batch_current,
+                    batch_total=batch_total,
                     operation_label=operation_label,
                     candidate_count=candidate_count,
+                    overlay=overlay,
                 )
 
         if not getattr(self, "_text_detector_available", False):
@@ -1907,38 +2124,78 @@ class OcrPipeline:
                 "Whole-page auto-ballooning requires the standalone "
                 "PaddleOCR text detector; section scanning remains available"
             )
+        if not getattr(self, "_page_batch_recognition_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires standalone PaddleOCR "
+                "orientation and recognition models; the slow per-object "
+                "fallback is intentionally disabled"
+            )
 
         # ``cluster_margin`` remains in the public signature for compatibility
         # with existing callers. Page mode deliberately performs no grouping.
-        _ = cluster_margin
+        _ = (cluster_margin, debug_dump, debug_dump_force)
         page_size = image.size
-        tiles = build_page_tiles(page_size)
+        if layout is None:
+            layout = analyze_page_layout(image)
+        if not isinstance(layout, PageLayout):
+            raise TypeError("segment_page layout must be a PageLayout")
+        if (layout.width, layout.height) != page_size:
+            raise ValueError("Page layout dimensions do not match the scan image")
+
+        masked_page = mask_table_regions(image, layout.table_masks)
+        tiles = [
+            DetectionTile(
+                x=panel.bbox.x,
+                y=panel.bbox.y,
+                width=panel.bbox.width,
+                height=panel.bbox.height,
+            )
+            for panel in layout.panels
+        ]
         tile_total = len(tiles)
+        if tile_total < 1 or tile_total > PAGE_SCAN_MAX_TILES:
+            raise AssertionError("Whole-page layout exceeded eight panels")
         detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
         if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
-            raise AssertionError("Whole-page scan exceeded eight detector calls")
+            raise AssertionError("Whole-page scan exceeded sixteen detector calls")
         page_candidates = []
+        panel_states = {
+            panel.panel_id: "pending" for panel in layout.panels
+        }
         report(
             stage="preparing",
             message=(
-                f"Preparing {tile_total} bounded detector tile"
-                f"{'s' if tile_total != 1 else ''} and "
+                f"Preparing {tile_total} adaptive panel"
+                f"{'s' if tile_total != 1 else ''}, "
+                f"{len(layout.table_masks)} table masks, and "
                 f"{detector_pass_total} detector-only passes"
             ),
-            percent=2,
+            percent=10,
             completed=0,
             total=detector_pass_total,
             tile_total=tile_total,
             pass_total=detector_pass_total,
+            operation_label="Adaptive page layout",
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+            ),
         )
 
         detector_pass_index = 0
         for tile_index, tile in enumerate(tiles, start=1):
-            tile_image = image.crop(tile.box)
+            panel_id = layout.panels[tile_index - 1].panel_id
+            panel_states[panel_id] = "active"
+            tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
-            target_long_edge = max(
+            full_target_edge = max(
                 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
-                detection_primary_target_edge(tile_image),
+                detection_primary_target_edge(masked_page),
+            )
+            target_long_edge = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
             )
             for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
                 detector_pass_index += 1
@@ -1946,13 +2203,13 @@ class OcrPipeline:
                     stage="detecting",
                     message=(
                         f"Running detector-only pass {detector_pass_index} of "
-                        f"{detector_pass_total}: tile {tile_index} of "
+                        f"{detector_pass_total}: panel {tile_index} of "
                         f"{tile_total}, {rotation_cw} deg"
                     ),
                     percent=(
-                        4
+                        12
                         + int(
-                            36
+                            40
                             * (detector_pass_index - 1)
                             / max(detector_pass_total, 1)
                         )
@@ -1964,10 +2221,14 @@ class OcrPipeline:
                     tile_current=tile_index,
                     tile_total=tile_total,
                     operation_label=(
-                        f"Tile {tile_index} · {rotation_cw} deg · "
+                        f"Panel {panel_id} · {rotation_cw} deg · "
                         f"{target_long_edge}px"
                     ),
                     candidate_count=len(page_candidates),
+                    overlay=layout.overlay(
+                        scope_kind="page",
+                        panel_states=panel_states,
+                    ),
                 )
                 rotated = rotate_for_detection(primary_image, rotation_cw)
                 detected_boxes = self._detector_only_boxes(
@@ -2009,9 +2270,9 @@ class OcrPipeline:
                         f"{len(page_candidates)} raw candidates"
                     ),
                     percent=(
-                        4
+                        12
                         + int(
-                            36
+                            40
                             * detector_pass_index
                             / max(detector_pass_total, 1)
                         )
@@ -2023,10 +2284,32 @@ class OcrPipeline:
                     tile_current=tile_index,
                     tile_total=tile_total,
                     operation_label=(
-                        f"Tile {tile_index} · {rotation_cw} deg complete"
+                        f"Panel {panel_id} · {rotation_cw} deg complete"
                     ),
                     candidate_count=len(page_candidates),
                 )
+
+            panel_states[panel_id] = "completed"
+            report(
+                stage="detecting",
+                message=f"Completed panel {tile_index} of {tile_total}",
+                percent=(
+                    12
+                    + int(40 * detector_pass_index / max(detector_pass_total, 1))
+                ),
+                completed=detector_pass_index,
+                total=detector_pass_total,
+                pass_current=detector_pass_index,
+                pass_total=detector_pass_total,
+                tile_current=tile_index,
+                tile_total=tile_total,
+                operation_label=f"Panel {panel_id} complete",
+                candidate_count=len(page_candidates),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                ),
+            )
 
         report(
             stage="grouping",
@@ -2034,7 +2317,7 @@ class OcrPipeline:
                 f"Strictly deduplicating {len(page_candidates)} atomic "
                 "detector candidates"
             ),
-            percent=42,
+            percent=54,
             completed=0,
             total=1,
             tile_current=tile_total,
@@ -2046,13 +2329,20 @@ class OcrPipeline:
         )
         final_candidates = deduplicate_page_candidates(page_candidates)
         duplicates_removed = len(page_candidates) - len(final_candidates)
+        neutral_overlay_candidates = [
+            {
+                "bbox": dict(candidate.bbox),
+                "state": "detected",
+            }
+            for candidate in final_candidates
+        ]
         report(
             stage="grouping",
             message=(
                 f"Prepared {len(final_candidates)} page objects; "
                 f"removed {duplicates_removed} same-object duplicates"
             ),
-            percent=45,
+            percent=57,
             completed=1,
             total=1,
             tile_current=tile_total,
@@ -2061,6 +2351,11 @@ class OcrPipeline:
             pass_total=detector_pass_total,
             operation_label="Atomic candidate deduplication complete",
             candidate_count=len(final_candidates),
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+                candidates=neutral_overlay_candidates,
+            ),
         )
 
         margin = 6
@@ -2068,28 +2363,8 @@ class OcrPipeline:
         detected_count = len(final_candidates)
         recognized_count = 0
         ocr_records: list[dict[str, Any]] = []
-        for object_index, candidate in enumerate(final_candidates, start=1):
-            report(
-                stage="recognizing",
-                message=(
-                    f"Single-pass OCR for object {object_index} "
-                    f"of {detected_count}"
-                ),
-                percent=(
-                    47
-                    + int(
-                        43
-                        * (object_index - 1)
-                        / max(detected_count, 1)
-                    )
-                ),
-                completed=object_index - 1,
-                total=detected_count,
-                object_current=object_index,
-                object_total=detected_count,
-                operation_label=f"Object {object_index} · single pass",
-                candidate_count=detected_count,
-            )
+        candidate_crops: list[Image.Image] = []
+        for candidate in final_candidates:
             bbox = candidate.bbox
             x0 = max(0, int(bbox["x"] - margin))
             y0 = max(0, int(bbox["y"] - margin))
@@ -2101,46 +2376,87 @@ class OcrPipeline:
                 page_height,
                 int(bbox["y"] + bbox["height"] + margin + 0.999),
             )
+            candidate_crops.append(
+                image.crop((x0, y0, x1, y1))
+                if x1 > x0 and y1 > y0
+                else Image.new("RGB", (1, 1), (255, 255, 255))
+            )
 
-            result: dict[str, Any] = {}
-            if x1 > x0 and y1 > y0:
-                result = self.recognize(
-                    image.crop((x0, y0, x1, y1)),
-                    debug_dump=debug_dump,
-                    debug_dump_force=debug_dump_force,
-                    compute_text_bbox=False,
-                    max_paddle_predictions=1,
-                    allow_prefix_ocr=False,
-                )
-
-            text = str(result.get("text") or "").strip()
-            recognized = bool(text)
-            if recognized:
-                recognized_count += 1
-            ocr_records.append(
-                {
-                    "candidate": candidate,
-                    "bbox": bbox,
-                    "text": text,
-                    "result": result,
-                    "recognized": recognized,
-                }
+        batch_total = (
+            (detected_count + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        for batch_index, batch_start in enumerate(
+            range(0, detected_count, PAGE_SCAN_RECOGNITION_BATCH_SIZE),
+            start=1,
+        ):
+            batch_end = min(
+                detected_count,
+                batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             )
             report(
                 stage="recognizing",
                 message=(
-                    f"Processed object {object_index} of {detected_count}; "
-                    f"recognized {recognized_count}"
+                    f"Recognition batch {batch_index} of {batch_total} "
+                    f"({batch_start + 1}–{batch_end} of {detected_count} objects)"
                 ),
                 percent=(
-                    47
-                    + int(43 * object_index / max(detected_count, 1))
+                    60
+                    + int(
+                        30 * (batch_index - 1) / max(batch_total, 1)
+                    )
                 ),
-                completed=object_index,
-                total=detected_count,
-                object_current=object_index,
-                object_total=detected_count,
-                operation_label=f"Object {object_index} · single pass",
+                completed=batch_index - 1,
+                total=batch_total,
+                batch_current=batch_index,
+                batch_total=batch_total,
+                operation_label=f"Recognition batch {batch_index}/{batch_total}",
+                candidate_count=detected_count,
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=neutral_overlay_candidates,
+                ),
+            )
+            batch_results = self._recognize_page_batch(
+                candidate_crops[batch_start:batch_end],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            )
+            if len(batch_results) != batch_end - batch_start:
+                raise RuntimeError(
+                    "Page recognition batch returned an unexpected result count"
+                )
+            for candidate, result in zip(
+                final_candidates[batch_start:batch_end],
+                batch_results,
+            ):
+                text = str(result.get("text") or "").strip()
+                recognized = bool(text)
+                if recognized:
+                    recognized_count += 1
+                ocr_records.append(
+                    {
+                        "candidate": candidate,
+                        "bbox": candidate.bbox,
+                        "text": text,
+                        "result": result,
+                        "recognized": recognized,
+                    }
+                )
+            report(
+                stage="recognizing",
+                message=(
+                    f"Completed recognition batch {batch_index} of "
+                    f"{batch_total}; recognized {recognized_count}"
+                ),
+                percent=(
+                    60 + int(30 * batch_index / max(batch_total, 1))
+                ),
+                completed=batch_index,
+                total=batch_total,
+                batch_current=batch_index,
+                batch_total=batch_total,
+                operation_label=f"Recognition batch {batch_index}/{batch_total}",
                 candidate_count=detected_count,
             )
 
@@ -2155,10 +2471,18 @@ class OcrPipeline:
         ]
         filter_rule_counts: Counter[str] = Counter()
         regions: list[dict[str, Any]] = []
+        filtered_overlay_candidates: list[dict[str, object]] = []
         recognized_index = 0
         for filter_index, record in enumerate(ocr_records, start=1):
             if not record["recognized"]:
                 filter_rule_counts["unread"] += 1
+                filtered_overlay_candidates.append(
+                    {
+                        "bbox": dict(record["bbox"]),
+                        "state": "unread",
+                        "reason": "Recognition returned no text",
+                    }
+                )
                 continue
 
             filter_candidate = recognized_values[recognized_index]
@@ -2183,8 +2507,20 @@ class OcrPipeline:
             decision = evaluate_page_value(
                 filter_candidate,
                 page_candidates=recognized_values,
+                table_masks=[
+                    mask.to_dict() for mask in layout.table_masks
+                ],
             )
             filter_rule_counts[decision.rule_name] += 1
+            filtered_overlay_candidates.append(
+                {
+                    "bbox": dict(record["bbox"]),
+                    "state": "eligible" if decision.accepted else "excluded",
+                    "text": record["text"],
+                    "reason": decision.reason,
+                    "rule": decision.rule_name,
+                }
+            )
             if not decision.accepted:
                 continue
 
@@ -2207,7 +2543,10 @@ class OcrPipeline:
                     "agreement": result.get("agreement", 0.0),
                     "engine": result.get("engine", "paddleocr"),
                     "symbols_detected": result.get("symbols_detected"),
-                    "ocr_profile": "single_pass",
+                    "ocr_profile": result.get(
+                        "ocr_profile",
+                        "batch_recognition",
+                    ),
                     "page_filter_rule": decision.rule_name,
                     "page_filter_reason": decision.reason,
                 }
@@ -2227,6 +2566,11 @@ class OcrPipeline:
             total=detected_count,
             candidate_count=eligible_count,
             operation_label="Page scan complete",
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+                candidates=filtered_overlay_candidates,
+            ),
         )
         return {
             "count": eligible_count,

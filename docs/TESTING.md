@@ -60,15 +60,20 @@ The fast suite verifies:
   one-file styles, and rejects corrupt or unsafe files.
 - Section auto-balloon localization retains its morphology proposal pass,
   bounded detector passes, grouping, and capped local refinements.
-- Whole-page auto-ballooning bypasses the section cascade: a normal page uses
-  exactly two standalone detector calls (`0°` and `90°`), while a very large
-  page uses no more than four tiles/eight detector calls.
+- Whole-page auto-ballooning bypasses the section cascade: every page is split
+  into four to eight adaptive overlapping panels, with two bounded standalone
+  detector calls (`0°` and `90°`) per panel.
+- Repeated-cell table grids produce page-coordinate hard-exclusion masks while
+  isolated drawing rectangles remain unmasked. Mixed section selections reject
+  only candidates inside those masks.
+- Whole-page crops use standalone orientation and recognition modules in
+  batches; the slow full OCR pipeline is not a permitted fallback.
 - Whole-page eligibility rules are isolated in
   `backend/page_value_filters.py`; enabled never-balloon exclusions run before
   the numeric-component requirement.
 - Scan results remain hidden until success while heartbeat, liveness,
-  pass/object counters, elapsed time, and stage-rate ETA telemetry remain
-  observable.
+  panel/pass/batch counters, elapsed time, stage-rate ETA, and temporary debug
+  geometry remain observable.
 
 Automated tests do not claim OCR accuracy on real manufacturing drawings or
 pixel-perfect browser rendering. Those remain manual acceptance checks.
@@ -123,9 +128,11 @@ identify the offending balloon and block final output once the edit is saved.
 ### OCR integration
 
 - Run `npm run test:ocr` with the complete Windows OCR environment installed.
-- Start `npm run ocr-api` and verify `/health` reports both `paddleocr: true`
-  and `text_detector: true`. A false detector flag activates the slower,
-  reduced compatibility path and must be recorded with benchmark results.
+- Start `npm run ocr-api` and verify `/health` reports `paddleocr: true`,
+  `text_detector: true`, `text_recognizer: true`,
+  `text_line_orientation: true`, and `page_batch_recognition: true`. Whole-page
+  scanning must fail clearly if a standalone page model is unavailable; it
+  must not fall back to per-object full-pipeline calls.
 - Read at least one horizontal dimension, vertical dimension, diameter,
   decimal tolerance, and DMS angle from representative drawings.
 - Verify an OCR failure still opens an editable empty Value dialog without
@@ -136,14 +143,18 @@ identify the offending balloon and block final output once the edit is saved.
 - Scan the same small and large sections used before the page-orchestration
   change. Confirm their object boxes and OCR results are unchanged and each
   blocking detection pass is named before PaddleOCR begins it.
-- Scan a whole page and confirm a normal rendered drawing reports one tile and
-  exactly two standalone detector passes (`0°`, then `90°`). It must not show
-  morphology, section grouping, local coverage refinement, or cluster
-  refinement stages.
-- Repeat with a source larger than `2000×1400px`. Confirm the page uses no more
-  than four overlapping tiles and eight total detector calls. Neighbouring
-  atomic boxes must never be merged; only similar-size, same-position repeats
-  may be deduplicated.
+- Scan a whole page and confirm layout analysis visibly creates 4–8 adaptive
+  overlapping panels regardless of render resolution. Each panel runs `0°`
+  then `90°`; no page may be processed as one full-page panel. Whole-page mode
+  must not show morphology, section grouping, local coverage refinement, or
+  cluster refinement stages.
+- Confirm the temporary overlay shows red table masks, blue pending panels,
+  one bright-green active panel, muted completed panels, amber overlap, neutral
+  detections, green eligible values, orange exclusions, and grey unread values.
+  It must stay aligned at every zoom, disappear after success, and remain with
+  a Dismiss action after failure.
+- Confirm neighbouring atomic boxes are never merged; only similar-size,
+  same-position repeats across panel overlap or rotation may be deduplicated.
 - Confirm elapsed time and current-step time continue advancing throughout the
   job. Before a comparable unit completes, the UI must say **Calculating
   estimate**. Afterwards it shows **Stage ETA**; it must not extrapolate total
@@ -156,9 +167,10 @@ identify the offending balloon and block final output once the edit is saved.
 - Confirm cross-tile deduplication removes repeated overlap views only when the
   boxes have similar position and size. A large containing box and its smaller
   child objects must all survive for review.
-- Confirm recognition reports `Object N/M` and uses the `single_pass` profile:
-  at most one Paddle prediction per final detected object, with prefix OCR,
-  consensus variants, text-bbox fallback, and angle completion disabled.
+- Confirm recognition reports `Batch N/M` and uses the `batch_recognition`
+  profile with an initial batch size of 16. Standalone orientation and
+  recognition receive crop lists; the complete PaddleOCR pipeline, prefix OCR,
+  consensus variants, text-bbox fallback, and angle completion remain disabled.
 - Confirm the completion banner reports detected, recognized, eligible,
   excluded, and unread counts, with
   `detected = eligible + excluded + unread` and
@@ -171,8 +183,13 @@ identify the offending balloon and block final output once the edit is saved.
   part/sheet metadata are excluded. A split value such as `TS232224` is
   excluded when its nearby recognized label is `PART NUMBER`, but accepted
   without that association.
-- Disable one rule in `backend/page_value_filters.py`, restart the backend, and
-  confirm only that rule changes. Section scans must remain unaffected.
+- Confirm the upper specification grid, revision history, title block, and
+  bottom tolerance grid produce no balloons in whole-page or section mode.
+  Select an area containing both a table and a legitimate drawing value: only
+  the table part is red/masked, and the drawing value must still be processed.
+- Disable one whole-page rule in `backend/page_value_filters.py`, restart the
+  backend, and confirm only that rule changes. Section scans bypass those
+  whole-page rules but still obey the global table exclusion.
 - Confirm finalization is visible and all balloons still appear together only
   after the complete job succeeds.
 - During a section scan, confirm the banner advances through bridge filtering,
@@ -193,8 +210,8 @@ worst-case drawing and maximum page resolution; **5 minutes or less** is the
 preferred target. Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
 automatic cancellation timeout. For whole-page runs record total time plus
-bounded detection, atomic deduplication, single-pass recognition, filtering,
-and finalization time so the next optimization targets measured work. The
+layout analysis, masked panel detection, atomic deduplication, batched
+recognition, filtering, and finalization time so the next optimization targets measured work. The
 section-only morphology and refinement timings are not part of this route.
 
 Frontend job cancellation remains queued after this detection correction and

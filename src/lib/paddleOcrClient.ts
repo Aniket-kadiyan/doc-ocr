@@ -155,7 +155,23 @@ export interface ApiSegmentResponse {
   excluded_count?: number;
   unread_count?: number;
   filter_rule_counts?: Record<string, number>;
+  coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];
+}
+
+function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
+  return {
+    text: fixEngineeringSymbols(r.text ?? ""),
+    confidence: r.confidence ?? 0,
+    type: r.type,
+    orientation: r.orientation ?? "horizontal",
+    rotation: r.rotation ?? 0,
+    needsReview: r.needs_review ?? false,
+    recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
+    pageFilterRule: r.page_filter_rule,
+    pageFilterReason: r.page_filter_reason,
+    valueBox,
+  };
 }
 
 /** Map backend crop coordinates into the drawing's base canvas coordinates. */
@@ -193,18 +209,35 @@ export function mapSegmentRegions(
         }
       : mapped;
 
-    return {
-      text: fixEngineeringSymbols(r.text ?? ""),
-      confidence: r.confidence ?? 0,
-      type: r.type,
-      orientation: r.orientation ?? "horizontal",
-      rotation: r.rotation ?? 0,
-      needsReview: r.needs_review ?? false,
-      recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
-      pageFilterRule: r.page_filter_rule,
-      pageFilterReason: r.page_filter_reason,
-      valueBox,
+    return mappedSegmentRegion(r, valueBox);
+  });
+}
+
+/** Map API regions that are already expressed in full-page coordinates. */
+export function mapPageSegmentRegions(
+  regions: ApiSegmentRegion[],
+  pageBounds: BBox
+): SegmentRegion[] {
+  return regions.map((r) => {
+    const direct: BBox = {
+      x: r.bbox.x,
+      y: r.bbox.y,
+      width: r.bbox.width,
+      height: r.bbox.height,
     };
+    const invalid =
+      !Number.isFinite(direct.x) ||
+      !Number.isFinite(direct.y) ||
+      !Number.isFinite(direct.width) ||
+      !Number.isFinite(direct.height) ||
+      direct.width <= 0 ||
+      direct.height <= 0 ||
+      direct.x < pageBounds.x ||
+      direct.y < pageBounds.y ||
+      direct.x + direct.width > pageBounds.x + pageBounds.width ||
+      direct.y + direct.height > pageBounds.y + pageBounds.height;
+
+    return mappedSegmentRegion(r, invalid ? pageBounds : direct);
   });
 }
 

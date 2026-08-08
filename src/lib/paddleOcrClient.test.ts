@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mapSegmentRegions } from "@/lib/paddleOcrClient";
+import {
+  mapPageSegmentRegions,
+  mapSegmentRegions,
+} from "@/lib/paddleOcrClient";
 
 describe("scan result coordinate mapping", () => {
   it("maps padded crop coordinates back to the base drawing", () => {
@@ -74,5 +77,25 @@ describe("scan result coordinate mapping", () => {
 
     expect(mapped.pageFilterRule).toBe("numeric_component");
     expect(mapped.pageFilterReason).toContain("numeric component");
+  });
+
+  it("keeps full-page response coordinates without subtracting crop padding", () => {
+    const [mapped] = mapPageSegmentRegions(
+      [
+        {
+          bbox: { x: 130, y: 240, width: 50, height: 12 },
+          text: "25",
+          confidence: 0.9,
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 }
+    );
+
+    expect(mapped.valueBox).toEqual({
+      x: 130,
+      y: 240,
+      width: 50,
+      height: 12,
+    });
   });
 });

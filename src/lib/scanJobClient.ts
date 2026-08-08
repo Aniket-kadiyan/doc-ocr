@@ -1,12 +1,15 @@
 import type { BBox } from "@/types/annotation";
 import type {
+  ScanDebugOverlay,
   ScanLiveness,
+  ScanOverlayCandidateState,
+  ScanOverlayPanelState,
   ScanProgress,
   ScanScopeKind,
 } from "@/types/scanJob";
-import { cropRegion } from "@/lib/canvasUtils";
 import {
   getOcrApiUrl,
+  mapPageSegmentRegions,
   mapSegmentRegions,
   type ApiSegmentResponse,
   type SegmentRegion,
@@ -17,6 +20,29 @@ import {
 } from "@/lib/ocrDebugDump";
 
 const POLL_INTERVAL_MS = 400;
+
+interface ApiScanOverlay {
+  enabled?: boolean;
+  page_width?: number;
+  page_height?: number;
+  scope_kind?: ScanScopeKind;
+  table_masks?: BBox[];
+  panels?: Array<
+    BBox & {
+      id?: string;
+      label?: string;
+      state?: ScanOverlayPanelState;
+    }
+  >;
+  overlaps?: BBox[];
+  candidates?: Array<{
+    bbox?: BBox;
+    state?: ScanOverlayCandidateState;
+    text?: string;
+    reason?: string;
+    rule?: string;
+  }>;
+}
 
 interface ApiScanJobSnapshot {
   job_id: string;
@@ -32,6 +58,8 @@ interface ApiScanJobSnapshot {
   tile_total?: number;
   object_current?: number;
   object_total?: number;
+  batch_current?: number;
+  batch_total?: number;
   candidate_count?: number;
   operation_label?: string;
   elapsed_seconds?: number;
@@ -40,6 +68,7 @@ interface ApiScanJobSnapshot {
   progress_age_seconds?: number;
   estimated_remaining_seconds?: number | null;
   liveness?: ScanLiveness;
+  overlay?: ApiScanOverlay | null;
   error?: string | null;
   result?: ApiSegmentResponse | null;
 }
@@ -66,6 +95,38 @@ export interface ScanJobResult {
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
+function toDebugOverlay(overlay: ApiScanOverlay | null | undefined): ScanDebugOverlay | null {
+  if (!overlay?.enabled) return null;
+  return {
+    enabled: true,
+    pageWidth: overlay.page_width ?? 0,
+    pageHeight: overlay.page_height ?? 0,
+    scopeKind: overlay.scope_kind ?? "page",
+    tableMasks: overlay.table_masks ?? [],
+    panels: (overlay.panels ?? []).map((panel, index) => ({
+      x: panel.x,
+      y: panel.y,
+      width: panel.width,
+      height: panel.height,
+      id: panel.id ?? `P${index + 1}`,
+      label: panel.label ?? panel.id ?? `P${index + 1}`,
+      state: panel.state ?? "pending",
+    })),
+    overlaps: overlay.overlaps ?? [],
+    candidates: (overlay.candidates ?? [])
+      .filter((candidate): candidate is typeof candidate & { bbox: BBox } =>
+        Boolean(candidate.bbox)
+      )
+      .map((candidate) => ({
+        bbox: candidate.bbox,
+        state: candidate.state ?? "detected",
+        text: candidate.text,
+        reason: candidate.reason,
+        rule: candidate.rule,
+      })),
+  };
+}
+
 function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
   return {
     jobId: snapshot.job_id,
@@ -81,6 +142,8 @@ function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
     tileTotal: snapshot.tile_total ?? 0,
     objectCurrent: snapshot.object_current ?? 0,
     objectTotal: snapshot.object_total ?? 0,
+    batchCurrent: snapshot.batch_current ?? 0,
+    batchTotal: snapshot.batch_total ?? 0,
     candidateCount: snapshot.candidate_count ?? 0,
     operationLabel: snapshot.operation_label ?? "",
     elapsedSeconds: snapshot.elapsed_seconds ?? 0,
@@ -92,6 +155,7 @@ function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
     liveness:
       snapshot.liveness ??
       (snapshot.status === "queued" ? "queued" : "working"),
+    overlay: toDebugOverlay(snapshot.overlay),
   };
 }
 
@@ -133,16 +197,15 @@ export async function runScanJob({
   displayScale = 1,
   onProgress,
 }: RunScanJobOptions): Promise<ScanJobResult> {
-  const crop = cropRegion(sourceCanvas, bbox, displayScale);
   const blob = await new Promise<Blob>((resolve, reject) => {
-    crop.toBlob((encoded) => {
+    sourceCanvas.toBlob((encoded) => {
       if (encoded) resolve(encoded);
-      else reject(new Error("Failed to encode scan area"));
+      else reject(new Error("Failed to encode the complete drawing page"));
     }, "image/png");
   });
 
   const form = new FormData();
-  form.append("file", blob, "scan.png");
+  form.append("file", blob, "scan-page.png");
   form.append("scope_kind", scopeKind);
   form.append("page", String(page));
   form.append("scope_x", String(bbox.x));
@@ -191,11 +254,18 @@ export async function runScanJob({
     throw new Error("Auto-balloon scan completed without a result");
   }
 
-  const regions = mapSegmentRegions(
-    snapshot.result.regions ?? [],
-    bbox,
-    displayScale
-  );
+  const regions = snapshot.result.coordinate_space === "page"
+    ? mapPageSegmentRegions(snapshot.result.regions ?? [], {
+        x: 0,
+        y: 0,
+        width: sourceCanvas.width,
+        height: sourceCanvas.height,
+      })
+    : mapSegmentRegions(
+        snapshot.result.regions ?? [],
+        bbox,
+        displayScale
+      );
   const detected = snapshot.result.detected_count ?? regions.length;
   const recognized =
     snapshot.result.recognized_count ??

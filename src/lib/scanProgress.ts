@@ -13,6 +13,9 @@ export function formatScanDuration(totalSeconds: number): string {
 }
 
 export function scanWorkCounter(progress: ScanProgress): string | null {
+  if (progress.batchTotal > 0) {
+    return `Batch ${progress.batchCurrent}/${progress.batchTotal}`;
+  }
   if (progress.objectTotal > 0) {
     return `Object ${progress.objectCurrent}/${progress.objectTotal}`;
   }

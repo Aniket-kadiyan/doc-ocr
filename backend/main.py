@@ -29,6 +29,13 @@ from checksheet_index import (
 from config_env import get_cors_origins, load_env_files
 from debug_dump import dump_status
 from ocr_pipeline import get_pipeline
+from page_layout import (
+    PageLayout,
+    analyze_page_layout,
+    crop_masked_section,
+)
+from page_layout_cache import PageLayoutCache
+from page_value_filters import PageValueCandidate, evaluate_scan_value
 from scan_jobs import ProgressReporter, ScanJobManager
 
 # Draw config from the project's root .env.local / .env (same file the frontend
@@ -45,6 +52,7 @@ app = FastAPI(
 # A single worker prevents concurrent scans from competing for the same model
 # while still returning the HTTP request immediately.
 scan_job_manager = ScanJobManager(max_workers=1)
+page_layout_cache = PageLayoutCache(max_entries=8)
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -297,8 +305,89 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "excluded_count": excluded_count,
         "unread_count": unread_count,
         "filter_rule_counts": filter_rule_counts,
+        "coordinate_space": str(seg.get("coordinate_space", "scope")),
         "regions": regions,
     }
+
+
+def _map_section_result_to_page(
+    seg: dict[str, Any],
+    *,
+    origin: tuple[int, int],
+    layout: PageLayout,
+) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    """Restore section candidates and enforce the global table exclusion.
+
+    A mixed table/drawing selection is processed candidate by candidate.  Only
+    candidates whose centre or majority overlap lies in a table mask are
+    rejected; the remaining drawing values are returned unchanged.
+    """
+
+    from collections import Counter
+
+    origin_x, origin_y = origin
+    table_masks = [mask.to_dict() for mask in layout.table_masks]
+    filter_counts: Counter[str] = Counter()
+    mapped_regions: list[dict[str, Any]] = []
+    overlay_candidates: list[dict[str, object]] = []
+    source_regions = list(seg.get("regions", []))
+
+    for region in source_regions:
+        local = dict(region.get("bbox", {}))
+        page_bbox = {
+            "x": round(origin_x + float(local.get("x", 0.0)), 1),
+            "y": round(origin_y + float(local.get("y", 0.0)), 1),
+            "width": round(float(local.get("width", 0.0)), 1),
+            "height": round(float(local.get("height", 0.0)), 1),
+        }
+        text = str(region.get("text") or "").strip()
+        decision = evaluate_scan_value(
+            PageValueCandidate(text=text, bbox=page_bbox),
+            scope_kind="section",
+            table_masks=table_masks,
+        )
+        filter_counts[decision.rule_name] += 1
+        overlay_candidates.append(
+            {
+                "bbox": page_bbox,
+                "state": "eligible" if decision.accepted else "excluded",
+                "text": text,
+                "reason": decision.reason,
+                "rule": decision.rule_name,
+            }
+        )
+        if not decision.accepted:
+            continue
+        mapped_regions.append(
+            {
+                **region,
+                "bbox": page_bbox,
+                "page_filter_rule": decision.rule_name,
+                "page_filter_reason": decision.reason,
+            }
+        )
+
+    detected_count = int(seg.get("detected_count", len(source_regions)))
+    recognized_count = int(seg.get("recognized_count", len(source_regions)))
+    excluded_count = max(0, len(source_regions) - len(mapped_regions))
+    unread_count = int(
+        seg.get("unread_count", max(0, detected_count - recognized_count))
+    )
+    return (
+        {
+            **seg,
+            "count": len(mapped_regions),
+            "detected_count": detected_count,
+            "recognized_count": recognized_count,
+            "eligible_count": len(mapped_regions),
+            "excluded_count": excluded_count,
+            "unread_count": unread_count,
+            "filter_rule_counts": dict(sorted(filter_counts.items())),
+            "coordinate_space": "page",
+            "regions": mapped_regions,
+        },
+        overlay_candidates,
+    )
 
 
 @app.post("/ocr/scan-jobs", status_code=202)
@@ -337,23 +426,106 @@ async def create_scan_job(
         debug_dump_force
         or (x_debug_dump_force or "").strip().lower() in truthy
     )
+    fingerprint = hashlib.sha256(raw).hexdigest()
+    scope_bbox = {
+        "x": scope_x,
+        "y": scope_y,
+        "width": scope_width,
+        "height": scope_height,
+    }
 
     def run_scan(report_progress: ProgressReporter) -> dict[str, Any]:
         image = Image.open(io.BytesIO(raw)).convert("RGB")
+        if (
+            scope_x >= image.width
+            or scope_y >= image.height
+            or scope_x + scope_width <= 0
+            or scope_y + scope_height <= 0
+        ):
+            raise ValueError("The scan scope does not intersect the uploaded page")
+
+        report_progress(
+            stage="layout",
+            message="Analysing page tables and processing panels",
+            percent=2,
+            completed=0,
+            total=1,
+            operation_label="Page layout analysis",
+        )
+        layout, cache_hit = page_layout_cache.get_or_create(
+            fingerprint,
+            lambda: analyze_page_layout(image),
+        )
+        initial_overlay = layout.overlay(scope_kind=scope_kind)
+        report_progress(
+            stage="layout",
+            message=(
+                f"{'Reused' if cache_hit else 'Prepared'} page layout: "
+                f"{len(layout.table_masks)} table masks and "
+                f"{len(layout.panels)} adaptive panels"
+            ),
+            percent=8,
+            completed=1,
+            total=1,
+            tile_total=len(layout.panels) if scope_kind == "page" else 0,
+            operation_label=(
+                "Cached page layout" if cache_hit else "Page layout ready"
+            ),
+            overlay=initial_overlay,
+        )
+
         pipeline = get_pipeline()
         if scope_kind == "page":
             seg = pipeline.segment_page(
                 image,
+                layout=layout,
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
             )
+            seg["coordinate_space"] = "page"
         else:
-            seg = pipeline.segment(
+            section_image, section_origin, _clipped_scope = crop_masked_section(
                 image,
+                scope_bbox,
+                layout.table_masks,
+            )
+
+            def report_section_progress(**event: Any) -> None:
+                # Keep the section detector/recognizer unchanged while fitting
+                # its existing 1–99% progress into the post-layout range.
+                raw_percent = int(event.pop("percent", 0))
+                report_progress(
+                    **event,
+                    percent=max(10, 10 + int(raw_percent * 0.88)),
+                )
+
+            seg = pipeline.segment(
+                section_image,
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
-                progress_callback=report_progress,
+                progress_callback=report_section_progress,
+            )
+            seg, section_overlay_candidates = _map_section_result_to_page(
+                seg,
+                origin=section_origin,
+                layout=layout,
+            )
+            report_progress(
+                stage="finalizing",
+                message=(
+                    f"Prepared {seg['eligible_count']} section values; "
+                    f"{seg['excluded_count']} table candidates excluded"
+                ),
+                percent=99,
+                completed=int(seg["detected_count"]),
+                total=int(seg["detected_count"]),
+                candidate_count=int(seg["eligible_count"]),
+                operation_label="Section table exclusion complete",
+                overlay=layout.overlay(
+                    scope_kind="section",
+                    candidates=section_overlay_candidates,
+                ),
             )
         return _serialize_segment_result(seg)
 
@@ -362,18 +534,13 @@ async def create_scan_job(
         metadata={
             "scope_kind": scope_kind,
             "page": page,
-            "scope_bbox": {
-                "x": scope_x,
-                "y": scope_y,
-                "width": scope_width,
-                "height": scope_height,
-            },
+            "scope_bbox": scope_bbox,
             # Liveness thresholds scale with the actual selected drawing area.
             # This is telemetry only; it does not impose a scan timeout.
             "scope_pixel_area": scope_width * scope_height,
-            # This is not a resume checkpoint yet.  It gives the future
-            # stop/resume design a stable identity for the exact scanned crop.
-            "crop_fingerprint": hashlib.sha256(raw).hexdigest(),
+            # This is not a resume checkpoint yet. It gives the future
+            # stop/resume design a stable identity for the complete page.
+            "page_fingerprint": fingerprint,
         },
     )
 

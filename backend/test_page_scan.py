@@ -4,60 +4,10 @@ from __future__ import annotations
 
 from detection_passes import DetectionTile
 from page_scan import (
-    PAGE_SCAN_ROTATIONS_CW,
-    build_page_tiles,
     deduplicate_page_candidates,
     map_tile_candidate,
     strict_same_object,
 )
-
-
-def test_page_tiles_cover_both_axes_with_overlap_and_no_tiny_tail() -> None:
-    tiles = build_page_tiles((3800, 2600), max_edge=2000, overlap=160)
-    x_starts = sorted({tile.x for tile in tiles})
-    y_starts = sorted({tile.y for tile in tiles})
-
-    assert x_starts[0] == 0
-    assert y_starts[0] == 0
-    assert x_starts[-1] + 2000 == 3800
-    assert y_starts[-1] + 2000 == 2600
-    assert all(
-        right - left <= 2000 - 160
-        for left, right in zip(x_starts, x_starts[1:])
-    )
-    assert all(
-        bottom - top <= 2000 - 160
-        for top, bottom in zip(y_starts, y_starts[1:])
-    )
-    assert all(tile.width == 2000 and tile.height == 2000 for tile in tiles)
-
-
-def test_small_page_remains_one_detector_tile() -> None:
-    tiles = build_page_tiles((600, 400))
-
-    assert tiles == [DetectionTile(x=0, y=0, width=600, height=400)]
-
-
-def test_representative_drawing_uses_one_page_detector_tile() -> None:
-    tiles = build_page_tiles((1263, 893))
-
-    assert tiles == [DetectionTile(x=0, y=0, width=1263, height=893)]
-
-
-def test_high_resolution_page_uses_at_most_four_balanced_tiles() -> None:
-    tiles = build_page_tiles((4200, 3000))
-
-    assert len(tiles) == 4
-    assert {tile.x for tile in tiles} == {0, 2020}
-    assert {tile.y for tile in tiles} == {0, 1440}
-    assert all(tile.width == 2180 and tile.height == 1560 for tile in tiles)
-    assert len(tiles) * len(PAGE_SCAN_ROTATIONS_CW) == 8
-
-
-def test_tiny_page_does_not_require_an_overlap_smaller_than_the_page() -> None:
-    assert build_page_tiles((80, 40)) == [
-        DetectionTile(x=0, y=0, width=80, height=40)
-    ]
 
 
 def test_coordinate_restoration_prefers_the_non_boundary_duplicate() -> None:

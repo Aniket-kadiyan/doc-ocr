@@ -5,6 +5,7 @@ from __future__ import annotations
 from PIL import Image
 
 from ocr_pipeline import OcrPipeline
+from page_layout import LayoutBox, LayoutPanel, PageLayout
 
 
 def test_segment_reports_real_stages_and_recognition_counters() -> None:
@@ -235,68 +236,81 @@ def test_cluster_refinement_never_falls_back_to_full_ocr() -> None:
     assert events[0]["candidate_count"] == 1
 
 
-def test_page_scan_uses_two_detectors_then_filters_single_pass_ocr() -> None:
+def test_page_scan_uses_adaptive_panels_then_one_recognition_batch() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
     detector_calls: list[tuple[tuple[int, int], int]] = []
-    recognition_calls: list[dict] = []
-
-    source_boxes = [
-        {"x": 100.0, "y": 50.0, "w": 40.0, "h": 16.0},
-        {"x": 200.0, "y": 100.0, "w": 70.0, "h": 16.0},
-        {"x": 300.0, "y": 150.0, "w": 55.0, "h": 16.0},
-        {"x": 400.0, "y": 200.0, "w": 45.0, "h": 16.0},
-    ]
+    recognition_batches: list[int] = []
+    source_box = {"x": 40.0, "y": 30.0, "w": 40.0, "h": 16.0}
+    layout = PageLayout(
+        width=400,
+        height=240,
+        table_masks=(),
+        panels=tuple(
+            LayoutPanel(panel_id=f"P{index}", bbox=box)
+            for index, box in enumerate(
+                (
+                    LayoutBox(0, 0, 200, 120),
+                    LayoutBox(200, 0, 200, 120),
+                    LayoutBox(0, 120, 200, 120),
+                    LayoutBox(200, 120, 200, 120),
+                ),
+                start=1,
+            )
+        ),
+        overlaps=(),
+    )
 
     def fake_detector(image, *, target_long_edge):
         detector_calls.append((image.size, target_long_edge))
-        if len(detector_calls) == 1:
-            return [
-                {**box, "text": "", "conf": 0.9}
-                for box in source_boxes
-            ]
-
-        # Same source boxes expressed in the 90-degree detector coordinates.
+        if len(detector_calls) % 2 == 1:
+            return [{**source_box, "text": "", "conf": 0.9}]
         return [
             {
-                "x": 400.0 - (box["y"] + box["h"]),
-                "y": box["x"],
-                "w": box["h"],
-                "h": box["w"],
+                "x": 120.0 - (source_box["y"] + source_box["h"]),
+                "y": source_box["x"],
+                "w": source_box["h"],
+                "h": source_box["w"],
                 "text": "",
                 "conf": 0.8,
             }
-            for box in source_boxes
         ]
 
-    def fake_recognize(_image, **kwargs):
-        recognition_calls.append(kwargs)
+    def fake_batch(crops, *, batch_size):
+        assert batch_size == 16
+        recognition_batches.append(len(crops))
         texts = ("25.00", "SCALE 2:1", "NOTES", "")
-        text = texts[len(recognition_calls) - 1]
-        return {
-            "text": text,
-            "confidence": 0.96 if text else 0.0,
-            "type": "Linear" if text else "Unknown",
-            "orientation": "horizontal",
-            "rotation": 0,
-            "needs_review": not bool(text),
-        }
+        return [
+            {
+                "text": text,
+                "confidence": 0.96 if text else 0.0,
+                "type": "Linear" if text else "Unknown",
+                "orientation": "horizontal",
+                "rotation": 0,
+                "needs_review": not bool(text),
+                "ocr_profile": "batch_recognition",
+            }
+            for text in texts
+        ]
 
     def fail_selection(*_args, **_kwargs):
         raise AssertionError("page scan must not call the section pipeline")
 
     pipeline._detector_only_boxes = fake_detector
     pipeline.segment = fail_selection
-    pipeline.recognize = fake_recognize
+    pipeline.recognize = fail_selection
+    pipeline._recognize_page_batch = fake_batch
     events: list[dict] = []
 
     result = pipeline.segment_page(
-        Image.new("RGB", (1263, 400), "white"),
+        Image.new("RGB", (400, 240), "white"),
+        layout=layout,
         progress_callback=lambda **event: events.append(event),
     )
 
-    assert len(detector_calls) == 2
-    assert [target for _size, target in detector_calls] == [2000, 2000]
+    assert len(detector_calls) == 8
+    assert [target for _size, target in detector_calls] == [1000] * 8
     assert result["detected_count"] == 4
     assert result["recognized_count"] == 3
     assert result["eligible_count"] == 1
@@ -307,18 +321,17 @@ def test_page_scan_uses_two_detectors_then_filters_single_pass_ocr() -> None:
         + result["excluded_count"]
         + result["unread_count"]
     )
-    assert len(recognition_calls) == result["detected_count"]
-    assert all(
-        call["max_paddle_predictions"] == 1
-        and call["allow_prefix_ocr"] is False
-        and call["compute_text_bbox"] is False
-        for call in recognition_calls
+    assert recognition_batches == [4]
+    assert any(
+        event["pass_total"] == 8 and event["tile_total"] == 4
+        for event in events
     )
     assert any(
-        event["pass_total"] == 2 and event["tile_total"] == 1
+        event["batch_current"] == 1 and event["batch_total"] == 1
         for event in events
     )
     assert any(event["stage"] == "filtering" for event in events)
+    assert any(event["overlay"] is not None for event in events)
     assert events[-1]["candidate_count"] == 1
     assert [event["percent"] for event in events] == sorted(
         event["percent"] for event in events
@@ -348,6 +361,72 @@ def test_page_scan_never_falls_back_to_full_ocr_for_detection() -> None:
         assert "standalone PaddleOCR text detector" in str(exc)
     else:
         raise AssertionError("missing standalone detector should fail clearly")
+
+
+def test_page_scan_never_falls_back_when_batch_recognition_is_unavailable() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = False
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("whole-page recognition must not use full OCR")
+
+    pipeline.recognize = fail_if_called
+
+    try:
+        pipeline.segment_page(Image.new("RGB", (200, 100), "white"))
+    except RuntimeError as exc:
+        assert "slow per-object fallback is intentionally disabled" in str(exc)
+    else:
+        raise AssertionError("missing standalone recognition should fail clearly")
+
+
+def test_page_batch_recognition_calls_each_standalone_module_once() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._page_batch_recognition_available = True
+    pipeline._text_orientation_available = True
+    pipeline._text_recognizer_available = True
+    calls: list[tuple[str, int, int]] = []
+
+    class OrientationModule:
+        def predict(self, *, input, batch_size):
+            calls.append(("orientation", len(input), batch_size))
+            return [
+                {
+                    "res": {
+                        "label_names": ["0_degree"],
+                        "scores": [0.99],
+                    }
+                }
+                for _item in input
+            ]
+
+    class RecognitionModule:
+        def predict(self, *, input, batch_size):
+            calls.append(("recognition", len(input), batch_size))
+            texts = ("M8", "25")
+            return [
+                {"res": {"rec_text": text, "rec_score": 0.97}}
+                for text in texts[: len(input)]
+            ]
+
+    pipeline._text_orientation = OrientationModule()
+    pipeline._text_recognizer = RecognitionModule()
+    pipeline.recognize = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("batch mode must not call the complete OCR pipeline")
+    )
+
+    results = pipeline._recognize_page_batch(
+        [
+            Image.new("RGB", (60, 20), "white"),
+            Image.new("RGB", (60, 20), "white"),
+        ],
+        batch_size=16,
+    )
+
+    assert calls == [("orientation", 2, 16), ("recognition", 2, 16)]
+    assert [result["text"] for result in results] == ["M8", "25"]
+    assert all(result["ocr_profile"] == "batch_recognition" for result in results)
 
 
 def test_paddle_prediction_limit_stops_after_one_call(monkeypatch) -> None:
