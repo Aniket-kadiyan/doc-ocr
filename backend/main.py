@@ -281,11 +281,22 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     unread_count = int(
         seg.get("unread_count", max(0, detected_count - recognized_count))
     )
+    eligible_count = int(seg.get("eligible_count", len(regions)))
+    excluded_count = int(
+        seg.get("excluded_count", max(0, recognized_count - eligible_count))
+    )
+    filter_rule_counts = {
+        str(name): int(count)
+        for name, count in dict(seg.get("filter_rule_counts", {})).items()
+    }
     return {
         "count": len(regions),
         "detected_count": detected_count,
         "recognized_count": recognized_count,
+        "eligible_count": eligible_count,
+        "excluded_count": excluded_count,
         "unread_count": unread_count,
+        "filter_rule_counts": filter_rule_counts,
         "regions": regions,
     }
 

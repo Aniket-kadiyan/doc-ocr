@@ -56,4 +56,23 @@ describe("scan result coordinate mapping", () => {
     expect(mapped.recognized).toBe(false);
     expect(mapped.needsReview).toBe(true);
   });
+
+  it("preserves the whole-page eligibility reason on accepted values", () => {
+    const [mapped] = mapSegmentRegions(
+      [
+        {
+          bbox: { x: 30, y: 40, width: 50, height: 12 },
+          text: "M8",
+          confidence: 0.95,
+          page_filter_rule: "numeric_component",
+          page_filter_reason:
+            "Contains a numeric component and matches no exclusion",
+        },
+      ],
+      { x: 100, y: 200, width: 300, height: 180 }
+    );
+
+    expect(mapped.pageFilterRule).toBe("numeric_component");
+    expect(mapped.pageFilterReason).toContain("numeric component");
+  });
 });

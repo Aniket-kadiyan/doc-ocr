@@ -1,9 +1,10 @@
-"""Fast geometry tests for selection-sized whole-page orchestration."""
+"""Fast geometry tests for bounded whole-page detector orchestration."""
 
 from __future__ import annotations
 
 from detection_passes import DetectionTile
 from page_scan import (
+    PAGE_SCAN_ROTATIONS_CW,
     build_page_tiles,
     deduplicate_page_candidates,
     map_tile_candidate,
@@ -31,19 +32,32 @@ def test_page_tiles_cover_both_axes_with_overlap_and_no_tiny_tail() -> None:
     assert all(tile.width == 2000 and tile.height == 2000 for tile in tiles)
 
 
-def test_small_page_remains_one_selection_sized_tile() -> None:
+def test_small_page_remains_one_detector_tile() -> None:
     tiles = build_page_tiles((600, 400))
 
     assert tiles == [DetectionTile(x=0, y=0, width=600, height=400)]
 
 
-def test_representative_drawing_is_split_into_four_automatic_selections() -> None:
+def test_representative_drawing_uses_one_page_detector_tile() -> None:
     tiles = build_page_tiles((1263, 893))
 
+    assert tiles == [DetectionTile(x=0, y=0, width=1263, height=893)]
+
+
+def test_high_resolution_page_uses_at_most_four_balanced_tiles() -> None:
+    tiles = build_page_tiles((4200, 3000))
+
     assert len(tiles) == 4
-    assert {tile.x for tile in tiles} == {0, 551}
-    assert {tile.y for tile in tiles} == {0, 386}
-    assert all(tile.width == 712 and tile.height == 507 for tile in tiles)
+    assert {tile.x for tile in tiles} == {0, 2020}
+    assert {tile.y for tile in tiles} == {0, 1440}
+    assert all(tile.width == 2180 and tile.height == 1560 for tile in tiles)
+    assert len(tiles) * len(PAGE_SCAN_ROTATIONS_CW) == 8
+
+
+def test_tiny_page_does_not_require_an_overlap_smaller_than_the_page() -> None:
+    assert build_page_tiles((80, 40)) == [
+        DetectionTile(x=0, y=0, width=80, height=40)
+    ]
 
 
 def test_coordinate_restoration_prefers_the_non_boundary_duplicate() -> None:
@@ -104,3 +118,26 @@ def test_unmatched_boundary_candidate_is_retained_for_review() -> None:
 
     assert candidate is not None and candidate.boundary_review
     assert deduplicate_page_candidates([candidate]) == [candidate]
+
+
+def test_same_tile_orientation_duplicates_are_removed() -> None:
+    tile = DetectionTile(x=0, y=0, width=1263, height=893)
+    zero_degree = map_tile_candidate(
+        {"x": 100, "y": 200, "width": 40, "height": 16},
+        tile,
+        tile_index=1,
+        page_size=(1263, 893),
+        pass_index=1,
+        rotation_cw=0,
+    )
+    ninety_degree = map_tile_candidate(
+        {"x": 101, "y": 200, "width": 39, "height": 16},
+        tile,
+        tile_index=1,
+        page_size=(1263, 893),
+        pass_index=2,
+        rotation_cw=90,
+    )
+
+    assert zero_degree is not None and ninety_degree is not None
+    assert len(deduplicate_page_candidates([zero_degree, ninety_degree])) == 1

@@ -235,109 +235,59 @@ def test_cluster_refinement_never_falls_back_to_full_ocr() -> None:
     assert events[0]["candidate_count"] == 1
 
 
-def test_page_scan_reuses_selection_detection_and_ocr_once_per_final_object() -> None:
+def test_page_scan_uses_two_detectors_then_filters_single_pass_ocr() -> None:
     pipeline = object.__new__(OcrPipeline)
-    selection_calls: list[dict] = []
+    pipeline._text_detector_available = True
+    detector_calls: list[tuple[tuple[int, int], int]] = []
     recognition_calls: list[dict] = []
 
-    def fake_selection(_image, **kwargs):
-        selection_calls.append(kwargs)
-        callback = kwargs["progress_callback"]
-        callback(
-            stage="detecting",
-            message="Running selection detector",
-            percent=10,
-            completed=0,
-            total=2,
-            pass_current=1,
-            pass_total=2,
-            tile_current=1,
-            tile_total=1,
-            object_current=0,
-            object_total=0,
-            operation_label="Selection detector",
-            candidate_count=1,
-        )
-        callback(
-            stage="grouping",
-            message="Grouping complete",
-            percent=42,
-            completed=5,
-            total=5,
-            pass_current=0,
-            pass_total=0,
-            tile_current=1,
-            tile_total=1,
-            object_current=0,
-            object_total=0,
-            operation_label="Grouping complete",
-            candidate_count=2,
-        )
-        if len(selection_calls) == 1:
-            return {
-                "count": 1,
-                "regions": [
-                    {
-                        "bbox": {
-                            "x": 690,
-                            "y": 200,
-                            "width": 40,
-                            "height": 16,
-                        },
-                        "detection_confidence": 0.99,
-                    }
-                ],
+    source_boxes = [
+        {"x": 100.0, "y": 50.0, "w": 40.0, "h": 16.0},
+        {"x": 200.0, "y": 100.0, "w": 70.0, "h": 16.0},
+        {"x": 300.0, "y": 150.0, "w": 55.0, "h": 16.0},
+        {"x": 400.0, "y": 200.0, "w": 45.0, "h": 16.0},
+    ]
+
+    def fake_detector(image, *, target_long_edge):
+        detector_calls.append((image.size, target_long_edge))
+        if len(detector_calls) == 1:
+            return [
+                {**box, "text": "", "conf": 0.9}
+                for box in source_boxes
+            ]
+
+        # Same source boxes expressed in the 90-degree detector coordinates.
+        return [
+            {
+                "x": 400.0 - (box["y"] + box["h"]),
+                "y": box["x"],
+                "w": box["h"],
+                "h": box["w"],
+                "text": "",
+                "conf": 0.8,
             }
-        return {
-            "count": 2,
-            "regions": [
-                {
-                    "bbox": {
-                        "x": 139,
-                        "y": 200,
-                        "width": 40,
-                        "height": 16,
-                    },
-                    "detection_confidence": 0.80,
-                },
-                {
-                    "bbox": {
-                        "x": 400,
-                        "y": 100,
-                        "width": 50,
-                        "height": 18,
-                    },
-                    "detection_confidence": 0.90,
-                },
-            ],
-        }
+            for box in source_boxes
+        ]
 
     def fake_recognize(_image, **kwargs):
         recognition_calls.append(kwargs)
-        if len(recognition_calls) == 1:
-            return {
-                "text": "25.00",
-                "confidence": 0.96,
-                "type": "Linear",
-                "orientation": "horizontal",
-                "rotation": 0,
-                "needs_review": False,
-            }
+        texts = ("25.00", "SCALE 2:1", "NOTES", "")
+        text = texts[len(recognition_calls) - 1]
         return {
-            "text": "",
-            "confidence": 0.0,
-            "type": "Unknown",
+            "text": text,
+            "confidence": 0.96 if text else 0.0,
+            "type": "Linear" if text else "Unknown",
             "orientation": "horizontal",
             "rotation": 0,
-            "needs_review": True,
+            "needs_review": not bool(text),
         }
 
-    def fail_angle_completion(*_args, **_kwargs):
-        raise AssertionError("page scan must not run angle-completion OCR")
+    def fail_selection(*_args, **_kwargs):
+        raise AssertionError("page scan must not call the section pipeline")
 
-    pipeline.segment = fake_selection
+    pipeline._detector_only_boxes = fake_detector
+    pipeline.segment = fail_selection
     pipeline.recognize = fake_recognize
-    pipeline._complete_angle_regions = fail_angle_completion
     events: list[dict] = []
 
     result = pipeline.segment_page(
@@ -345,13 +295,17 @@ def test_page_scan_reuses_selection_detection_and_ocr_once_per_final_object() ->
         progress_callback=lambda **event: events.append(event),
     )
 
-    assert len(selection_calls) == 2
-    assert all(call["detection_only"] for call in selection_calls)
-    assert result["detected_count"] == 2
-    assert result["recognized_count"] == 1
+    assert len(detector_calls) == 2
+    assert [target for _size, target in detector_calls] == [2000, 2000]
+    assert result["detected_count"] == 4
+    assert result["recognized_count"] == 3
+    assert result["eligible_count"] == 1
+    assert result["excluded_count"] == 2
     assert result["unread_count"] == 1
     assert result["detected_count"] == (
-        result["recognized_count"] + result["unread_count"]
+        result["eligible_count"]
+        + result["excluded_count"]
+        + result["unread_count"]
     )
     assert len(recognition_calls) == result["detected_count"]
     assert all(
@@ -360,13 +314,40 @@ def test_page_scan_reuses_selection_detection_and_ocr_once_per_final_object() ->
         and call["compute_text_bbox"] is False
         for call in recognition_calls
     )
-    assert any(event["tile_total"] == 2 for event in events)
-    assert events[-1]["candidate_count"] == 2
+    assert any(
+        event["pass_total"] == 2 and event["tile_total"] == 1
+        for event in events
+    )
+    assert any(event["stage"] == "filtering" for event in events)
+    assert events[-1]["candidate_count"] == 1
     assert [event["percent"] for event in events] == sorted(
         event["percent"] for event in events
     )
-    assert result["regions"][1]["recognized"] is False
-    assert result["regions"][1]["needs_review"] is True
+    assert [region["text"] for region in result["regions"]] == ["25.00"]
+    assert result["regions"][0]["page_filter_rule"] == "numeric_component"
+    assert result["filter_rule_counts"] == {
+        "no_numeric_component": 1,
+        "numeric_component": 1,
+        "scale_information": 1,
+        "unread": 1,
+    }
+
+
+def test_page_scan_never_falls_back_to_full_ocr_for_detection() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = False
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("whole-page detection must not use full OCR")
+
+    pipeline._run_paddle = fail_if_called
+
+    try:
+        pipeline.segment_page(Image.new("RGB", (200, 100), "white"))
+    except RuntimeError as exc:
+        assert "standalone PaddleOCR text detector" in str(exc)
+    else:
+        raise AssertionError("missing standalone detector should fail clearly")
 
 
 def test_paddle_prediction_limit_stops_after_one_call(monkeypatch) -> None:

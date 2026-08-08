@@ -57,7 +57,10 @@ export interface ScanJobResult {
   regions: SegmentRegion[];
   detected: number;
   recognized: number;
+  eligible: number;
+  excluded: number;
   unread: number;
+  filterRuleCounts: Record<string, number>;
 }
 
 const sleep = (milliseconds: number) =>
@@ -199,6 +202,18 @@ export async function runScanJob({
     regions.filter((region) => region.recognized).length;
   const unread =
     snapshot.result.unread_count ?? Math.max(0, detected - recognized);
+  const eligible = snapshot.result.eligible_count ?? regions.length;
+  const excluded =
+    snapshot.result.excluded_count ?? Math.max(0, recognized - eligible);
+  const filterRuleCounts = snapshot.result.filter_rule_counts ?? {};
 
-  return { regions, detected, recognized, unread };
+  return {
+    regions,
+    detected,
+    recognized,
+    eligible,
+    excluded,
+    unread,
+    filterRuleCounts,
+  };
 }

@@ -37,9 +37,12 @@ export interface ScanProgress {
 }
 
 export interface ScanCompletionSummary {
+  scopeKind: ScanScopeKind;
   added: number;
   detected: number;
   recognized: number;
+  eligible: number;
+  excluded: number;
   unread: number;
   skippedExisting: number;
   skippedDuplicates: number;

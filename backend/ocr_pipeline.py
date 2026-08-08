@@ -1843,19 +1843,31 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
     ) -> dict[str, Any]:
-        """Auto-segment a whole page as overlapping selection-sized scans.
+        """Scan a whole page through the bounded technical-value route.
 
-        Each tile reuses :meth:`segment` through its detection-only boundary.
-        Final objects are restored to page coordinates and strictly deduplicated
-        before one, and only one, Paddle prediction is run for each object.
+        Section scanning intentionally remains in :meth:`segment`.  This page
+        path runs only standalone detection (0/90 degrees), deduplicates atomic
+        boxes without grouping neighbours, performs one fast OCR prediction per
+        final box, then applies the editable rules in ``page_value_filters.py``.
         """
 
+        from collections import Counter
+
+        from detection_passes import (
+            build_primary_detection_image,
+            detection_primary_target_edge,
+            map_quarter_turn_box_to_source,
+            rotate_for_detection,
+        )
         from page_scan import (
+            PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+            PAGE_SCAN_MAX_DETECTOR_CALLS,
+            PAGE_SCAN_ROTATIONS_CW,
             build_page_tiles,
             deduplicate_page_candidates,
             map_tile_candidate,
         )
-        from segment_quality import is_segment_worthy
+        from page_value_filters import PageValueCandidate, evaluate_page_value
 
         def report(
             *,
@@ -1890,109 +1902,146 @@ class OcrPipeline:
                     candidate_count=candidate_count,
                 )
 
+        if not getattr(self, "_text_detector_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires the standalone "
+                "PaddleOCR text detector; section scanning remains available"
+            )
+
+        # ``cluster_margin`` remains in the public signature for compatibility
+        # with existing callers. Page mode deliberately performs no grouping.
+        _ = cluster_margin
         page_size = image.size
         tiles = build_page_tiles(page_size)
         tile_total = len(tiles)
+        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
+        if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
+            raise AssertionError("Whole-page scan exceeded eight detector calls")
         page_candidates = []
         report(
             stage="preparing",
-            message=f"Preparing {tile_total} overlapping page tiles",
+            message=(
+                f"Preparing {tile_total} bounded detector tile"
+                f"{'s' if tile_total != 1 else ''} and "
+                f"{detector_pass_total} detector-only passes"
+            ),
             percent=2,
             completed=0,
-            total=tile_total,
+            total=detector_pass_total,
             tile_total=tile_total,
+            pass_total=detector_pass_total,
         )
 
+        detector_pass_index = 0
         for tile_index, tile in enumerate(tiles, start=1):
             tile_image = image.crop(tile.box)
-
-            def report_tile_progress(
-                *,
-                _tile_index: int = tile_index,
-                **event: Any,
-            ) -> None:
-                # A selection's detection/grouping spans 4..42%. Map that
-                # internal progress into this page tile's share of 4..60%.
-                local_percent = max(4, min(42, int(event.get("percent", 4))))
-                local_fraction = (local_percent - 4) / 38
-                page_fraction = (
-                    (_tile_index - 1) + local_fraction
-                ) / max(tile_total, 1)
-                local_stage = str(event.get("stage", "detecting"))
-                local_message = str(
-                    event.get("message", "Detecting tile objects")
-                )
+            primary_image = build_primary_detection_image(tile_image)
+            target_long_edge = max(
+                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+                detection_primary_target_edge(tile_image),
+            )
+            for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                detector_pass_index += 1
                 report(
                     stage="detecting",
                     message=(
-                        f"Tile {_tile_index} of {tile_total} · "
-                        f"{local_stage}: {local_message}"
+                        f"Running detector-only pass {detector_pass_index} of "
+                        f"{detector_pass_total}: tile {tile_index} of "
+                        f"{tile_total}, {rotation_cw} deg"
                     ),
-                    percent=4 + int(56 * page_fraction),
-                    completed=_tile_index - 1,
-                    total=tile_total,
-                    pass_current=int(event.get("pass_current", 0)),
-                    pass_total=int(event.get("pass_total", 0)),
-                    tile_current=_tile_index,
+                    percent=(
+                        4
+                        + int(
+                            36
+                            * (detector_pass_index - 1)
+                            / max(detector_pass_total, 1)
+                        )
+                    ),
+                    completed=detector_pass_index - 1,
+                    total=detector_pass_total,
+                    pass_current=detector_pass_index,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
                     tile_total=tile_total,
                     operation_label=(
-                        f"Tile {_tile_index}: "
-                        f"{event.get('operation_label', local_stage)}"
+                        f"Tile {tile_index} · {rotation_cw} deg · "
+                        f"{target_long_edge}px"
                     ),
-                    candidate_count=(
-                        len(page_candidates)
-                        + int(event.get("candidate_count", 0))
-                    ),
+                    candidate_count=len(page_candidates),
                 )
-
-            tile_result = self.segment(
-                tile_image,
-                debug_dump=debug_dump,
-                debug_dump_force=debug_dump_force,
-                cluster_margin=cluster_margin,
-                progress_callback=report_tile_progress,
-                detection_only=True,
-            )
-            for detected in tile_result.get("regions", []):
-                mapped = map_tile_candidate(
-                    detected["bbox"],
-                    tile,
-                    tile_index=tile_index,
-                    page_size=page_size,
-                    detection_confidence=float(
-                        detected.get("detection_confidence", 0.0)
-                    ),
+                rotated = rotate_for_detection(primary_image, rotation_cw)
+                detected_boxes = self._detector_only_boxes(
+                    rotated,
+                    target_long_edge=target_long_edge,
                 )
-                if mapped is not None:
-                    page_candidates.append(mapped)
+                for detected in detected_boxes:
+                    restored = map_quarter_turn_box_to_source(
+                        detected,
+                        rotation_cw,
+                        tile_image.size,
+                    )
+                    if restored is None:
+                        continue
+                    mapped = map_tile_candidate(
+                        {
+                            "x": restored["x"],
+                            "y": restored["y"],
+                            "width": restored["w"],
+                            "height": restored["h"],
+                        },
+                        tile,
+                        tile_index=tile_index,
+                        page_size=page_size,
+                        detection_confidence=float(
+                            restored.get("conf", 0.0)
+                        ),
+                        pass_index=detector_pass_index,
+                        rotation_cw=rotation_cw,
+                    )
+                    if mapped is not None:
+                        page_candidates.append(mapped)
 
-            report(
-                stage="detecting",
-                message=(
-                    f"Completed tile {tile_index} of {tile_total}; "
-                    f"collected {len(page_candidates)} candidates"
-                ),
-                percent=4 + int(56 * tile_index / max(tile_total, 1)),
-                completed=tile_index,
-                total=tile_total,
-                tile_current=tile_index,
-                tile_total=tile_total,
-                operation_label=f"Tile {tile_index} complete",
-                candidate_count=len(page_candidates),
-            )
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Completed detector-only pass {detector_pass_index} "
+                        f"of {detector_pass_total}; collected "
+                        f"{len(page_candidates)} raw candidates"
+                    ),
+                    percent=(
+                        4
+                        + int(
+                            36
+                            * detector_pass_index
+                            / max(detector_pass_total, 1)
+                        )
+                    ),
+                    completed=detector_pass_index,
+                    total=detector_pass_total,
+                    pass_current=detector_pass_index,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Tile {tile_index} · {rotation_cw} deg complete"
+                    ),
+                    candidate_count=len(page_candidates),
+                )
 
         report(
             stage="grouping",
             message=(
-                f"Strictly deduplicating {len(page_candidates)} "
-                "cross-tile candidates"
+                f"Strictly deduplicating {len(page_candidates)} atomic "
+                "detector candidates"
             ),
-            percent=62,
+            percent=42,
             completed=0,
             total=1,
             tile_current=tile_total,
             tile_total=tile_total,
-            operation_label="Cross-tile deduplication",
+            pass_current=detector_pass_total,
+            pass_total=detector_pass_total,
+            operation_label="Atomic candidate deduplication",
             candidate_count=len(page_candidates),
         )
         final_candidates = deduplicate_page_candidates(page_candidates)
@@ -2001,14 +2050,16 @@ class OcrPipeline:
             stage="grouping",
             message=(
                 f"Prepared {len(final_candidates)} page objects; "
-                f"removed {duplicates_removed} overlap duplicates"
+                f"removed {duplicates_removed} same-object duplicates"
             ),
-            percent=65,
+            percent=45,
             completed=1,
             total=1,
             tile_current=tile_total,
             tile_total=tile_total,
-            operation_label="Cross-tile deduplication complete",
+            pass_current=detector_pass_total,
+            pass_total=detector_pass_total,
+            operation_label="Atomic candidate deduplication complete",
             candidate_count=len(final_candidates),
         )
 
@@ -2016,7 +2067,7 @@ class OcrPipeline:
         page_width, page_height = page_size
         detected_count = len(final_candidates)
         recognized_count = 0
-        regions: list[dict[str, Any]] = []
+        ocr_records: list[dict[str, Any]] = []
         for object_index, candidate in enumerate(final_candidates, start=1):
             report(
                 stage="recognizing",
@@ -2025,9 +2076,9 @@ class OcrPipeline:
                     f"of {detected_count}"
                 ),
                 percent=(
-                    66
+                    47
                     + int(
-                        28
+                        43
                         * (object_index - 1)
                         / max(detected_count, 1)
                     )
@@ -2063,28 +2114,16 @@ class OcrPipeline:
                 )
 
             text = str(result.get("text") or "").strip()
-            recognized = bool(text and is_segment_worthy(text))
+            recognized = bool(text)
             if recognized:
                 recognized_count += 1
-            regions.append(
+            ocr_records.append(
                 {
+                    "candidate": candidate,
                     "bbox": bbox,
                     "text": text,
-                    "confidence": result.get("confidence", 0.0),
-                    "type": result.get("type"),
-                    "orientation": result.get("orientation", "horizontal"),
-                    "rotation": result.get("rotation", 0),
-                    "needs_review": bool(
-                        result.get("needs_review", False)
-                        or candidate.boundary_review
-                        or not recognized
-                    ),
+                    "result": result,
                     "recognized": recognized,
-                    "boundary_review": candidate.boundary_review,
-                    "agreement": result.get("agreement", 0.0),
-                    "engine": result.get("engine", "paddleocr"),
-                    "symbols_detected": result.get("symbols_detected"),
-                    "ocr_profile": "single_pass",
                 }
             )
             report(
@@ -2094,8 +2133,8 @@ class OcrPipeline:
                     f"recognized {recognized_count}"
                 ),
                 percent=(
-                    66
-                    + int(28 * object_index / max(detected_count, 1))
+                    47
+                    + int(43 * object_index / max(detected_count, 1))
                 ),
                 completed=object_index,
                 total=detected_count,
@@ -2106,24 +2145,98 @@ class OcrPipeline:
             )
 
         unread_count = detected_count - recognized_count
+        recognized_values = [
+            PageValueCandidate(
+                text=record["text"],
+                bbox=record["bbox"],
+            )
+            for record in ocr_records
+            if record["recognized"]
+        ]
+        filter_rule_counts: Counter[str] = Counter()
+        regions: list[dict[str, Any]] = []
+        recognized_index = 0
+        for filter_index, record in enumerate(ocr_records, start=1):
+            if not record["recognized"]:
+                filter_rule_counts["unread"] += 1
+                continue
+
+            filter_candidate = recognized_values[recognized_index]
+            recognized_index += 1
+            report(
+                stage="filtering",
+                message=(
+                    f"Applying whole-page value filters to object "
+                    f"{filter_index} of {detected_count}"
+                ),
+                percent=(
+                    91
+                    + int(7 * filter_index / max(detected_count, 1))
+                ),
+                completed=filter_index,
+                total=detected_count,
+                object_current=filter_index,
+                object_total=detected_count,
+                operation_label="Editable page value filters",
+                candidate_count=detected_count,
+            )
+            decision = evaluate_page_value(
+                filter_candidate,
+                page_candidates=recognized_values,
+            )
+            filter_rule_counts[decision.rule_name] += 1
+            if not decision.accepted:
+                continue
+
+            candidate = record["candidate"]
+            result = record["result"]
+            regions.append(
+                {
+                    "bbox": record["bbox"],
+                    "text": record["text"],
+                    "confidence": result.get("confidence", 0.0),
+                    "type": result.get("type"),
+                    "orientation": result.get("orientation", "horizontal"),
+                    "rotation": result.get("rotation", 0),
+                    "needs_review": bool(
+                        result.get("needs_review", False)
+                        or candidate.boundary_review
+                    ),
+                    "recognized": True,
+                    "boundary_review": candidate.boundary_review,
+                    "agreement": result.get("agreement", 0.0),
+                    "engine": result.get("engine", "paddleocr"),
+                    "symbols_detected": result.get("symbols_detected"),
+                    "ocr_profile": "single_pass",
+                    "page_filter_rule": decision.rule_name,
+                    "page_filter_reason": decision.reason,
+                }
+            )
+
+        eligible_count = len(regions)
+        excluded_count = recognized_count - eligible_count
         report(
             stage="finalizing",
             message=(
-                f"Prepared {detected_count} objects: "
-                f"{recognized_count} recognized, {unread_count} unread"
+                f"Prepared {eligible_count} eligible values from "
+                f"{detected_count} detected: {excluded_count} excluded, "
+                f"{unread_count} unread"
             ),
             percent=99,
             completed=detected_count,
             total=detected_count,
-            candidate_count=detected_count,
+            candidate_count=eligible_count,
             operation_label="Page scan complete",
         )
         return {
-            "count": detected_count,
+            "count": eligible_count,
             "detected_count": detected_count,
             "recognized_count": recognized_count,
+            "eligible_count": eligible_count,
+            "excluded_count": excluded_count,
             "unread_count": unread_count,
             "duplicates_removed": duplicates_removed,
+            "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "regions": regions,
         }
 

@@ -491,7 +491,24 @@ export function DrawingViewer() {
           );
         }
         if (regions.length === 0) {
-          setSelectionError("No values were detected in the scanned area.");
+          if (scopeKind === "page") {
+            setScanSummary({
+              scopeKind,
+              added: 0,
+              detected: scanResult.detected,
+              recognized: scanResult.recognized,
+              eligible: scanResult.eligible,
+              excluded: scanResult.excluded,
+              unread: scanResult.unread,
+              skippedExisting: 0,
+              skippedDuplicates: 0,
+            });
+          }
+          setSelectionError(
+            scopeKind === "page"
+              ? "No eligible numeric values remained after whole-page filtering."
+              : "No values were detected in the scanned area."
+          );
           return;
         }
 
@@ -528,9 +545,12 @@ export function DrawingViewer() {
           });
         if (newAnnotations.length === 0) {
           setScanSummary({
+            scopeKind,
             added: 0,
             detected: scanResult.detected,
             recognized: scanResult.recognized,
+            eligible: scanResult.eligible,
+            excluded: scanResult.excluded,
             unread: scanResult.unread,
             skippedExisting: filtered.skippedExisting,
             skippedDuplicates: filtered.skippedDuplicates,
@@ -540,9 +560,12 @@ export function DrawingViewer() {
         // Atomic frontend commit: annotations become visible only here.
         addAnnotations(newAnnotations);
         setScanSummary({
+          scopeKind,
           added: newAnnotations.length,
           detected: scanResult.detected,
           recognized: scanResult.recognized,
+          eligible: scanResult.eligible,
+          excluded: scanResult.excluded,
           unread: scanResult.unread,
           skippedExisting: filtered.skippedExisting,
           skippedDuplicates: filtered.skippedDuplicates,
@@ -698,6 +721,14 @@ export function DrawingViewer() {
           {" · "}
           {scanSummary.recognized} recognized
           {" · "}
+          {scanSummary.scopeKind === "page" && (
+            <>
+              {scanSummary.eligible} eligible
+              {" · "}
+              {scanSummary.excluded} excluded
+              {" · "}
+            </>
+          )}
           {scanSummary.unread} unread
           {" · "}
           {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added

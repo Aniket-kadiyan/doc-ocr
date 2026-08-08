@@ -58,9 +58,14 @@ The fast suite verifies:
   fits multi-digit numbers.
 - The developer balloon builder preserves enclosed white regions, round-trips
   one-file styles, and rejects corrupt or unsafe files.
-- Auto-balloon localization uses one morphology proposal pass and exactly two
-  bounded primary detector passes (`0°` and `90°`), with a capped set of local
-  refinements only for uncovered morphology regions.
+- Section auto-balloon localization retains its morphology proposal pass,
+  bounded detector passes, grouping, and capped local refinements.
+- Whole-page auto-ballooning bypasses the section cascade: a normal page uses
+  exactly two standalone detector calls (`0°` and `90°`), while a very large
+  page uses no more than four tiles/eight detector calls.
+- Whole-page eligibility rules are isolated in
+  `backend/page_value_filters.py`; enabled never-balloon exclusions run before
+  the numeric-component requirement.
 - Scan results remain hidden until success while heartbeat, liveness,
   pass/object counters, elapsed time, and stage-rate ETA telemetry remain
   observable.
@@ -131,16 +136,14 @@ identify the offending balloon and block final output once the edit is saved.
 - Scan the same small and large sections used before the page-orchestration
   change. Confirm their object boxes and OCR results are unchanged and each
   blocking detection pass is named before PaddleOCR begins it.
-- Scan a whole page and confirm it reports `Tile N/M`. Each overlapping tile
-  must run the same detection/grouping route as a manual section; neighbouring
-  objects from separate tiles must never be merged.
-- Confirm each tile shows one morphology-proposal stage followed by only two
-  primary detector passes. A normal rendered drawing is split into roughly
-  four overlapping selections; high-resolution tiles remain bounded to
-  `2000×1400px` rather than treating the entire page as one detection region.
-- If morphology finds uncovered areas, confirm a separate **Refining coverage
-  gaps** stage appears and advances one local gap at a time. The retry count is
-  bounded; morphology proposals remain available even beyond that retry cap.
+- Scan a whole page and confirm a normal rendered drawing reports one tile and
+  exactly two standalone detector passes (`0°`, then `90°`). It must not show
+  morphology, section grouping, local coverage refinement, or cluster
+  refinement stages.
+- Repeat with a source larger than `2000×1400px`. Confirm the page uses no more
+  than four overlapping tiles and eight total detector calls. Neighbouring
+  atomic boxes must never be merged; only similar-size, same-position repeats
+  may be deduplicated.
 - Confirm elapsed time and current-step time continue advancing throughout the
   job. Before a comparable unit completes, the UI must say **Calculating
   estimate**. Afterwards it shows **Stage ETA**; it must not extrapolate total
@@ -156,12 +159,23 @@ identify the offending balloon and block final output once the edit is saved.
 - Confirm recognition reports `Object N/M` and uses the `single_pass` profile:
   at most one Paddle prediction per final detected object, with prefix OCR,
   consensus variants, text-bbox fallback, and angle completion disabled.
-- Confirm the completion banner reports detected, recognized, and unread
-  counts, with `detected = recognized + unread`. Empty or invalid OCR must still
-  create a numbered review balloon; the sidebar labels it **Unread — review**.
+- Confirm the completion banner reports detected, recognized, eligible,
+  excluded, and unread counts, with
+  `detected = eligible + excluded + unread` and
+  `recognized = eligible + excluded`. Unread detections remain diagnostic and
+  must not create balloons in whole-page mode.
+- Confirm whole-page filtering accepts values such as `50`, `.25`, `M8`,
+  `SS304`, `R0.2 MAX`, and standalone `2:1` without requiring units, leaders,
+  arrows, or other geometry. Pure text must be excluded.
+- Confirm `DETAIL B SCALE 2:1`, dates, revision entries, and drawing/document/
+  part/sheet metadata are excluded. A split value such as `TS232224` is
+  excluded when its nearby recognized label is `PART NUMBER`, but accepted
+  without that association.
+- Disable one rule in `backend/page_value_filters.py`, restart the backend, and
+  confirm only that rule changes. Section scans must remain unaffected.
 - Confirm finalization is visible and all balloons still appear together only
   after the complete job succeeds.
-- During grouping, confirm the banner advances through bridge filtering,
+- During a section scan, confirm the banner advances through bridge filtering,
   spatial grouping, fragment merging, orientation splitting, bounded local
   refinement, and overlap merging. The current candidate count must remain
   visible instead of leaving the banner unchanged for the entire stage.
@@ -178,9 +192,10 @@ insertion must take no more than **10 minutes** for the agreed representative
 worst-case drawing and maximum page resolution; **5 minutes or less** is the
 preferred target. Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
-automatic cancellation timeout. Record total time plus proposal, primary
-detection, local refinement, page deduplication, single-pass recognition, and
-finalization times so the next optimization targets measured work.
+automatic cancellation timeout. For whole-page runs record total time plus
+bounded detection, atomic deduplication, single-pass recognition, filtering,
+and finalization time so the next optimization targets measured work. The
+section-only morphology and refinement timings are not part of this route.
 
 Frontend job cancellation remains queued after this detection correction and
 is not part of the current acceptance run.
@@ -197,11 +212,7 @@ current auto-ballooning milestones:
 3. Clicking the currently selected balloon does not deselect it.
 4. Balloons cannot yet be reordered by the user. Reordering must preserve
    contiguous `1...N` numbering in the drawing, sidebar, project, and exports.
-5. Selected-value filtering must be extracted into a modular, independently
-   configurable layer so filter changes do not modify the detection,
-   recognition, annotation, or export pipeline.
-
-Do not mark tests for these five behaviors as passing until their later fixes are
+Do not mark tests for these four behaviors as passing until their later fixes are
 implemented.
 
 ## Reporting a failure

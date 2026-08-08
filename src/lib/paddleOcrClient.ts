@@ -126,6 +126,10 @@ export interface SegmentRegion {
   needsReview: boolean;
   /** False when detection succeeded but the single OCR pass was empty/invalid. */
   recognized: boolean;
+  /** Whole-page acceptance rule; absent for section scans. */
+  pageFilterRule?: string;
+  /** Human-readable whole-page acceptance reason. */
+  pageFilterReason?: string;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
 }
@@ -139,13 +143,18 @@ export interface ApiSegmentRegion {
   rotation?: number;
   needs_review?: boolean;
   recognized?: boolean;
+  page_filter_rule?: string;
+  page_filter_reason?: string;
 }
 
 export interface ApiSegmentResponse {
   count: number;
   detected_count?: number;
   recognized_count?: number;
+  eligible_count?: number;
+  excluded_count?: number;
   unread_count?: number;
+  filter_rule_counts?: Record<string, number>;
   regions: ApiSegmentRegion[];
 }
 
@@ -192,6 +201,8 @@ export function mapSegmentRegions(
       rotation: r.rotation ?? 0,
       needsReview: r.needs_review ?? false,
       recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
+      pageFilterRule: r.page_filter_rule,
+      pageFilterReason: r.page_filter_reason,
       valueBox,
     };
   });

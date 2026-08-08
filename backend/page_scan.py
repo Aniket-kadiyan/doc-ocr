@@ -1,8 +1,12 @@
-"""Whole-page tiling and strict cross-tile candidate deduplication.
+"""Bounded whole-page detector planning and strict candidate deduplication.
 
-Whole-page auto-ballooning deliberately treats a drawing as a set of
-overlapping selection-sized scans.  This module owns only page orchestration
-geometry; it does not perform detection or OCR.
+Whole-page auto-ballooning has a dedicated, detector-only route.  A normal
+rendered page is one detector tile; genuinely large images are split into no
+more than four overlapping tiles.  Each tile is inspected at 0 and 90 degrees,
+so the complete page can launch at most eight detector calls.
+
+This module owns only page orchestration geometry.  It does not perform model
+inference, recognition, or value filtering.
 """
 
 from __future__ import annotations
@@ -14,17 +18,21 @@ from typing import Any
 from detection_passes import DetectionTile
 
 
-PAGE_SCAN_TILE_MIN_WIDTH = 700
-PAGE_SCAN_TILE_MIN_HEIGHT = 500
-PAGE_SCAN_TILE_MAX_WIDTH = 2000
-PAGE_SCAN_TILE_MAX_HEIGHT = 1400
+PAGE_SCAN_SPLIT_WIDTH = 2000
+PAGE_SCAN_SPLIT_HEIGHT = 1400
 PAGE_SCAN_TILE_OVERLAP_X = 160
 PAGE_SCAN_TILE_OVERLAP_Y = 120
+PAGE_SCAN_ROTATIONS_CW = (0, 90)
+PAGE_SCAN_MAX_TILES = 4
+PAGE_SCAN_MAX_DETECTOR_CALLS = 8
+# Preserve approximately the text scale that worked in selection scans without
+# restoring the selection cascade. The shared detector still caps at 2400px.
+PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
 
 
 @dataclass(frozen=True)
 class PageCandidate:
-    """One tile-local object restored to whole-page coordinates."""
+    """One detector-pass object restored to whole-page coordinates."""
 
     bbox: dict[str, float]
     tile_index: int
@@ -32,6 +40,8 @@ class PageCandidate:
     boundary_clearance: float
     boundary_review: bool
     detection_confidence: float = 0.0
+    pass_index: int = 0
+    rotation_cw: int = 0
 
 
 def _axis_starts(
@@ -60,12 +70,12 @@ def build_page_tiles(
     max_edge: int | None = None,
     overlap: int | None = None,
 ) -> list[DetectionTile]:
-    """Cover a page with balanced, overlapping selection-sized tiles.
+    """Cover a page with at most four balanced detector tiles.
 
-    Production defaults split an ordinary drawing into approximately four
-    selections.  Tile dimensions grow with high-resolution sources until the
-    bounded maximum is reached. ``max_edge``/``overlap`` remain explicit test
-    and tuning overrides for a square grid.
+    Production defaults keep a normal rendered drawing as one tile.  Each axis
+    is split once only when it exceeds the detector threshold, which produces
+    at most a 2x2 plan. ``max_edge``/``overlap`` retain the original explicit
+    square-grid behavior for geometry tests and tuning experiments.
     """
 
     width, height = (
@@ -84,42 +94,42 @@ def build_page_tiles(
             PAGE_SCAN_TILE_OVERLAP_X if overlap is None else overlap
         )
         tile_width = tile_height = max_edge
+        x_starts = _axis_starts(
+            width,
+            max_edge=tile_width,
+            overlap=overlap_x,
+        )
+        y_starts = _axis_starts(
+            height,
+            max_edge=tile_height,
+            overlap=overlap_y,
+        )
     else:
         if overlap is not None:
             raise ValueError("overlap requires an explicit max_edge")
         overlap_x = PAGE_SCAN_TILE_OVERLAP_X
         overlap_y = PAGE_SCAN_TILE_OVERLAP_Y
-        tile_width = min(
-            PAGE_SCAN_TILE_MAX_WIDTH,
-            max(
-                PAGE_SCAN_TILE_MIN_WIDTH,
-                ceil((width + overlap_x) / 2),
-            ),
+        split_x = width > PAGE_SCAN_SPLIT_WIDTH
+        split_y = height > PAGE_SCAN_SPLIT_HEIGHT
+        tile_width = (
+            ceil((width + overlap_x) / 2)
+            if split_x
+            else width
         )
-        tile_height = min(
-            PAGE_SCAN_TILE_MAX_HEIGHT,
-            max(
-                PAGE_SCAN_TILE_MIN_HEIGHT,
-                ceil((height + overlap_y) / 2),
-            ),
+        tile_height = (
+            ceil((height + overlap_y) / 2)
+            if split_y
+            else height
         )
+        x_starts = [0, width - tile_width] if split_x else [0]
+        y_starts = [0, height - tile_height] if split_y else [0]
 
-    if overlap_x < 0 or overlap_x >= tile_width:
+    if overlap_x < 0 or (len(x_starts) > 1 and overlap_x >= tile_width):
         raise ValueError("Horizontal page overlap must be within the tile width")
-    if overlap_y < 0 or overlap_y >= tile_height:
+    if overlap_y < 0 or (len(y_starts) > 1 and overlap_y >= tile_height):
         raise ValueError("Vertical page overlap must be within the tile height")
 
-    x_starts = _axis_starts(
-        width,
-        max_edge=tile_width,
-        overlap=overlap_x,
-    )
-    y_starts = _axis_starts(
-        height,
-        max_edge=tile_height,
-        overlap=overlap_y,
-    )
-    return [
+    tiles = [
         DetectionTile(
             x=x,
             y=y,
@@ -129,6 +139,9 @@ def build_page_tiles(
         for y in y_starts
         for x in x_starts
     ]
+    if max_edge is None and len(tiles) > PAGE_SCAN_MAX_TILES:
+        raise AssertionError("Whole-page detector plan exceeded four tiles")
+    return tiles
 
 
 def _candidate_boundary_clearance(
@@ -169,6 +182,8 @@ def map_tile_candidate(
     tile_index: int,
     page_size: tuple[int, int],
     detection_confidence: float = 0.0,
+    pass_index: int = 0,
+    rotation_cw: int = 0,
 ) -> PageCandidate | None:
     """Clip and restore one tile-local object to whole-page coordinates."""
 
@@ -211,6 +226,8 @@ def map_tile_candidate(
         boundary_clearance=clearance,
         boundary_review=clearance < boundary_margin,
         detection_confidence=float(detection_confidence),
+        pass_index=pass_index,
+        rotation_cw=rotation_cw,
     )
 
 
@@ -292,7 +309,7 @@ def _candidate_preference(candidate: PageCandidate) -> tuple[float, ...]:
 def deduplicate_page_candidates(
     candidates: list[PageCandidate],
 ) -> list[PageCandidate]:
-    """Remove only repeated cross-tile views of the same object."""
+    """Remove only repeated same-size views of the same atomic object."""
 
     preferred_first = sorted(
         candidates,
@@ -302,8 +319,7 @@ def deduplicate_page_candidates(
     accepted: list[PageCandidate] = []
     for candidate in preferred_first:
         duplicate = any(
-            existing.tile_index != candidate.tile_index
-            and strict_same_object(existing.bbox, candidate.bbox)
+            strict_same_object(existing.bbox, candidate.bbox)
             for existing in accepted
         )
         if not duplicate:
