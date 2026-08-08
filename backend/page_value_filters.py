@@ -8,9 +8,11 @@ Policy order:
 
 1. Reject table-region content for every auto-balloon scope.
 2. For section scans, accept every remaining recognized value.
-3. For whole-page scans, reject an enabled never-balloon rule.
-4. Reject whole-page text with no numeric component.
-5. Accept every other whole-page value containing at least one digit.
+3. Normalize harmless OCR symbol and crop-boundary noise.
+4. For whole-page scans, reject an enabled never-balloon rule.
+5. Reject whole-page text with no numeric component.
+6. Review isolated confusable digits and incomplete/mixed numeric text.
+7. Accept complete engineering-value syntax.
 
 Units and drawing geometry are not required.
 """
@@ -69,8 +71,10 @@ def _compile(pattern: str) -> re.Pattern[str]:
 DETAIL_VIEW_SECTION = _compile(r"\b(?:DETAIL|VIEW|SECTION)\b")
 SCALE_LABEL = _compile(r"\bSCALE\b")
 REVISION_LABEL = _compile(
-    r"\b(?:REV(?:ISION)?|CHANGE(?:\s+(?:NO|NUMBER))?)\b"
+    r"\b(?:REV(?:ISION)?|MODIFICATIONS?|RELEASED|"
+    r"CHANGE(?:\s+(?:NO|NUMBER))?)\b"
 )
+NOTE_LABEL = _compile(r"\bNOTES?\b")
 DOCUMENT_METADATA_LABEL = _compile(
     r"\b(?:DRAWING|DWG|DOCUMENT|DOC|PART)\s*"
     r"(?:NO\.?|NUMBER|#)\b"
@@ -85,8 +89,149 @@ DATE_VALUE = _compile(
 NUMERIC_COMPONENT = re.compile(r"\d")
 SCALE_RATIO_VALUE = _compile(r"^\s*\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s*$")
 COMPACT_IDENTIFIER_VALUE = _compile(
+    r"^(?=.{3,}$)(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]*$"
+)
+CONTEXT_IDENTIFIER_VALUE = _compile(
     r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]{5,}$"
 )
+SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
+SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
+
+_NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
+_ANGLE_MAGNITUDE = (
+    rf"{_NUMBER}\s*°(?:\s*{_NUMBER}\s*['′]"
+    rf"(?:\s*{_NUMBER}\s*[\"″])?)?"
+)
+_ANGLE_VALUE = _compile(
+    rf"^{_ANGLE_MAGNITUDE}"
+    rf"(?:\s*±\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?)"
+    rf"|\s*\+\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?)"
+    rf"\s*-\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?))?"
+    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
+)
+_LINEAR_VALUE = _compile(
+    rf"^(?:\d+\s*[X×]\s*)?"
+    rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
+    rf"(?:\s*±\s*{_NUMBER}"
+    rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
+    rf"|\s*[+-]\s*{_NUMBER}"
+    rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
+    r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
+    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC|THRU))?$"
+)
+_THREAD_VALUE = _compile(
+    rf"^M\s*\d+(?:\.\d+)?"
+    rf"(?:\s*[X×]\s*{_NUMBER})?"
+    r"(?:\s*-\s*[0-9A-Z]+)?"
+    r"(?:\s+(?:THRU|TYP|REF))?$"
+)
+_STANDALONE_TOLERANCE = _compile(
+    rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
+)
+_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,]+\s*")
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,]+$")
+_KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
+_KEYWORD_CONFUSABLES = str.maketrans(
+    {
+        "0": "O",
+        "1": "I",
+        "3": "E",
+        "4": "A",
+        "5": "S",
+        "7": "T",
+    }
+)
+
+
+def _normalize_symbols(text: str) -> str:
+    normalized = str(text or "")
+    normalized = re.sub(r"\+\s*/\s*[-−]", "±", normalized)
+    normalized = (
+        normalized.replace("º", "°")
+        .replace("˚", "°")
+        .replace("⁰", "°")
+        .replace("−", "-")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("‘", "′")
+        .replace("’", "′")
+        .replace("`", "′")
+        .replace("“", "″")
+        .replace("”", "″")
+        .replace("ø", "Ø")
+        .replace("φ", "Ø")
+        .replace("Φ", "Ø")
+        .replace("⌀", "Ø")
+    )
+    return " ".join(normalized.strip().split())
+
+
+def _unwrapped_value(text: str) -> str:
+    if len(text) >= 2 and text.startswith("(") and text.endswith(")"):
+        return text[1:-1].strip()
+    return text
+
+
+def _is_complete_engineering_value(text: str) -> bool:
+    """Recognize a complete value without extracting digits from prose."""
+
+    value = _unwrapped_value(text)
+    if not value or not NUMERIC_COMPONENT.search(value):
+        return False
+    if SCALE_RATIO_VALUE.fullmatch(value):
+        return True
+    if _ANGLE_VALUE.fullmatch(value):
+        return True
+    if _LINEAR_VALUE.fullmatch(value):
+        return True
+    if _THREAD_VALUE.fullmatch(value):
+        return True
+    if _STANDALONE_TOLERANCE.fullmatch(value):
+        return True
+    return bool(COMPACT_IDENTIFIER_VALUE.fullmatch(value))
+
+
+def normalize_page_value_text(text: str) -> str:
+    """Normalize safe OCR variants while preserving the technical value.
+
+    Crop-boundary punctuation is removed only when the remaining complete
+    string satisfies the engineering grammar.  This prevents the filter from
+    extracting a convenient number from a note or title-block sentence.
+    """
+
+    normalized = _normalize_symbols(text)
+    stripped = _BOUNDARY_NOISE_START.sub("", normalized)
+    stripped = _BOUNDARY_NOISE_END.sub("", stripped).strip()
+    if stripped != normalized and _is_complete_engineering_value(stripped):
+        return stripped
+    return normalized
+
+
+def _canonical_keyword_text(text: str) -> str:
+    """Canonicalize OCR-confusable word tokens for exclusion matching only."""
+
+    tokens = []
+    for token in _KEYWORD_TOKEN.findall(str(text or "").upper()):
+        tokens.append(
+            token.translate(_KEYWORD_CONFUSABLES)
+            if any(character.isalpha() for character in token)
+            else token
+        )
+    return " ".join(tokens)
+
+
+def _contains_direct_exclusion_keyword(text: str) -> bool:
+    keyword_text = _canonical_keyword_text(text)
+    return any(
+        pattern.search(keyword_text)
+        for pattern in (
+            DETAIL_VIEW_SECTION,
+            SCALE_LABEL,
+            REVISION_LABEL,
+            NOTE_LABEL,
+            DOCUMENT_METADATA_LABEL,
+        )
+    )
 
 
 def _candidate_search_text(candidate: PageValueCandidate) -> str:
@@ -97,18 +242,45 @@ def _candidate_search_text(candidate: PageValueCandidate) -> str:
     )
 
 
+def _candidate_keyword_text(candidate: PageValueCandidate) -> str:
+    return _canonical_keyword_text(_candidate_search_text(candidate))
+
+
+def _is_compact_identifier(text: str) -> bool:
+    return bool(
+        COMPACT_IDENTIFIER_VALUE.fullmatch(text)
+        and not _ANGLE_VALUE.fullmatch(_unwrapped_value(text))
+        and not _LINEAR_VALUE.fullmatch(_unwrapped_value(text))
+        and not _THREAD_VALUE.fullmatch(_unwrapped_value(text))
+    )
+
+
+def _is_context_exclusion_prone(text: str) -> bool:
+    """Limit nearby labels to values likely to be metadata or callouts."""
+
+    normalized = normalize_page_value_text(text)
+    return bool(
+        SCALE_RATIO_VALUE.fullmatch(normalized)
+        or _is_compact_identifier(normalized)
+        or SINGLE_CHARACTER_VALUE.fullmatch(normalized)
+        or not _is_complete_engineering_value(normalized)
+    )
+
+
 def needs_expanded_filter_context(text: str, bbox: BBox) -> bool:
     """Limit extra context OCR to values prone to metadata false positives."""
 
-    normalized = " ".join(text.strip().split())
+    normalized = normalize_page_value_text(text)
     if not normalized:
+        return False
+    if _contains_direct_exclusion_keyword(normalized):
         return False
     height = max(float(bbox.get("height", 0.0)), 1.0)
     width = max(float(bbox.get("width", 0.0)), 1.0)
     return bool(
         SCALE_RATIO_VALUE.fullmatch(normalized)
         or DATE_VALUE.search(normalized)
-        or COMPACT_IDENTIFIER_VALUE.fullmatch(normalized)
+        or CONTEXT_IDENTIFIER_VALUE.fullmatch(normalized)
         or (len(normalized) <= 2 and width / height >= 8.0)
     )
 
@@ -118,11 +290,13 @@ def _matches_text_or_nearby_label(
     page_candidates: Sequence[PageValueCandidate],
     pattern: re.Pattern[str],
 ) -> bool:
-    if pattern.search(_candidate_search_text(candidate)):
+    if pattern.search(_candidate_keyword_text(candidate)):
         return True
+    if not _is_context_exclusion_prone(candidate.text):
+        return False
     return any(
         other is not candidate
-        and pattern.search(other.text)
+        and pattern.search(_canonical_keyword_text(other.text))
         and _is_nearby_label(candidate.bbox, other.bbox)
         for other in page_candidates
     )
@@ -191,12 +365,13 @@ def _is_nearby_label(value_box: BBox, label_box: BBox) -> bool:
 
 def _detail_view_section(
     candidate: PageValueCandidate,
-    _page_candidates: Sequence[PageValueCandidate],
+    page_candidates: Sequence[PageValueCandidate],
 ) -> bool:
-    # Only explicitly reconstructed context may extend this candidate. Generic
-    # nearby association remains disabled because detail labels often sit close
-    # to legitimate drawing dimensions.
-    return bool(DETAIL_VIEW_SECTION.search(_candidate_search_text(candidate)))
+    return _matches_text_or_nearby_label(
+        candidate,
+        page_candidates,
+        DETAIL_VIEW_SECTION,
+    )
 
 
 def _scale_information(
@@ -225,6 +400,17 @@ def _revision_history(
         candidate,
         page_candidates,
         REVISION_LABEL,
+    )
+
+
+def _note_information(
+    candidate: PageValueCandidate,
+    page_candidates: Sequence[PageValueCandidate],
+) -> bool:
+    return _matches_text_or_nearby_label(
+        candidate,
+        page_candidates,
+        NOTE_LABEL,
     )
 
 
@@ -265,6 +451,12 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
         enabled=True,
         reason="Revision or change-history entry",
         predicate=_revision_history,
+    ),
+    PageValueFilterRule(
+        name="note_information",
+        enabled=True,
+        reason="Drawing note or note-associated value",
+        predicate=_note_information,
     ),
     PageValueFilterRule(
         name="document_metadata",
@@ -335,9 +527,9 @@ def evaluate_scan_value(
     """Apply the global table rule, then the scope-specific value policy."""
 
     normalized = PageValueCandidate(
-        text=" ".join(candidate.text.strip().split()),
+        text=normalize_page_value_text(candidate.text),
         bbox=candidate.bbox,
-        context_text=" ".join(candidate.context_text.strip().split()),
+        context_text=_normalize_symbols(candidate.context_text),
     )
     if EXCLUDE_TABLE_REGIONS and candidate_is_in_table(
         normalized.bbox,
@@ -375,10 +567,35 @@ def evaluate_scan_value(
             reason="Recognized text has no numeric component",
         )
 
+    if not require_numeric_component and not NUMERIC_COMPONENT.search(
+        normalized.text
+    ):
+        return PageValueFilterDecision(
+            accepted=True,
+            rule_name="numeric_requirement_disabled",
+            reason="Numeric-component requirement is disabled",
+        )
+
+    if SUSPICIOUS_SINGLE_VALUE.fullmatch(normalized.text):
+        return PageValueFilterDecision(
+            accepted=False,
+            rule_name="ambiguous_single_character",
+            reason="Isolated 0, 1, or 8 may be an OCR-confused drawing label",
+        )
+
+    if not _is_complete_engineering_value(normalized.text):
+        return PageValueFilterDecision(
+            accepted=False,
+            rule_name="invalid_engineering_value",
+            reason=(
+                "Numeric text does not form one complete engineering value"
+            ),
+        )
+
     return PageValueFilterDecision(
         accepted=True,
-        rule_name="numeric_component",
-        reason="Contains a numeric component and matches no exclusion",
+        rule_name="engineering_value",
+        reason="Matches complete engineering-value syntax",
     )
 
 

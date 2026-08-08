@@ -2140,6 +2140,7 @@ class OcrPipeline:
             PageValueCandidate,
             evaluate_page_value,
             needs_expanded_filter_context,
+            normalize_page_value_text,
         )
 
         def report(
@@ -2770,7 +2771,11 @@ class OcrPipeline:
                 budget_exhausted=index in budget_exhausted_indexes,
             )
             record["result"] = resolved
-            record["text"] = str(resolved.get("text") or "").strip()
+            normalized_text = normalize_page_value_text(
+                str(resolved.get("text") or "")
+            )
+            resolved["text"] = normalized_text
+            record["text"] = normalized_text
             record["recognized"] = bool(record["text"])
 
         context_indexes = [
@@ -2895,6 +2900,7 @@ class OcrPipeline:
             "scale_information",
             "date",
             "revision_history",
+            "note_information",
             "document_metadata",
         }
 

@@ -281,7 +281,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         assert batch_size == 16
         recognition_batches.append((profile, len(crops)))
         if profile == "batch_recognition":
-            texts = ("25.00", "SCALE 2:1", "NOTES", "")
+            texts = ("?30º +/- 3º", "SC4LE 2:1", "N0TES", "")
         elif profile == "recovery_rectified":
             texts = ("R5.00",)
         else:
@@ -357,13 +357,13 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         event["percent"] for event in events
     )
     assert [region["text"] for region in result["regions"]] == [
-        "25.00",
+        "30°±3°",
         "R5.00",
     ]
-    assert result["regions"][0]["page_filter_rule"] == "numeric_component"
+    assert result["regions"][0]["page_filter_rule"] == "engineering_value"
     assert result["filter_rule_counts"] == {
-        "no_numeric_component": 1,
-        "numeric_component": 2,
+        "engineering_value": 2,
+        "note_information": 1,
         "scale_information": 1,
     }
     assert len(result["candidate_outcomes"]) == result["detected_count"]
@@ -439,6 +439,64 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
     assert result["eligible_count"] == 1
     assert result["review_count"] == 0
     assert result["regions"][0]["boundary_review"]
+
+
+def test_page_scan_reviews_mixed_numeric_text_without_extra_ocr() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    detector_calls = 0
+    recognition_profiles: list[str] = []
+    layout = PageLayout(
+        width=200,
+        height=100,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 200, 100)),),
+        overlaps=(),
+    )
+
+    def fake_detector(_image, **_kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return (
+            [{"x": 30, "y": 30, "w": 120, "h": 16, "conf": 0.9}]
+            if detector_calls == 1
+            else []
+        )
+
+    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+        assert batch_size == 16
+        recognition_profiles.append(profile)
+        return [
+            {
+                "text": "ZONE A 25",
+                "raw_ocr": "ZONE A 25",
+                "confidence": 0.98,
+                "confusable_corrected": False,
+                "orientation_confidence": 0.99,
+                "orientation": "horizontal",
+                "rotation": 0,
+                "needs_review": False,
+                "ocr_profile": profile,
+            }
+            for _crop in crops
+        ]
+
+    pipeline._detector_only_boxes = fake_detector
+    pipeline._recognize_page_batch = fake_batch
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (200, 100), "white"),
+        layout=layout,
+    )
+
+    assert result["eligible_count"] == 0
+    assert result["excluded_count"] == 0
+    assert result["review_count"] == 1
+    assert result["candidate_outcomes"][0]["rule"] == (
+        "invalid_engineering_value"
+    )
+    assert recognition_profiles == ["batch_recognition"]
 
 
 def test_page_scan_publishes_confusable_candidate_for_review() -> None:

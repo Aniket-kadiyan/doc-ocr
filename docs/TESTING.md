@@ -81,8 +81,11 @@ The fast suite verifies:
 - Context OCR is limited to at most 48 exclusion-prone values and affects only
   filtering; it never replaces the candidate's recognized technical value.
 - Whole-page eligibility rules are isolated in
-  `backend/page_value_filters.py`; enabled never-balloon exclusions run before
-  the numeric-component requirement.
+  `backend/page_value_filters.py`. OCR-confusable forms of detail, scale,
+  revision/release, note, and metadata keywords are excluded before a complete
+  engineering-value grammar is applied. Nearby labels affect only ratios,
+  identifiers, single-character markers, or mixed text; they cannot suppress a
+  strong dimension such as an angular tolerance.
 - Scan results remain hidden until success while heartbeat, liveness,
   panel/pass/batch counters, elapsed time, stage-rate ETA, and temporary debug
   geometry remain observable.
@@ -201,13 +204,22 @@ identify the offending balloon and block final output once the edit is saved.
   the review box; **Ignore** removes it without creating data; **Cancel** leaves
   it available. Review boxes must not appear in saved projects or exports until
   accepted.
-- Confirm whole-page filtering accepts values such as `50`, `.25`, `M8`,
-  `SS304`, `R0.2 MAX`, and standalone `2:1` without requiring units, leaders,
-  arrows, or other geometry. Pure text must be excluded.
-- Confirm `DETAIL B SCALE 2:1`, dates, revision entries, and drawing/document/
-  part/sheet metadata are excluded. A split value such as `TS232224` is
-  excluded when its nearby recognized label is `PART NUMBER`, but accepted
-  without that association.
+- Confirm whole-page filtering accepts values such as `50`, `.25`, `R5.00`,
+  `Ø24.80`, `15°±3°`, `32°20'40"`, `M8`, `2X Ø10`, `SS304`, `R0.2 MAX`, and
+  standalone `2:1` without requiring units, leaders, arrows, or other geometry.
+  Harmless boundary noise such as `?30°±3°` must normalize to `30°±3°`.
+- Confirm `DETAIL B SCALE 2:1`, `D3TAIL`, `SC4LE`, `REV1SION`, `RELEA5ED`,
+  `MOD1FICATIONS`, `N0TE`, dates, and drawing/document/part/sheet metadata are
+  excluded. A split value such as `TS232224` is excluded when its nearby
+  recognized label is `PART NUMBER`, but accepted without that association.
+- Place `DETAIL`, `SCALE`, or `REVISION` near a valid angle such as `30°±3°`;
+  the angle must remain eligible. Place the same labels beside `2:1`, a compact
+  identifier, or a single-character revision marker; those context-prone
+  values must be excluded. Isolated `0`, `1`, or `8` and mixed text such as
+  `ZONE A 25` must remain review candidates rather than automatic balloons.
+- Record the standalone OCR batch profiles before and after this check. The
+  classifier must not add detection, recovery, or context OCR calls, and the
+  representative whole-page runtime should remain around seven minutes.
 - Confirm the upper specification grid, revision history, title block, and
   bottom tolerance grid produce no balloons in whole-page or section mode.
   Select an area containing both a table and a legitimate drawing value: only
