@@ -263,17 +263,27 @@ async def segment_region(
 
 def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     """Apply the API's dimension classification to one complete scan result."""
-    regions: list[dict[str, Any]] = []
-    for r in seg.get("regions", []):
-        text = str(r.get("text") or "")
-        dim_type = r.get("type") or classify_dimension(text).value
-        regions.append(
-            {
-                **r,
-                "text": text,
-                "type": dim_type if isinstance(dim_type, str) else dim_type.value,
-            }
-        )
+
+    def serialize_regions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        serialized: list[dict[str, Any]] = []
+        for r in items:
+            text = str(r.get("text") or "")
+            dim_type = r.get("type") or classify_dimension(text).value
+            serialized.append(
+                {
+                    **r,
+                    "text": text,
+                    "type": (
+                        dim_type if isinstance(dim_type, str) else dim_type.value
+                    ),
+                }
+            )
+        return serialized
+
+    regions = serialize_regions(list(seg.get("regions", [])))
+    review_candidates = serialize_regions(
+        list(seg.get("review_candidates", []))
+    )
 
     recognized_count = int(
         seg.get(
@@ -293,6 +303,7 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     excluded_count = int(
         seg.get("excluded_count", max(0, recognized_count - eligible_count))
     )
+    review_count = int(seg.get("review_count", len(review_candidates)))
     filter_rule_counts = {
         str(name): int(count)
         for name, count in dict(seg.get("filter_rule_counts", {})).items()
@@ -303,10 +314,13 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "recognized_count": recognized_count,
         "eligible_count": eligible_count,
         "excluded_count": excluded_count,
+        "review_count": review_count,
         "unread_count": unread_count,
         "filter_rule_counts": filter_rule_counts,
         "coordinate_space": str(seg.get("coordinate_space", "scope")),
         "regions": regions,
+        "review_candidates": review_candidates,
+        "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
     }
 
 
@@ -381,10 +395,13 @@ def _map_section_result_to_page(
             "recognized_count": recognized_count,
             "eligible_count": len(mapped_regions),
             "excluded_count": excluded_count,
+            "review_count": 0,
             "unread_count": unread_count,
             "filter_rule_counts": dict(sorted(filter_counts.items())),
             "coordinate_space": "page",
             "regions": mapped_regions,
+            "review_candidates": [],
+            "candidate_outcomes": [],
         },
         overlay_candidates,
     )

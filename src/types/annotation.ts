@@ -99,4 +99,7 @@ export interface PendingSelection {
   bbox: BBox;
   page: number;
   ocrResult: OCRResult;
+  source?: "manual" | "scan_review";
+  reviewCandidateId?: string;
+  reviewReason?: string;
 }

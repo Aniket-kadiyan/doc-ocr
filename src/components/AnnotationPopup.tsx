@@ -9,7 +9,14 @@ import { SPECIAL_SYMBOLS, deriveRange } from "@/lib/valueFields";
 
 /** Confirm the OCR read before the value receives its balloon number. Optional
  * inspection metadata is deliberately edited later from the sidebar item. */
-export function AnnotationPopup() {
+interface AnnotationPopupProps {
+  onReviewResolved?: (
+    candidateId: string,
+    action: "accepted" | "ignored"
+  ) => void;
+}
+
+export function AnnotationPopup({ onReviewResolved }: AnnotationPopupProps) {
   const pending = useAnnotationStore((state) => state.pending);
   const addAnnotation = useAnnotationStore((state) => state.addAnnotation);
   const getNextNumber = useAnnotationStore((state) => state.getNextNumber);
@@ -30,6 +37,8 @@ export function AnnotationPopup() {
 
   const confidence = pending.ocrResult.confidence;
   const needsReview = pending.ocrResult.needsReview ?? false;
+  const isScanReview =
+    pending.source === "scan_review" && Boolean(pending.reviewCandidateId);
 
   // A manual tolerance remains editable, but the next Value change deliberately
   // derives it again so corrections such as adding a missed prime stay in sync.
@@ -69,17 +78,27 @@ export function AnnotationPopup() {
       value: cleanValue,
       type: classifyDimension(cleanValue),
       confidence,
-      // Preserve the exact manual selection. OCR's tighter text box is useful
-      // metadata, but must not replace geometry chosen by the user.
+      // Preserve the exact manual selection or scan-review detector box.
       bbox: pending.bbox,
       rotation: pending.ocrResult.rotation,
       page: pending.page,
       createdAt: Date.now(),
       kind: "dimension",
-      needsReview,
+      needsReview: isScanReview ? false : needsReview,
       range: range.trim() || undefined,
     };
     addAnnotation(annotation);
+    if (isScanReview && pending.reviewCandidateId) {
+      onReviewResolved?.(pending.reviewCandidateId, "accepted");
+    }
+    resetForm();
+  };
+
+  const handleIgnore = () => {
+    if (isScanReview && pending.reviewCandidateId) {
+      onReviewResolved?.(pending.reviewCandidateId, "ignored");
+    }
+    setPending(null);
     resetForm();
   };
 
@@ -100,7 +119,7 @@ export function AnnotationPopup() {
             id="annotation-dialog-title"
             className="text-lg font-semibold text-slate-900"
           >
-            Extracted Value
+            {isScanReview ? "Review Detected Value" : "Extracted Value"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             {value.trim()
@@ -112,7 +131,8 @@ export function AnnotationPopup() {
         <div className="space-y-4 px-5 py-4">
           {needsReview && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-              ⚠ Low-confidence read — please verify the text before saving.
+              ⚠ {pending.reviewReason ||
+                "Low-confidence read — please verify the text before saving."}
             </div>
           )}
 
@@ -157,22 +177,35 @@ export function AnnotationPopup() {
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!value.trim()}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            OK
-          </button>
+        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-4">
+          <div>
+            {isScanReview && (
+              <button
+                type="button"
+                onClick={handleIgnore}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+              >
+                Ignore
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!value.trim()}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              OK
+            </button>
+          </div>
         </div>
       </div>
     </div>

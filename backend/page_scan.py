@@ -10,7 +10,7 @@ inference, recognition, or value filtering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import inf
 
 from detection_passes import DetectionTile
@@ -37,6 +37,8 @@ class PageCandidate:
     detection_confidence: float = 0.0
     pass_index: int = 0
     rotation_cw: int = 0
+    polygon: tuple[tuple[float, float], ...] = ()
+    candidate_id: str = ""
 
 
 def _candidate_boundary_clearance(
@@ -79,6 +81,7 @@ def map_tile_candidate(
     detection_confidence: float = 0.0,
     pass_index: int = 0,
     rotation_cw: int = 0,
+    polygon: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
 ) -> PageCandidate | None:
     """Clip and restore one tile-local object to whole-page coordinates."""
 
@@ -109,6 +112,25 @@ def map_tile_candidate(
         page_size=page_size,
     )
     boundary_margin = max(8.0, min(local_width, local_height) * 0.5)
+    local_polygon = polygon or (
+        (local_x, local_y),
+        (local_x + local_width, local_y),
+        (local_x + local_width, local_y + local_height),
+        (local_x, local_y + local_height),
+    )
+    page_polygon: list[tuple[float, float]] = []
+    for point in local_polygon:
+        if len(point) < 2:
+            continue
+        point_x = max(
+            0.0,
+            min(float(page_width), tile.x + float(point[0])),
+        )
+        point_y = max(
+            0.0,
+            min(float(page_height), tile.y + float(point[1])),
+        )
+        page_polygon.append((round(point_x, 1), round(point_y, 1)))
     return PageCandidate(
         bbox={
             "x": round(page_x0, 1),
@@ -123,6 +145,7 @@ def map_tile_candidate(
         detection_confidence=float(detection_confidence),
         pass_index=pass_index,
         rotation_cw=rotation_cw,
+        polygon=tuple(page_polygon),
     )
 
 
@@ -228,3 +251,14 @@ def deduplicate_page_candidates(
             candidate.tile_index,
         ),
     )
+
+
+def assign_candidate_ids(
+    candidates: list[PageCandidate],
+) -> list[PageCandidate]:
+    """Give deduplicated page objects stable, page-order identifiers."""
+
+    return [
+        replace(candidate, candidate_id=f"C{index:04d}")
+        for index, candidate in enumerate(candidates, start=1)
+    ]

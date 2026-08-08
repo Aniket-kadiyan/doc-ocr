@@ -6,6 +6,7 @@ Run from backend/:
 
 from paddle_parse import (
     extract_paddle_detection_boxes,
+    extract_paddle_detection_regions,
     extract_paddle_lines,
     extract_text_orientation_result,
     extract_text_recognition_result,
@@ -90,6 +91,20 @@ def test_paddle_3_detector_only_result_keeps_low_confidence_box() -> None:
     assert parsed == [(1.0, 2.0, 20.0, 8.0, 0.03)]
 
 
+def test_paddle_3_detector_only_result_preserves_polygon() -> None:
+    parsed = extract_paddle_detection_regions(iter([Paddle3DetectionResult()]))
+    assert parsed == [
+        {
+            "x": 1.0,
+            "y": 2.0,
+            "width": 20.0,
+            "height": 8.0,
+            "confidence": 0.03,
+            "polygon": [[1.0, 2.0], [21.0, 2.0], [21.0, 10.0], [1.0, 10.0]],
+        }
+    ]
+
+
 def test_standalone_text_modules_are_parsed_per_input_crop() -> None:
     assert extract_text_recognition_result(Paddle3TextRecognitionResult()) == (
         "M8",
@@ -106,4 +121,5 @@ if __name__ == "__main__":
     test_paddle_2_nested_result()
     test_paddle_2_recognition_only_result()
     test_paddle_3_detector_only_result_keeps_low_confidence_box()
+    test_paddle_3_detector_only_result_preserves_polygon()
     print("OK")

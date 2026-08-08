@@ -32,6 +32,9 @@ class PageValueCandidate:
 
     text: str
     bbox: BBox
+    # Context is used only for exclusion decisions. It never replaces the
+    # value returned to the annotation layer.
+    context_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,34 @@ DATE_VALUE = _compile(
     r"[./-](?:0?[1-9]|[12]\d|3[01])(?!\d)"
 )
 NUMERIC_COMPONENT = re.compile(r"\d")
+SCALE_RATIO_VALUE = _compile(r"^\s*\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s*$")
+COMPACT_IDENTIFIER_VALUE = _compile(
+    r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]{5,}$"
+)
+
+
+def _candidate_search_text(candidate: PageValueCandidate) -> str:
+    return " ".join(
+        part
+        for part in (candidate.text.strip(), candidate.context_text.strip())
+        if part
+    )
+
+
+def needs_expanded_filter_context(text: str, bbox: BBox) -> bool:
+    """Limit extra context OCR to values prone to metadata false positives."""
+
+    normalized = " ".join(text.strip().split())
+    if not normalized:
+        return False
+    height = max(float(bbox.get("height", 0.0)), 1.0)
+    width = max(float(bbox.get("width", 0.0)), 1.0)
+    return bool(
+        SCALE_RATIO_VALUE.fullmatch(normalized)
+        or DATE_VALUE.search(normalized)
+        or COMPACT_IDENTIFIER_VALUE.fullmatch(normalized)
+        or (len(normalized) <= 2 and width / height >= 8.0)
+    )
 
 
 def _matches_text_or_nearby_label(
@@ -87,7 +118,7 @@ def _matches_text_or_nearby_label(
     page_candidates: Sequence[PageValueCandidate],
     pattern: re.Pattern[str],
 ) -> bool:
-    if pattern.search(candidate.text):
+    if pattern.search(_candidate_search_text(candidate)):
         return True
     return any(
         other is not candidate
@@ -162,10 +193,10 @@ def _detail_view_section(
     candidate: PageValueCandidate,
     _page_candidates: Sequence[PageValueCandidate],
 ) -> bool:
-    # View labels often sit close to real dimensions, so only the candidate's
-    # own text may trigger this exclusion. Nearby association would be too
-    # aggressive for dense engineering views.
-    return bool(DETAIL_VIEW_SECTION.search(candidate.text))
+    # Only explicitly reconstructed context may extend this candidate. Generic
+    # nearby association remains disabled because detail labels often sit close
+    # to legitimate drawing dimensions.
+    return bool(DETAIL_VIEW_SECTION.search(_candidate_search_text(candidate)))
 
 
 def _scale_information(
@@ -183,7 +214,7 @@ def _date_value(
     candidate: PageValueCandidate,
     _page_candidates: Sequence[PageValueCandidate],
 ) -> bool:
-    return bool(DATE_VALUE.search(candidate.text))
+    return bool(DATE_VALUE.search(_candidate_search_text(candidate)))
 
 
 def _revision_history(
@@ -306,6 +337,7 @@ def evaluate_scan_value(
     normalized = PageValueCandidate(
         text=" ".join(candidate.text.strip().split()),
         bbox=candidate.bbox,
+        context_text=" ".join(candidate.context_text.strip().split()),
     )
     if EXCLUDE_TABLE_REGIONS and candidate_is_in_table(
         normalized.bbox,

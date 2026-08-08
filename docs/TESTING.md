@@ -68,6 +68,14 @@ The fast suite verifies:
   only candidates inside those masks.
 - Whole-page crops use standalone orientation and recognition modules in
   batches; the slow full OCR pipeline is not a permitted fallback.
+- Detector quadrilaterals survive page-coordinate restoration and deduplication.
+  Doubtful primary reads use at most 96 candidates, two recognition-only
+  recovery variants per candidate, and batches of 16; detection is never rerun.
+- Recovery consensus keeps stable numeric reads, rejects stable alphabetic
+  confusables, and routes numeric/alphabetic conflicts or unresolved reads to
+  explicit review candidates instead of silently dropping them.
+- Context OCR is limited to at most 48 exclusion-prone values and affects only
+  filtering; it never replaces the candidate's recognized technical value.
 - Whole-page eligibility rules are isolated in
   `backend/page_value_filters.py`; enabled never-balloon exclusions run before
   the numeric-component requirement.
@@ -150,7 +158,8 @@ identify the offending balloon and block final output once the edit is saved.
   cluster refinement stages.
 - Confirm the temporary overlay shows red table masks, blue pending panels,
   one bright-green active panel, muted completed panels, amber overlap, neutral
-  detections, green eligible values, orange exclusions, and grey unread values.
+  detections, purple recovering values, green eligible values, orange
+  exclusions, and grey review values.
   It must stay aligned at every zoom, disappear after success, and remain with
   a Dismiss action after failure.
 - Confirm neighbouring atomic boxes are never merged; only similar-size,
@@ -167,15 +176,26 @@ identify the offending balloon and block final output once the edit is saved.
 - Confirm cross-tile deduplication removes repeated overlap views only when the
   boxes have similar position and size. A large containing box and its smaller
   child objects must all survive for review.
-- Confirm recognition reports `Batch N/M` and uses the `batch_recognition`
-  profile with an initial batch size of 16. Standalone orientation and
-  recognition receive crop lists; the complete PaddleOCR pipeline, prefix OCR,
-  consensus variants, text-bbox fallback, and angle completion remain disabled.
+- Confirm primary recognition reports `Batch N/M` and uses the
+  `batch_recognition` profile with a batch size of 16. Only empty, no-digit,
+  low-confidence, corrected-confusable, suspicious single-character, or
+  orientation-uncertain candidates enter recovery. Recovery is capped at 96
+  objects and two variants each; standalone orientation and recognition receive
+  crop lists, and the complete PaddleOCR pipeline is never called per object.
+- Confirm angled detections are rectified from their detector polygons and the
+  second recovery variant uses a proportionally expanded, alternate-preprocessed
+  crop. Valid values such as `R5.00`, `R1.50`, and angular tolerances must become
+  either balloons or visible review boxes, never silently disappear.
 - Confirm the completion banner reports detected, recognized, eligible,
-  excluded, and unread counts, with
-  `detected = eligible + excluded + unread` and
-  `recognized = eligible + excluded`. Unread detections remain diagnostic and
-  must not create balloons in whole-page mode.
+  excluded, review-required, and unread counts, with
+  `detected = eligible + excluded + review-required`. Unread is a diagnostic
+  subset based on whether any OCR text was recovered; it is not a fourth final
+  state.
+- Confirm unresolved objects remain as grey dashed, clickable boxes after the
+  processing overlay disappears. **OK** creates a normal balloon and removes
+  the review box; **Ignore** removes it without creating data; **Cancel** leaves
+  it available. Review boxes must not appear in saved projects or exports until
+  accepted.
 - Confirm whole-page filtering accepts values such as `50`, `.25`, `M8`,
   `SS304`, `R0.2 MAX`, and standalone `2:1` without requiring units, leaders,
   arrows, or other geometry. Pure text must be excluded.
@@ -210,8 +230,9 @@ worst-case drawing and maximum page resolution; **5 minutes or less** is the
 preferred target. Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
 automatic cancellation timeout. For whole-page runs record total time plus
-layout analysis, masked panel detection, atomic deduplication, batched
-recognition, filtering, and finalization time so the next optimization targets measured work. The
+layout analysis, masked panel detection, atomic deduplication, primary batched
+recognition, bounded recovery, filter-context recognition, filtering, and
+finalization time so the next optimization targets measured work. The
 section-only morphology and refinement timings are not part of this route.
 
 Frontend job cancellation remains queued after this detection correction and

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from detection_passes import DetectionTile
 from page_scan import (
+    assign_candidate_ids,
     deduplicate_page_candidates,
     map_tile_candidate,
     strict_same_object,
@@ -91,3 +92,24 @@ def test_same_tile_orientation_duplicates_are_removed() -> None:
 
     assert zero_degree is not None and ninety_degree is not None
     assert len(deduplicate_page_candidates([zero_degree, ninety_degree])) == 1
+
+
+def test_page_candidate_keeps_polygon_and_receives_stable_id() -> None:
+    tile = DetectionTile(x=100, y=50, width=300, height=200)
+    candidate = map_tile_candidate(
+        {"x": 20, "y": 30, "width": 42, "height": 18},
+        tile,
+        tile_index=1,
+        page_size=(600, 400),
+        polygon=[[20, 32], [60, 30], [62, 46], [22, 48]],
+    )
+
+    assert candidate is not None
+    assert candidate.polygon == (
+        (120.0, 82.0),
+        (160.0, 80.0),
+        (162.0, 96.0),
+        (122.0, 98.0),
+    )
+    [identified] = assign_candidate_ids([candidate])
+    assert identified.candidate_id == "C0001"

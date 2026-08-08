@@ -129,6 +129,28 @@ def test_every_quarter_turn_maps_back_to_the_original_box() -> None:
     )
 
 
+def test_quarter_turn_mapping_preserves_detector_polygon() -> None:
+    mapped = map_quarter_turn_box_to_source(
+        {
+            "x": 25,
+            "y": 10,
+            "w": 15,
+            "h": 30,
+            "polygon": [[25, 10], [40, 10], [40, 40], [25, 40]],
+        },
+        90,
+        (100, 60),
+    )
+
+    assert mapped is not None
+    assert mapped["polygon"] == [
+        [10.0, 35.0],
+        [10.0, 20.0],
+        [40.0, 20.0],
+        [40.0, 35.0],
+    ]
+
+
 def test_deskew_mapping_is_identity_at_zero_and_clips_to_source() -> None:
     identity = map_deskewed_box_to_original(
         {"x": 12, "y": 8, "w": 30, "h": 10},
@@ -185,9 +207,23 @@ def test_detector_only_scale_and_padding_keep_low_confidence() -> None:
     def fake_detector(image: Image.Image):
         # (100 x 50) + 24px padding on each side, then exactly 5x upscale.
         assert image.size == (740, 490)
-        return [(170.0, 145.0, 100.0, 50.0, 0.03)]
+        return [
+            {
+                "x": 170.0,
+                "y": 145.0,
+                "width": 100.0,
+                "height": 50.0,
+                "confidence": 0.03,
+                "polygon": [
+                    [170.0, 145.0],
+                    [270.0, 145.0],
+                    [270.0, 195.0],
+                    [170.0, 195.0],
+                ],
+            }
+        ]
 
-    pipeline._run_text_detector = fake_detector
+    pipeline._run_text_detector_regions = fake_detector
     boxes = pipeline._detector_only_boxes(
         Image.new("RGB", (100, 50), "white"),
         target_long_edge=740,
@@ -196,6 +232,12 @@ def test_detector_only_scale_and_padding_keep_low_confidence() -> None:
     assert len(boxes) == 1
     _assert_box(boxes[0], (10.0, 5.0, 20.0, 10.0))
     assert boxes[0]["conf"] == 0.03
+    assert boxes[0]["polygon"] == [
+        [10.0, 5.0],
+        [30.0, 5.0],
+        [30.0, 15.0],
+        [10.0, 15.0],
+    ]
 
 
 def test_detector_only_input_downscales_a_large_page_to_the_budget() -> None:
@@ -207,7 +249,7 @@ def test_detector_only_input_downscales_a_large_page_to_the_budget() -> None:
         received_sizes.append(image.size)
         return []
 
-    pipeline._run_text_detector = fake_detector
+    pipeline._run_text_detector_regions = fake_detector
     pipeline._detector_only_boxes(
         Image.new("RGB", (4200, 2400), "white"),
         target_long_edge=DETECTION_PRIMARY_MAX_EDGE,

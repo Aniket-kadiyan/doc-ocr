@@ -20,9 +20,11 @@ const panelColor: Record<ScanOverlayPanelState, string> = {
 
 const candidateColor: Record<ScanOverlayCandidateState, string> = {
   detected: "#475569",
+  recovering: "#7c3aed",
   eligible: "#16a34a",
   excluded: "#f97316",
   unread: "#94a3b8",
+  review: "#64748b",
 };
 
 /**
@@ -85,7 +87,7 @@ export function ScanDebugOverlay({ overlay, scale }: ScanDebugOverlayProps) {
         const color = candidateColor[candidate.state];
         return (
           <Rect
-            key={`scan-candidate-${index}`}
+            key={candidate.id ?? `scan-candidate-${index}`}
             x={candidate.bbox.x}
             y={candidate.bbox.y}
             width={candidate.bbox.width}

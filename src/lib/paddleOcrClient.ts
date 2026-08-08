@@ -118,6 +118,8 @@ interface ApiRecognizeResponse {
 }
 
 export interface SegmentRegion {
+  /** Stable backend identity for a deduplicated whole-page detector object. */
+  candidateId?: string;
   text: string;
   confidence: number;
   type?: string;
@@ -130,11 +132,16 @@ export interface SegmentRegion {
   pageFilterRule?: string;
   /** Human-readable whole-page acceptance reason. */
   pageFilterReason?: string;
+  /** Why this detected object needs manual confirmation. */
+  reviewReason?: string;
+  /** True when bounded post-detection recovery was attempted. */
+  recoveryAttempted?: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
 }
 
 export interface ApiSegmentRegion {
+  candidate_id?: string;
   bbox: { x: number; y: number; width: number; height: number };
   text: string;
   confidence: number;
@@ -145,6 +152,8 @@ export interface ApiSegmentRegion {
   recognized?: boolean;
   page_filter_rule?: string;
   page_filter_reason?: string;
+  review_reason?: string;
+  recovery_attempted?: boolean;
 }
 
 export interface ApiSegmentResponse {
@@ -153,14 +162,25 @@ export interface ApiSegmentResponse {
   recognized_count?: number;
   eligible_count?: number;
   excluded_count?: number;
+  review_count?: number;
   unread_count?: number;
   filter_rule_counts?: Record<string, number>;
   coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];
+  review_candidates?: ApiSegmentRegion[];
+  candidate_outcomes?: Array<{
+    candidate_id?: string;
+    bbox: BBox;
+    state: "eligible" | "excluded" | "review";
+    text?: string;
+    reason?: string;
+    rule?: string;
+  }>;
 }
 
 function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
   return {
+    candidateId: r.candidate_id,
     text: fixEngineeringSymbols(r.text ?? ""),
     confidence: r.confidence ?? 0,
     type: r.type,
@@ -170,6 +190,8 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
     pageFilterRule: r.page_filter_rule,
     pageFilterReason: r.page_filter_reason,
+    reviewReason: r.review_reason,
+    recoveryAttempted: r.recovery_attempted,
     valueBox,
   };
 }

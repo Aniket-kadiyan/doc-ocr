@@ -51,6 +51,28 @@ def _box_to_rect(box: Any) -> tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
 
 
+def _box_to_polygon(box: Any) -> list[list[float]]:
+    """Return detector geometry without collapsing an angled quadrilateral."""
+
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        if all(isinstance(value, Real) for value in box):
+            x0, y0, x1, y1 = map(float, box)
+            return [
+                [x0, y0],
+                [x1, y0],
+                [x1, y1],
+                [x0, y1],
+            ]
+
+    return [
+        [float(point[0]), float(point[1])]
+        for point in box
+        if _is_point_pair(point)
+    ]
+
+
 def _parse_recognition(rec: Any) -> tuple[str, float]:
     if isinstance(rec, (list, tuple)):
         if len(rec) == 0:
@@ -230,10 +252,8 @@ def extract_paddle_lines(
     return list(_walk_result(result))
 
 
-def _walk_detection_result(
-    obj: Any,
-) -> Iterator[tuple[float, float, float, float, float]]:
-    """Walk standalone PaddleOCR ``TextDetection`` result objects."""
+def _walk_detection_regions(obj: Any) -> Iterator[dict[str, Any]]:
+    """Walk standalone detector output while preserving every polygon."""
 
     obj = _unwrap_result(obj)
     if obj is None:
@@ -248,19 +268,41 @@ def _walk_detection_result(
             x, y, width, height = _box_to_rect(polygon)
             score = float(scores[index]) if index < len(scores) else 0.0
             if width > 0 and height > 0:
-                yield x, y, width, height, score
+                yield {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "confidence": score,
+                    "polygon": _box_to_polygon(polygon),
+                }
         return
 
     if hasattr(obj, "tolist"):
         obj = obj.tolist()
     if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
         for child in obj:
-            yield from _walk_detection_result(child)
+            yield from _walk_detection_regions(child)
+
+
+def extract_paddle_detection_regions(result: Any) -> list[dict[str, Any]]:
+    """Return detector boxes and their original quadrilateral geometry."""
+
+    return list(_walk_detection_regions(result))
 
 
 def extract_paddle_detection_boxes(
     result: Any,
 ) -> list[tuple[float, float, float, float, float]]:
-    """Return detector-only ``(x, y, width, height, confidence)`` boxes."""
+    """Compatibility view of detector-only axis-aligned boxes."""
 
-    return list(_walk_detection_result(result))
+    return [
+        (
+            float(region["x"]),
+            float(region["y"]),
+            float(region["width"]),
+            float(region["height"]),
+            float(region["confidence"]),
+        )
+        for region in extract_paddle_detection_regions(result)
+    ]

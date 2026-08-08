@@ -19,11 +19,13 @@ from image_preprocess import (
     prepare_primary_ocr_variant,
     prepare_ocr_variants,
     primary_oriented,
+    sharpen_rgb,
     upscale_min_edge,
     clahe_rgb,
 )
 from paddle_parse import (
     extract_paddle_detection_boxes,
+    extract_paddle_detection_regions,
     extract_paddle_lines,
     extract_text_orientation_result,
     extract_text_recognition_result,
@@ -290,6 +292,22 @@ class OcrPipeline:
             ) from exc
         return extract_paddle_detection_boxes(result)
 
+    def _run_text_detector_regions(
+        self,
+        image: Image.Image,
+    ) -> list[dict[str, Any]]:
+        """Return standalone detector boxes with their source polygons."""
+
+        if not self._text_detector_available or self._text_detector is None:
+            raise RuntimeError("The standalone PaddleOCR text detector is unavailable")
+        try:
+            result = self._predict_text_detector(np.asarray(image.convert("RGB")))
+        except Exception as exc:
+            raise RuntimeError(
+                f"PaddleOCR {self._paddle_version} detector-only inference failed: {exc}"
+            ) from exc
+        return extract_paddle_detection_regions(result)
+
     @staticmethod
     def _module_inputs(images: list[Image.Image]) -> list[np.ndarray]:
         return [np.asarray(image.convert("RGB")) for image in images]
@@ -365,6 +383,7 @@ class OcrPipeline:
         crops: list[Image.Image],
         *,
         batch_size: int,
+        profile: str = "batch_recognition",
     ) -> list[dict[str, Any]]:
         """Orient and recognize a crop batch without running text detection."""
 
@@ -379,7 +398,15 @@ class OcrPipeline:
 
         from dimension_digits import correct_numeric_confusables
 
-        prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
+        if profile == "recovery_expanded_sharp":
+            prepared = [
+                sharpen_rgb(
+                    primary_oriented(upscale_min_edge(pad_image(crop)))
+                )
+                for crop in crops
+            ]
+        else:
+            prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
         orientations = self._predict_text_orientations(
             prepared,
             batch_size=batch_size,
@@ -414,6 +441,7 @@ class OcrPipeline:
                     "text": text,
                     "raw_ocr": raw_text,
                     "confidence": float(confidence),
+                    "confusable_corrected": bool(corrected),
                     "agreement": 1.0 if text else 0.0,
                     "needs_review": bool(
                         text
@@ -434,7 +462,7 @@ class OcrPipeline:
                     "symbols_detected": symbols_to_dict(text_hints),
                     "orientation_correction": degrees,
                     "orientation_confidence": float(orientation_score),
-                    "ocr_profile": "batch_recognition",
+                    "ocr_profile": profile,
                 }
             )
         return results
@@ -1176,38 +1204,59 @@ class OcrPipeline:
             factor = 1.0
             detector_input = padded
 
-        detections: list[tuple[float, float, float, float, float, str]] = []
+        detections: list[dict[str, Any]] = []
         if getattr(self, "_text_detector_available", False):
             detections = [
-                (x, y, width, height, confidence, "")
-                for x, y, width, height, confidence in self._run_text_detector(
-                    detector_input
-                )
+                {**region, "text": ""}
+                for region in self._run_text_detector_regions(detector_input)
             ]
         else:
             _, _, words = self._run_paddle(detector_input, det=True)
             detections = [
-                (
-                    float(word["x"]),
-                    float(word["y"]),
-                    float(word["width"]),
-                    float(word["height"]),
-                    float(word.get("confidence", 0.0)),
-                    str(word.get("text", "")),
-                )
+                {
+                    "x": float(word["x"]),
+                    "y": float(word["y"]),
+                    "width": float(word["width"]),
+                    "height": float(word["height"]),
+                    "confidence": float(word.get("confidence", 0.0)),
+                    "text": str(word.get("text", "")),
+                    "polygon": [
+                        [float(word["x"]), float(word["y"])],
+                        [
+                            float(word["x"]) + float(word["width"]),
+                            float(word["y"]),
+                        ],
+                        [
+                            float(word["x"]) + float(word["width"]),
+                            float(word["y"]) + float(word["height"]),
+                        ],
+                        [
+                            float(word["x"]),
+                            float(word["y"]) + float(word["height"]),
+                        ],
+                    ],
+                }
                 for word in words
             ]
 
         return [
             {
-                "x": x / factor - pad,
-                "y": y / factor - pad,
-                "w": width / factor,
-                "h": height / factor,
-                "text": text,
-                "conf": confidence,
+                "x": float(region["x"]) / factor - pad,
+                "y": float(region["y"]) / factor - pad,
+                "w": float(region["width"]) / factor,
+                "h": float(region["height"]) / factor,
+                "text": str(region.get("text", "")),
+                "conf": float(region.get("confidence", 0.0)),
+                "polygon": [
+                    [
+                        float(point[0]) / factor - pad,
+                        float(point[1]) / factor - pad,
+                    ]
+                    for point in region.get("polygon", [])
+                    if isinstance(point, (list, tuple)) and len(point) >= 2
+                ],
             }
-            for x, y, width, height, confidence, text in detections
+            for region in detections
         ]
 
     def _paddle_det_boxes(
@@ -2051,7 +2100,9 @@ class OcrPipeline:
         Section scanning intentionally remains in :meth:`segment`.  This page
         path runs only standalone detection (0/90 degrees) on adaptive panels,
         deduplicates atomic boxes without grouping neighbours, recognizes crops
-        in standalone model batches, then applies ``page_value_filters.py``.
+        in standalone model batches, performs bounded recognition-only recovery,
+        then applies ``page_value_filters.py`` and publishes unresolved objects
+        as explicit review candidates.
         """
 
         from collections import Counter
@@ -2075,10 +2126,26 @@ class OcrPipeline:
             PAGE_SCAN_MAX_TILES,
             PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             PAGE_SCAN_ROTATIONS_CW,
+            assign_candidate_ids,
             deduplicate_page_candidates,
             map_tile_candidate,
         )
-        from page_value_filters import PageValueCandidate, evaluate_page_value
+        from page_candidate_recovery import (
+            CONTEXT_MAX_CANDIDATES,
+            RECOVERY_MAX_CANDIDATES,
+            RECOVERY_VARIANTS_PER_CANDIDATE,
+            build_context_crop,
+            build_recovery_crops,
+            reconstruct_line_context,
+            resolve_recovery_consensus,
+            result_needs_recovery,
+            select_recovery_record_indexes,
+        )
+        from page_value_filters import (
+            PageValueCandidate,
+            evaluate_page_value,
+            needs_expanded_filter_context,
+        )
 
         def report(
             *,
@@ -2258,6 +2325,7 @@ class OcrPipeline:
                         ),
                         pass_index=detector_pass_index,
                         rotation_cw=rotation_cw,
+                        polygon=restored.get("polygon"),
                     )
                     if mapped is not None:
                         page_candidates.append(mapped)
@@ -2327,10 +2395,13 @@ class OcrPipeline:
             operation_label="Atomic candidate deduplication",
             candidate_count=len(page_candidates),
         )
-        final_candidates = deduplicate_page_candidates(page_candidates)
+        final_candidates = assign_candidate_ids(
+            deduplicate_page_candidates(page_candidates)
+        )
         duplicates_removed = len(page_candidates) - len(final_candidates)
         neutral_overlay_candidates = [
             {
+                "id": candidate.candidate_id,
                 "bbox": dict(candidate.bbox),
                 "state": "detected",
             }
@@ -2361,7 +2432,7 @@ class OcrPipeline:
         margin = 6
         page_width, page_height = page_size
         detected_count = len(final_candidates)
-        recognized_count = 0
+        primary_recognized_count = 0
         ocr_records: list[dict[str, Any]] = []
         candidate_crops: list[Image.Image] = []
         for candidate in final_candidates:
@@ -2382,7 +2453,7 @@ class OcrPipeline:
                 else Image.new("RGB", (1, 1), (255, 255, 255))
             )
 
-        batch_total = (
+        primary_batch_total = (
             (detected_count + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
             // PAGE_SCAN_RECOGNITION_BATCH_SIZE
         )
@@ -2397,20 +2468,25 @@ class OcrPipeline:
             report(
                 stage="recognizing",
                 message=(
-                    f"Recognition batch {batch_index} of {batch_total} "
-                    f"({batch_start + 1}–{batch_end} of {detected_count} objects)"
+                    f"Primary recognition batch {batch_index} of "
+                    f"{primary_batch_total} ({batch_start + 1}–{batch_end} "
+                    f"of {detected_count} objects)"
                 ),
                 percent=(
-                    60
+                    59
                     + int(
-                        30 * (batch_index - 1) / max(batch_total, 1)
+                        17
+                        * (batch_index - 1)
+                        / max(primary_batch_total, 1)
                     )
                 ),
                 completed=batch_index - 1,
-                total=batch_total,
+                total=primary_batch_total,
                 batch_current=batch_index,
-                batch_total=batch_total,
-                operation_label=f"Recognition batch {batch_index}/{batch_total}",
+                batch_total=primary_batch_total,
+                operation_label=(
+                    f"Primary recognition {batch_index}/{primary_batch_total}"
+                ),
                 candidate_count=detected_count,
                 overlay=layout.overlay(
                     scope_kind="page",
@@ -2431,71 +2507,319 @@ class OcrPipeline:
                 batch_results,
             ):
                 text = str(result.get("text") or "").strip()
-                recognized = bool(text)
-                if recognized:
-                    recognized_count += 1
+                if text:
+                    primary_recognized_count += 1
                 ocr_records.append(
                     {
                         "candidate": candidate,
+                        "candidate_id": candidate.candidate_id,
                         "bbox": candidate.bbox,
+                        "polygon": [list(point) for point in candidate.polygon],
                         "text": text,
                         "result": result,
-                        "recognized": recognized,
+                        "recognized": bool(text),
+                        "context_text": "",
                     }
                 )
             report(
                 stage="recognizing",
                 message=(
-                    f"Completed recognition batch {batch_index} of "
-                    f"{batch_total}; recognized {recognized_count}"
+                    f"Completed primary batch {batch_index} of "
+                    f"{primary_batch_total}; read {primary_recognized_count}"
                 ),
                 percent=(
-                    60 + int(30 * batch_index / max(batch_total, 1))
+                    59
+                    + int(
+                        17 * batch_index / max(primary_batch_total, 1)
+                    )
                 ),
                 completed=batch_index,
-                total=batch_total,
+                total=primary_batch_total,
                 batch_current=batch_index,
-                batch_total=batch_total,
-                operation_label=f"Recognition batch {batch_index}/{batch_total}",
+                batch_total=primary_batch_total,
+                operation_label=(
+                    f"Primary recognition {batch_index}/{primary_batch_total}"
+                ),
                 candidate_count=detected_count,
             )
 
-        unread_count = detected_count - recognized_count
-        recognized_values = [
+        selected_recovery_indexes = select_recovery_record_indexes(
+            ocr_records,
+            maximum=RECOVERY_MAX_CANDIDATES,
+        )
+        selected_recovery_set = set(selected_recovery_indexes)
+        all_doubtful_indexes = {
+            index
+            for index, record in enumerate(ocr_records)
+            if result_needs_recovery(record["result"])
+        }
+        budget_exhausted_indexes = (
+            all_doubtful_indexes - selected_recovery_set
+        )
+        recovery_attempts: dict[int, list[dict[str, Any]]] = {
+            index: [] for index in selected_recovery_indexes
+        }
+        recovery_crops = {
+            index: build_recovery_crops(
+                image,
+                ocr_records[index]["bbox"],
+                ocr_records[index]["polygon"],
+            )
+            for index in selected_recovery_indexes
+        }
+        recovery_overlay_candidates = [
+            {
+                "id": record["candidate_id"],
+                "bbox": dict(record["bbox"]),
+                "state": (
+                    "recovering"
+                    if index in selected_recovery_set
+                    else "detected"
+                ),
+                "text": record["text"],
+            }
+            for index, record in enumerate(ocr_records)
+        ]
+        recovery_batches_per_variant = (
+            (
+                len(selected_recovery_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        recovery_batch_total = (
+            recovery_batches_per_variant * RECOVERY_VARIANTS_PER_CANDIDATE
+        )
+        recovery_batch_index = 0
+        for variant_index in range(RECOVERY_VARIANTS_PER_CANDIDATE):
+            for batch_start in range(
+                0,
+                len(selected_recovery_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ):
+                recovery_batch_index += 1
+                batch_indexes = selected_recovery_indexes[
+                    batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                ]
+                batch_profile = recovery_crops[batch_indexes[0]][
+                    variant_index
+                ].profile
+                report(
+                    stage="recovering",
+                    message=(
+                        f"Recovery batch {recovery_batch_index} of "
+                        f"{recovery_batch_total}: {batch_profile.replace('_', ' ')}"
+                    ),
+                    percent=(
+                        77
+                        + int(
+                            12
+                            * (recovery_batch_index - 1)
+                            / max(recovery_batch_total, 1)
+                        )
+                    ),
+                    completed=recovery_batch_index - 1,
+                    total=recovery_batch_total,
+                    batch_current=recovery_batch_index,
+                    batch_total=recovery_batch_total,
+                    operation_label=(
+                        f"Recovery {recovery_batch_index}/{recovery_batch_total}"
+                    ),
+                    candidate_count=len(selected_recovery_indexes),
+                    overlay=layout.overlay(
+                        scope_kind="page",
+                        panel_states=panel_states,
+                        candidates=recovery_overlay_candidates,
+                    ),
+                )
+                results = self._recognize_page_batch(
+                    [
+                        recovery_crops[index][variant_index].image
+                        for index in batch_indexes
+                    ],
+                    batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                    profile=batch_profile,
+                )
+                if len(results) != len(batch_indexes):
+                    raise RuntimeError(
+                        "Page recovery batch returned an unexpected result count"
+                    )
+                for record_index, result in zip(batch_indexes, results):
+                    recovery_attempts[record_index].append(result)
+                report(
+                    stage="recovering",
+                    message=(
+                        f"Completed recovery batch {recovery_batch_index} of "
+                        f"{recovery_batch_total}"
+                    ),
+                    percent=(
+                        77
+                        + int(
+                            12
+                            * recovery_batch_index
+                            / max(recovery_batch_total, 1)
+                        )
+                    ),
+                    completed=recovery_batch_index,
+                    total=recovery_batch_total,
+                    batch_current=recovery_batch_index,
+                    batch_total=recovery_batch_total,
+                    operation_label=(
+                        f"Recovery {recovery_batch_index}/{recovery_batch_total}"
+                    ),
+                    candidate_count=len(selected_recovery_indexes),
+                )
+
+        for index, record in enumerate(ocr_records):
+            resolved = resolve_recovery_consensus(
+                record["result"],
+                recovery_attempts.get(index, ()),
+                attempted=index in selected_recovery_set,
+                budget_exhausted=index in budget_exhausted_indexes,
+            )
+            record["result"] = resolved
+            record["text"] = str(resolved.get("text") or "").strip()
+            record["recognized"] = bool(record["text"])
+
+        context_indexes = [
+            index
+            for index, record in enumerate(ocr_records)
+            if record["recognized"]
+            and needs_expanded_filter_context(
+                record["text"],
+                record["bbox"],
+            )
+        ]
+        for index in context_indexes:
+            ocr_records[index]["context_text"] = reconstruct_line_context(
+                ocr_records[index],
+                ocr_records,
+            )
+        context_ocr_indexes = context_indexes[:CONTEXT_MAX_CANDIDATES]
+        context_batch_total = (
+            (
+                len(context_ocr_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        for context_batch_index, batch_start in enumerate(
+            range(
+                0,
+                len(context_ocr_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ),
+            start=1,
+        ):
+            batch_indexes = context_ocr_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            report(
+                stage="context",
+                message=(
+                    f"Context batch {context_batch_index} of "
+                    f"{context_batch_total} for exclusion-prone values"
+                ),
+                percent=(
+                    90
+                    + int(
+                        4
+                        * (context_batch_index - 1)
+                        / max(context_batch_total, 1)
+                    )
+                ),
+                completed=context_batch_index - 1,
+                total=context_batch_total,
+                batch_current=context_batch_index,
+                batch_total=context_batch_total,
+                operation_label=(
+                    f"Filter context {context_batch_index}/{context_batch_total}"
+                ),
+                candidate_count=len(context_ocr_indexes),
+            )
+            results = self._recognize_page_batch(
+                [
+                    build_context_crop(image, ocr_records[index]["bbox"])
+                    for index in batch_indexes
+                ],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile="context_recognition",
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page context batch returned an unexpected result count"
+                )
+            for record_index, context_result in zip(batch_indexes, results):
+                parts = [
+                    ocr_records[record_index]["context_text"],
+                    str(context_result.get("raw_ocr") or "").strip(),
+                    str(context_result.get("text") or "").strip(),
+                ]
+                ocr_records[record_index]["context_text"] = " ".join(
+                    dict.fromkeys(part for part in parts if part)
+                )
+            report(
+                stage="context",
+                message=(
+                    f"Completed context batch {context_batch_index} of "
+                    f"{context_batch_total}"
+                ),
+                percent=(
+                    90
+                    + int(
+                        4
+                        * context_batch_index
+                        / max(context_batch_total, 1)
+                    )
+                ),
+                completed=context_batch_index,
+                total=context_batch_total,
+                batch_current=context_batch_index,
+                batch_total=context_batch_total,
+                operation_label=(
+                    f"Filter context {context_batch_index}/{context_batch_total}"
+                ),
+                candidate_count=len(context_ocr_indexes),
+            )
+
+        filter_candidates = [
             PageValueCandidate(
                 text=record["text"],
                 bbox=record["bbox"],
+                context_text=record["context_text"],
             )
             for record in ocr_records
-            if record["recognized"]
         ]
+        table_masks = [mask.to_dict() for mask in layout.table_masks]
         filter_rule_counts: Counter[str] = Counter()
         regions: list[dict[str, Any]] = []
+        review_candidates: list[dict[str, Any]] = []
+        candidate_outcomes: list[dict[str, Any]] = []
         filtered_overlay_candidates: list[dict[str, object]] = []
-        recognized_index = 0
-        for filter_index, record in enumerate(ocr_records, start=1):
-            if not record["recognized"]:
-                filter_rule_counts["unread"] += 1
-                filtered_overlay_candidates.append(
-                    {
-                        "bbox": dict(record["bbox"]),
-                        "state": "unread",
-                        "reason": "Recognition returned no text",
-                    }
-                )
-                continue
+        hard_exclusion_rules = {
+            "table_region",
+            "detail_view_section",
+            "scale_information",
+            "date",
+            "revision_history",
+            "document_metadata",
+        }
 
-            filter_candidate = recognized_values[recognized_index]
-            recognized_index += 1
+        for filter_index, (record, filter_candidate) in enumerate(
+            zip(ocr_records, filter_candidates),
+            start=1,
+        ):
             report(
                 stage="filtering",
                 message=(
-                    f"Applying whole-page value filters to object "
-                    f"{filter_index} of {detected_count}"
+                    f"Resolving final state for object {filter_index} of "
+                    f"{detected_count}"
                 ),
                 percent=(
-                    91
-                    + int(7 * filter_index / max(detected_count, 1))
+                    95
+                    + int(3 * filter_index / max(detected_count, 1))
                 ),
                 completed=filter_index,
                 total=detected_count,
@@ -2506,60 +2830,112 @@ class OcrPipeline:
             )
             decision = evaluate_page_value(
                 filter_candidate,
-                page_candidates=recognized_values,
-                table_masks=[
-                    mask.to_dict() for mask in layout.table_masks
-                ],
+                page_candidates=filter_candidates,
+                table_masks=table_masks,
             )
-            filter_rule_counts[decision.rule_name] += 1
-            filtered_overlay_candidates.append(
-                {
-                    "bbox": dict(record["bbox"]),
-                    "state": "eligible" if decision.accepted else "excluded",
-                    "text": record["text"],
-                    "reason": decision.reason,
-                    "rule": decision.rule_name,
-                }
-            )
-            if not decision.accepted:
-                continue
+            if not record["recognized"] and decision.rule_name != "table_region":
+                filter_rule_counts["unread"] += 1
+            else:
+                filter_rule_counts[decision.rule_name] += 1
 
             candidate = record["candidate"]
             result = record["result"]
-            regions.append(
+            review_reason = str(result.get("review_reason") or "").strip()
+            if decision.rule_name in hard_exclusion_rules:
+                final_state = "excluded"
+                final_reason = decision.reason
+            elif not decision.accepted:
+                if (
+                    decision.rule_name == "no_numeric_component"
+                    and (
+                        result.get("stable_alpha")
+                        or not result.get("needs_review", False)
+                    )
+                ):
+                    final_state = "excluded"
+                    final_reason = decision.reason
+                else:
+                    final_state = "review"
+                    final_reason = review_reason or (
+                        "The detected object could not be read confidently"
+                    )
+            elif result.get("needs_review", False) or candidate.boundary_review:
+                final_state = "review"
+                final_reason = review_reason or (
+                    "Detector geometry touches a processing-panel boundary"
+                )
+            else:
+                final_state = "eligible"
+                final_reason = decision.reason
+
+            common_region = {
+                "candidate_id": record["candidate_id"],
+                "bbox": record["bbox"],
+                "text": record["text"],
+                "confidence": result.get("confidence", 0.0),
+                "type": result.get("type"),
+                "orientation": result.get("orientation", "horizontal"),
+                "rotation": result.get("rotation", 0),
+                "needs_review": final_state == "review",
+                "recognized": record["recognized"],
+                "boundary_review": candidate.boundary_review,
+                "agreement": result.get("agreement", 0.0),
+                "engine": result.get("engine", "paddleocr"),
+                "symbols_detected": result.get("symbols_detected"),
+                "ocr_profile": result.get("ocr_profile", "batch_recognition"),
+                "page_filter_rule": decision.rule_name,
+                "page_filter_reason": decision.reason,
+                "review_reason": final_reason if final_state == "review" else "",
+                "recovery_attempted": bool(result.get("recovery_attempted")),
+            }
+            if final_state == "eligible":
+                regions.append(common_region)
+            elif final_state == "review":
+                review_candidates.append(common_region)
+
+            outcome = {
+                "candidate_id": record["candidate_id"],
+                "bbox": dict(record["bbox"]),
+                "polygon": [list(point) for point in candidate.polygon],
+                "state": final_state,
+                "text": record["text"],
+                "confidence": float(result.get("confidence") or 0.0),
+                "recognized": record["recognized"],
+                "reason": final_reason,
+                "rule": decision.rule_name,
+                "recovery_attempted": bool(result.get("recovery_attempted")),
+            }
+            candidate_outcomes.append(outcome)
+            filtered_overlay_candidates.append(
                 {
-                    "bbox": record["bbox"],
+                    "id": record["candidate_id"],
+                    "bbox": dict(record["bbox"]),
+                    "state": final_state,
                     "text": record["text"],
-                    "confidence": result.get("confidence", 0.0),
-                    "type": result.get("type"),
-                    "orientation": result.get("orientation", "horizontal"),
-                    "rotation": result.get("rotation", 0),
-                    "needs_review": bool(
-                        result.get("needs_review", False)
-                        or candidate.boundary_review
-                    ),
-                    "recognized": True,
-                    "boundary_review": candidate.boundary_review,
-                    "agreement": result.get("agreement", 0.0),
-                    "engine": result.get("engine", "paddleocr"),
-                    "symbols_detected": result.get("symbols_detected"),
-                    "ocr_profile": result.get(
-                        "ocr_profile",
-                        "batch_recognition",
-                    ),
-                    "page_filter_rule": decision.rule_name,
-                    "page_filter_reason": decision.reason,
+                    "reason": final_reason,
+                    "rule": decision.rule_name,
                 }
             )
 
+        recognized_count = sum(
+            1 for record in ocr_records if record["recognized"]
+        )
+        unread_count = detected_count - recognized_count
         eligible_count = len(regions)
-        excluded_count = recognized_count - eligible_count
+        excluded_count = sum(
+            1
+            for outcome in candidate_outcomes
+            if outcome["state"] == "excluded"
+        )
+        review_count = len(review_candidates)
+        if detected_count != eligible_count + excluded_count + review_count:
+            raise AssertionError("Every detected page object must have one final state")
+
         report(
             stage="finalizing",
             message=(
-                f"Prepared {eligible_count} eligible values from "
-                f"{detected_count} detected: {excluded_count} excluded, "
-                f"{unread_count} unread"
+                f"Prepared {eligible_count} balloons from {detected_count} "
+                f"detected: {excluded_count} excluded, {review_count} review"
             ),
             percent=99,
             completed=detected_count,
@@ -2578,10 +2954,13 @@ class OcrPipeline:
             "recognized_count": recognized_count,
             "eligible_count": eligible_count,
             "excluded_count": excluded_count,
+            "review_count": review_count,
             "unread_count": unread_count,
             "duplicates_removed": duplicates_removed,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "regions": regions,
+            "review_candidates": review_candidates,
+            "candidate_outcomes": candidate_outcomes,
         }
 
     def _complete_angle_regions(

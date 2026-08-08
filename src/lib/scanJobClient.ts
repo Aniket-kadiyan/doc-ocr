@@ -36,6 +36,7 @@ interface ApiScanOverlay {
   >;
   overlaps?: BBox[];
   candidates?: Array<{
+    id?: string;
     bbox?: BBox;
     state?: ScanOverlayCandidateState;
     text?: string;
@@ -88,7 +89,9 @@ export interface ScanJobResult {
   recognized: number;
   eligible: number;
   excluded: number;
+  reviewRequired: number;
   unread: number;
+  reviewCandidates: SegmentRegion[];
   filterRuleCounts: Record<string, number>;
 }
 
@@ -118,6 +121,7 @@ function toDebugOverlay(overlay: ApiScanOverlay | null | undefined): ScanDebugOv
         Boolean(candidate.bbox)
       )
       .map((candidate) => ({
+        id: candidate.id,
         bbox: candidate.bbox,
         state: candidate.state ?? "detected",
         text: candidate.text,
@@ -266,6 +270,18 @@ export async function runScanJob({
         bbox,
         displayScale
       );
+  const reviewCandidates = snapshot.result.coordinate_space === "page"
+    ? mapPageSegmentRegions(snapshot.result.review_candidates ?? [], {
+        x: 0,
+        y: 0,
+        width: sourceCanvas.width,
+        height: sourceCanvas.height,
+      })
+    : mapSegmentRegions(
+        snapshot.result.review_candidates ?? [],
+        bbox,
+        displayScale
+      );
   const detected = snapshot.result.detected_count ?? regions.length;
   const recognized =
     snapshot.result.recognized_count ??
@@ -275,6 +291,8 @@ export async function runScanJob({
   const eligible = snapshot.result.eligible_count ?? regions.length;
   const excluded =
     snapshot.result.excluded_count ?? Math.max(0, recognized - eligible);
+  const reviewRequired =
+    snapshot.result.review_count ?? reviewCandidates.length;
   const filterRuleCounts = snapshot.result.filter_rule_counts ?? {};
 
   return {
@@ -283,7 +301,9 @@ export async function runScanJob({
     recognized,
     eligible,
     excluded,
+    reviewRequired,
     unread,
+    reviewCandidates,
     filterRuleCounts,
   };
 }

@@ -98,4 +98,26 @@ describe("scan result coordinate mapping", () => {
       height: 12,
     });
   });
+
+  it("preserves post-scan review identity and reason", () => {
+    const [mapped] = mapPageSegmentRegions(
+      [
+        {
+          candidate_id: "C0042",
+          bbox: { x: 130, y: 240, width: 50, height: 12 },
+          text: "R5.0",
+          confidence: 0.61,
+          needs_review: true,
+          review_reason: "Recovery reads did not reach a stable consensus",
+          recovery_attempted: true,
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 }
+    );
+
+    expect(mapped.candidateId).toBe("C0042");
+    expect(mapped.needsReview).toBe(true);
+    expect(mapped.reviewReason).toContain("stable consensus");
+    expect(mapped.recoveryAttempted).toBe(true);
+  });
 });

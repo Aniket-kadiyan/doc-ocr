@@ -10,6 +10,7 @@ from page_value_filters import (
     candidate_is_in_table,
     evaluate_page_value,
     evaluate_scan_value,
+    needs_expanded_filter_context,
 )
 
 
@@ -20,6 +21,7 @@ def candidate(
     y: float = 10,
     width: float = 80,
     height: float = 16,
+    context: str = "",
 ) -> PageValueCandidate:
     return PageValueCandidate(
         text=text,
@@ -29,6 +31,7 @@ def candidate(
             "width": width,
             "height": height,
         },
+        context_text=context,
     )
 
 
@@ -87,6 +90,17 @@ def test_distant_metadata_label_does_not_exclude_a_numeric_value() -> None:
     )
 
     assert decision.accepted
+
+
+def test_reconstructed_context_filters_a_split_scale_value_only() -> None:
+    value = candidate("2:1", context="DETAIL B SCALE 2:1")
+
+    decision = evaluate_page_value(value, page_candidates=(value,))
+
+    assert not decision.accepted
+    assert decision.rule_name == "detail_view_section"
+    assert needs_expanded_filter_context("2:1", value.bbox)
+    assert not needs_expanded_filter_context("50", value.bbox)
 
 
 def test_each_never_balloon_rule_can_be_disabled_in_code() -> None:

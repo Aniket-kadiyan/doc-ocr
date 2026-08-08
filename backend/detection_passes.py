@@ -494,6 +494,56 @@ def _clip_box(
     }
 
 
+def _polygon_points(box: dict[str, Any]) -> list[tuple[float, float]]:
+    polygon = box.get("polygon")
+    if not isinstance(polygon, (list, tuple)):
+        return []
+    points: list[tuple[float, float]] = []
+    for point in polygon:
+        if (
+            isinstance(point, (list, tuple))
+            and len(point) >= 2
+        ):
+            try:
+                points.append((float(point[0]), float(point[1])))
+            except (TypeError, ValueError):
+                continue
+    return points
+
+
+def _clip_polygon(
+    points: list[tuple[float, float]],
+    width: float,
+    height: float,
+) -> list[list[float]]:
+    return [
+        [
+            round(max(0.0, min(x, width)), 1),
+            round(max(0.0, min(y, height)), 1),
+        ]
+        for x, y in points
+    ]
+
+
+def _map_quarter_turn_point_to_source(
+    x: float,
+    y: float,
+    rotation_cw: int,
+    source_size: tuple[int, int],
+) -> tuple[float, float]:
+    width, height = source_size
+    rotation = rotation_cw % 360
+    if rotation == 0:
+        return x, y
+    if rotation == 90:
+        return y, height - x
+    if rotation == 180:
+        return width - x, height - y
+    if rotation == 270:
+        return width - y, x
+    raise ValueError(f"Detection rotation must be a quarter-turn, got {rotation_cw}")
+
+
 def map_quarter_turn_box_to_source(
     box: dict[str, Any],
     rotation_cw: int,
@@ -537,7 +587,27 @@ def map_quarter_turn_box_to_source(
     else:
         raise ValueError(f"Detection rotation must be a quarter-turn, got {rotation_cw}")
 
-    return _clip_box(mapped, float(width), float(height))
+    clipped = _clip_box(mapped, float(width), float(height))
+    if clipped is None:
+        return None
+
+    polygon = _polygon_points(box)
+    if polygon:
+        restored_polygon = [
+            _map_quarter_turn_point_to_source(
+                point_x,
+                point_y,
+                rotation_cw,
+                source_size,
+            )
+            for point_x, point_y in polygon
+        ]
+        clipped["polygon"] = _clip_polygon(
+            restored_polygon,
+            float(width),
+            float(height),
+        )
+    return clipped
 
 
 def map_deskewed_box_to_original(
@@ -549,7 +619,16 @@ def map_deskewed_box_to_original(
 
     width, height = source_size
     if correction_angle == 0.0:
-        return _clip_box(box, float(width), float(height))
+        clipped = _clip_box(box, float(width), float(height))
+        if clipped is not None:
+            polygon = _polygon_points(box)
+            if polygon:
+                clipped["polygon"] = _clip_polygon(
+                    polygon,
+                    float(width),
+                    float(height),
+                )
+        return clipped
 
     cx = width / 2.0
     cy = height / 2.0
@@ -580,7 +659,18 @@ def map_deskewed_box_to_original(
         "w": max(xs) - min(xs),
         "h": max(ys) - min(ys),
     }
-    return _clip_box(mapped, float(width), float(height))
+    clipped = _clip_box(mapped, float(width), float(height))
+    if clipped is None:
+        return None
+
+    polygon = _polygon_points(box)
+    if polygon:
+        clipped["polygon"] = _clip_polygon(
+            [inverse(point_x, point_y) for point_x, point_y in polygon],
+            float(width),
+            float(height),
+        )
+    return clipped
 
 
 def map_detection_box_to_original(

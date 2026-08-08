@@ -16,9 +16,11 @@ export type ScanLiveness =
 export type ScanOverlayPanelState = "pending" | "active" | "completed";
 export type ScanOverlayCandidateState =
   | "detected"
+  | "recovering"
   | "eligible"
   | "excluded"
-  | "unread";
+  | "unread"
+  | "review";
 
 export interface ScanOverlayPanel extends BBox {
   id: string;
@@ -27,6 +29,7 @@ export interface ScanOverlayPanel extends BBox {
 }
 
 export interface ScanOverlayCandidate {
+  id?: string;
   bbox: BBox;
   state: ScanOverlayCandidateState;
   text?: string;
@@ -81,6 +84,7 @@ export interface ScanCompletionSummary {
   recognized: number;
   eligible: number;
   excluded: number;
+  reviewRequired: number;
   unread: number;
   skippedExisting: number;
   skippedDuplicates: number;

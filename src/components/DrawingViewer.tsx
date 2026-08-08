@@ -44,8 +44,10 @@ import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
 import { ScanProgressBanner } from "@/components/ScanProgressBanner";
 import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
+import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
 import type { Annotation, BBox } from "@/types/annotation";
+import type { SegmentRegion } from "@/lib/paddleOcrClient";
 import type {
   ScanCompletionSummary,
   ScanDebugOverlay as ScanDebugOverlayModel,
@@ -55,6 +57,8 @@ import type {
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
+
+type PageScanReviewCandidate = SegmentRegion & { page: number };
 
 const legacyMigrationWarning = (orphanLabelCount: number) =>
   orphanLabelCount > 0
@@ -94,6 +98,9 @@ export function DrawingViewer() {
     useState<ScanDebugOverlayModel | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
+  const [scanReviewCandidates, setScanReviewCandidates] = useState<
+    PageScanReviewCandidate[]
+  >([]);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -124,6 +131,9 @@ export function DrawingViewer() {
   const pageAnnotations = annotations.filter(
     (annotation) =>
       annotation.page === currentPage && annotation.kind !== "label"
+  );
+  const pageScanReviewCandidates = scanReviewCandidates.filter(
+    (candidate) => candidate.page === currentPage
   );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
@@ -160,6 +170,11 @@ export function DrawingViewer() {
     // Overlay geometry belongs to one exact page/project and is never persisted.
     setScanOverlay(null);
   }, [currentPage, projectId]);
+
+  useEffect(() => {
+    // Review boxes are temporary scan output, never project data.
+    setScanReviewCandidates([]);
+  }, [projectId]);
 
   useEffect(() => {
     void preloadOcr();
@@ -504,38 +519,18 @@ export function DrawingViewer() {
             }
           },
         });
-        const regions = scanResult.regions;
         if (projectIdRef.current !== projectAtStart) {
           throw new Error(
             "The drawing changed while the scan was running. No balloons were added."
           );
         }
-        if (regions.length === 0) {
-          setScanOverlay(null);
-          setScanSummary({
-            scopeKind,
-            added: 0,
-            detected: scanResult.detected,
-            recognized: scanResult.recognized,
-            eligible: scanResult.eligible,
-            excluded: scanResult.excluded,
-            unread: scanResult.unread,
-            skippedExisting: 0,
-            skippedDuplicates: 0,
-          });
-          setSelectionError(
-            scopeKind === "page"
-              ? "No eligible numeric values remained after whole-page filtering."
-              : "No values were detected outside excluded table regions in the scanned area."
-          );
-          return;
-        }
 
         // Recheck against the live store immediately before the single batch
         // insertion so existing manual or edited balloons always win.
+        const liveAnnotations = useAnnotationStore.getState().annotations;
         const filtered = filterNewScanRegions(
-          regions,
-          useAnnotationStore.getState().annotations,
+          scanResult.regions,
+          liveAnnotations,
           scanPage,
           undefined,
           scopeKind
@@ -562,23 +557,35 @@ export function DrawingViewer() {
               range: deriveRange(cleanValue) || undefined,
             };
           });
-        if (newAnnotations.length === 0) {
-          setScanOverlay(null);
-          setScanSummary({
-            scopeKind,
-            added: 0,
-            detected: scanResult.detected,
-            recognized: scanResult.recognized,
-            eligible: scanResult.eligible,
-            excluded: scanResult.excluded,
-            unread: scanResult.unread,
-            skippedExisting: filtered.skippedExisting,
-            skippedDuplicates: filtered.skippedDuplicates,
-          });
-          return;
+
+        // Review candidates stay outside the annotation store. Filter them
+        // against both existing balloons and this scan's atomic insert so a
+        // resolved object is never shown again as a grey review box.
+        const reviewExisting = [...liveAnnotations, ...newAnnotations];
+        const filteredReview = filterNewScanRegions(
+          scanResult.reviewCandidates,
+          reviewExisting,
+          scanPage,
+          undefined,
+          scopeKind
+        );
+        const reviewCandidates: PageScanReviewCandidate[] =
+          filteredReview.accepted.map((candidate) => ({
+            ...candidate,
+            candidateId: `${projectAtStart}:${scanPage}:${
+              candidate.candidateId ?? uuidv4()
+            }`,
+            page: scanPage,
+          }));
+
+        if (newAnnotations.length > 0) {
+          // Atomic frontend commit: annotations become visible only here.
+          addAnnotations(newAnnotations);
         }
-        // Atomic frontend commit: annotations become visible only here.
-        addAnnotations(newAnnotations);
+        setScanReviewCandidates((current) => [
+          ...current.filter((candidate) => candidate.page !== scanPage),
+          ...reviewCandidates,
+        ]);
         setScanOverlay(null);
         setScanSummary({
           scopeKind,
@@ -587,10 +594,20 @@ export function DrawingViewer() {
           recognized: scanResult.recognized,
           eligible: scanResult.eligible,
           excluded: scanResult.excluded,
+          reviewRequired: reviewCandidates.length,
           unread: scanResult.unread,
-          skippedExisting: filtered.skippedExisting,
-          skippedDuplicates: filtered.skippedDuplicates,
+          skippedExisting:
+            filtered.skippedExisting + filteredReview.skippedExisting,
+          skippedDuplicates:
+            filtered.skippedDuplicates + filteredReview.skippedDuplicates,
         });
+        if (newAnnotations.length === 0 && reviewCandidates.length === 0) {
+          setSelectionError(
+            scopeKind === "page"
+              ? "No eligible numeric values remained after whole-page filtering."
+              : "No values were detected outside excluded table regions in the scanned area."
+          );
+        }
       } catch (err) {
         const message =
           err instanceof Error
@@ -626,6 +643,57 @@ export function DrawingViewer() {
       currentPage
     );
   }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
+  );
+
+  const openScanReviewCandidate = useCallback(
+    (candidate: PageScanReviewCandidate) => {
+      if (!candidate.candidateId) return;
+      setSelectionError(null);
+      setPending({
+        bbox: candidate.valueBox,
+        page: candidate.page,
+        source: "scan_review",
+        reviewCandidateId: candidate.candidateId,
+        reviewReason:
+          candidate.reviewReason ||
+          "Recognition remained uncertain after bounded recovery.",
+        ocrResult: {
+          text: candidate.text,
+          confidence: candidate.confidence,
+          rotation: candidate.rotation,
+          orientation: candidate.orientation,
+          words: [],
+          engine: "paddleocr",
+          agreement: undefined,
+          needsReview: true,
+          valueBox: candidate.valueBox,
+        },
+      });
+    },
+    [setPending]
+  );
+
+  const resolveScanReviewCandidate = useCallback(
+    (candidateId: string, action: "accepted" | "ignored") => {
+      const resolved = scanReviewCandidates.find(
+        (candidate) => candidate.candidateId === candidateId
+      );
+      setScanReviewCandidates((current) =>
+        current.filter((candidate) => candidate.candidateId !== candidateId)
+      );
+      if (resolved?.page === currentPage) {
+        setScanSummary((summary) =>
+          summary
+            ? {
+                ...summary,
+                reviewRequired: Math.max(0, summary.reviewRequired - 1),
+                added: summary.added + (action === "accepted" ? 1 : 0),
+              }
+            : null
+        );
+      }
+    },
+    [currentPage, scanReviewCandidates]
   );
 
   const isCompletingDraw = useRef(false);
@@ -746,7 +814,13 @@ export function DrawingViewer() {
         </div>
       )}
       {scanSummary && (
-        <div className="bg-emerald-50 px-4 py-1.5 text-center text-xs text-emerald-900">
+        <div
+          className={`px-4 py-1.5 text-center text-xs ${
+            scanSummary.reviewRequired > 0
+              ? "bg-slate-100 text-slate-900"
+              : "bg-emerald-50 text-emerald-900"
+          }`}
+        >
           {scanSummary.detected} detected
           {" · "}
           {scanSummary.recognized} recognized
@@ -754,6 +828,8 @@ export function DrawingViewer() {
           {scanSummary.eligible} eligible
           {" · "}
           {scanSummary.excluded} excluded
+          {" · "}
+          {scanSummary.reviewRequired} review required
           {" · "}
           {scanSummary.unread} unread
           {" · "}
@@ -768,6 +844,12 @@ export function DrawingViewer() {
               {scanSummary.skippedDuplicates === 1 ? "" : "s"} skipped
             </>
           )}
+        </div>
+      )}
+      {pageScanReviewCandidates.length > 0 && scanProgress === null && (
+        <div className="bg-slate-100 px-4 py-1.5 text-center text-xs text-slate-700">
+          Click a grey dashed box to correct and accept it, ignore it, or cancel
+          and leave it for later.
         </div>
       )}
       {scanProgress && <ScanProgressBanner progress={scanProgress} />}
@@ -883,6 +965,16 @@ export function DrawingViewer() {
                       <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
                     )}
 
+                    {pageScanReviewCandidates.length > 0 &&
+                      scanProgress === null && (
+                      <ScanReviewOverlay
+                        candidates={pageScanReviewCandidates}
+                        scale={scale}
+                        disabled={drawingActive || isProcessing}
+                        onSelect={openScanReviewCandidate}
+                      />
+                    )}
+
                     {pageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
@@ -948,7 +1040,7 @@ export function DrawingViewer() {
         />
       </div>
 
-      <AnnotationPopup />
+      <AnnotationPopup onReviewResolved={resolveScanReviewCandidate} />
 
       {(() => {
         const editingValue = annotations.find(
