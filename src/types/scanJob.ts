@@ -2,7 +2,13 @@ import type { BBox } from "@/types/annotation";
 
 export type ScanScopeKind = "section" | "page";
 
-export type ScanJobStatus = "queued" | "running" | "succeeded" | "failed";
+export type ScanJobStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "cancelled"
+  | "succeeded"
+  | "failed";
 
 export type ScanLiveness =
   | "queued"
@@ -10,6 +16,8 @@ export type ScanLiveness =
   | "long_running"
   | "slow_progress"
   | "possibly_stalled"
+  | "cancelling"
+  | "cancelled"
   | "complete"
   | "failed";
 

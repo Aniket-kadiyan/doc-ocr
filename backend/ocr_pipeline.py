@@ -1691,7 +1691,7 @@ class OcrPipeline:
             split_mixed_clusters,
             union_bbox,
         )
-        from segment_quality import dedupe_regions, is_segment_worthy
+        from segment_quality import dedupe_regions
 
         def report(
             *,
@@ -2022,7 +2022,7 @@ class OcrPipeline:
                 compute_text_bbox=False,  # balloon snaps to cluster union, not text_bbox
             )
             text = (res.get("text") or "").strip()
-            if not text or not is_segment_worthy(text):
+            if not text:
                 continue
 
             # Snap balloon to the full detected cluster, not a tight OCR sliver.
@@ -2078,7 +2078,24 @@ class OcrPipeline:
             total=len(regions),
             candidate_count=len(regions),
         )
-        return {"count": len(regions), "regions": regions}
+        recognized_count = len(regions)
+        return {
+            "count": recognized_count,
+            "detected_count": cluster_total,
+            "recognized_count": recognized_count,
+            "eligible_count": recognized_count,
+            "excluded_count": 0,
+            "review_count": 0,
+            "unread_count": max(0, cluster_total - recognized_count),
+            "filter_rule_counts": (
+                {"section_passthrough": recognized_count}
+                if recognized_count
+                else {}
+            ),
+            "regions": regions,
+            "review_candidates": [],
+            "candidate_outcomes": [],
+        }
 
     def segment_page(
         self,
@@ -2096,8 +2113,9 @@ class OcrPipeline:
         path runs only standalone detection (0/90 degrees) on adaptive panels,
         deduplicates atomic boxes without grouping neighbours, recognizes crops
         in standalone model batches, performs bounded recognition-only recovery,
-        then applies ``page_value_filters.py`` and publishes unresolved objects
-        as explicit review candidates.
+        applies ``page_value_filters.py`` as a cost gate, then rereads every
+        eligible/review object through the complete Draw Value OCR pipeline
+        before final filtering and publication.
         """
 
         from collections import Counter
@@ -2130,6 +2148,7 @@ class OcrPipeline:
             RECOVERY_MAX_CANDIDATES,
             build_context_crop,
             build_recovery_crops,
+            expanded_axis_crop,
             reconstruct_line_context,
             resolve_recovery_consensus,
             result_needs_recovery,
@@ -2880,20 +2899,7 @@ class OcrPipeline:
                 candidate_count=len(context_ocr_indexes),
             )
 
-        filter_candidates = [
-            PageValueCandidate(
-                text=record["text"],
-                bbox=record["bbox"],
-                context_text=record["context_text"],
-            )
-            for record in ocr_records
-        ]
         table_masks = [mask.to_dict() for mask in layout.table_masks]
-        filter_rule_counts: Counter[str] = Counter()
-        regions: list[dict[str, Any]] = []
-        review_candidates: list[dict[str, Any]] = []
-        candidate_outcomes: list[dict[str, Any]] = []
-        filtered_overlay_candidates: list[dict[str, object]] = []
         hard_exclusion_rules = {
             "table_region",
             "detail_view_section",
@@ -2903,6 +2909,189 @@ class OcrPipeline:
             "note_information",
             "document_metadata",
         }
+
+        def build_filter_candidates() -> list[PageValueCandidate]:
+            return [
+                PageValueCandidate(
+                    text=record["text"],
+                    bbox=record["bbox"],
+                    context_text=record["context_text"],
+                )
+                for record in ocr_records
+            ]
+
+        def resolve_candidate_state(
+            record: dict[str, Any],
+            decision: Any,
+            *,
+            authoritative: bool,
+        ) -> tuple[str, str]:
+            result = record["result"]
+            review_reason = str(result.get("review_reason") or "").strip()
+            if decision.rule_name in hard_exclusion_rules:
+                return "excluded", decision.reason
+            if not record["recognized"]:
+                return (
+                    "review",
+                    review_reason or "Accurate recognition returned no text",
+                )
+            if not decision.accepted:
+                if (
+                    decision.rule_name == "no_numeric_component"
+                    and (
+                        result.get("stable_alpha")
+                        or not result.get("needs_review", False)
+                    )
+                ):
+                    return "excluded", decision.reason
+                return (
+                    "review",
+                    review_reason
+                    or "The detected object could not be read as an engineering value",
+                )
+            # Full Draw Value OCR is authoritative. Its confidence/retry flag
+            # is diagnostic and must not demote a structurally valid value.
+            if not authoritative and result.get("needs_review", False):
+                return (
+                    "review",
+                    review_reason
+                    or "Recognition remains genuinely ambiguous after recovery",
+                )
+            return "eligible", decision.reason
+
+        # Keep the current fast page policy as the cost gate. Only objects that
+        # would be published or reviewed receive the expensive Draw Value OCR.
+        preliminary_filter_candidates = build_filter_candidates()
+        preliminary_decisions: list[Any] = []
+        authoritative_indexes: list[int] = []
+        for filter_index, (record, filter_candidate) in enumerate(
+            zip(ocr_records, preliminary_filter_candidates),
+            start=1,
+        ):
+            report(
+                stage="filtering",
+                message=(
+                    f"Checking page policy for object {filter_index} of "
+                    f"{detected_count}"
+                ),
+                percent=94 + int(filter_index / max(detected_count, 1)),
+                completed=filter_index,
+                total=detected_count,
+                object_current=filter_index,
+                object_total=detected_count,
+                operation_label="Preliminary page value filters",
+                candidate_count=detected_count,
+            )
+            decision = evaluate_page_value(
+                filter_candidate,
+                page_candidates=preliminary_filter_candidates,
+                table_masks=table_masks,
+            )
+            preliminary_decisions.append(decision)
+            preliminary_state, preliminary_reason = resolve_candidate_state(
+                record,
+                decision,
+                authoritative=False,
+            )
+            record["preliminary_state"] = preliminary_state
+            record["preliminary_reason"] = preliminary_reason
+            if preliminary_state != "excluded":
+                authoritative_indexes.append(filter_index - 1)
+
+        authoritative_total = len(authoritative_indexes)
+        for reread_index, record_index in enumerate(
+            authoritative_indexes,
+            start=1,
+        ):
+            record = ocr_records[record_index]
+            report(
+                stage="rereading",
+                message=(
+                    f"Reading final value {reread_index} of "
+                    f"{authoritative_total} with Draw Value OCR"
+                ),
+                percent=(
+                    95
+                    + int(
+                        3
+                        * (reread_index - 1)
+                        / max(authoritative_total, 1)
+                    )
+                ),
+                completed=reread_index - 1,
+                total=authoritative_total,
+                object_current=reread_index,
+                object_total=authoritative_total,
+                operation_label="Authoritative value OCR",
+                candidate_count=authoritative_total,
+            )
+            authoritative_crop = expanded_axis_crop(
+                image,
+                record["bbox"],
+            )
+            previous_result = record["result"]
+            accurate_result = self.recognize(
+                authoritative_crop,
+                debug_dump=debug_dump,
+                debug_dump_force=debug_dump_force,
+                compute_text_bbox=False,
+            )
+            accurate_text = normalize_page_value_text(
+                str(accurate_result.get("text") or "")
+            )
+            accurate_result["text"] = accurate_text
+            accurate_result["ocr_profile"] = "authoritative_accuracy"
+            accurate_result["authoritative_reread"] = True
+            accurate_result["recovery_attempted"] = bool(
+                previous_result.get("recovery_attempted")
+            )
+            record["result"] = accurate_result
+            record["text"] = accurate_text
+            record["recognized"] = bool(accurate_text)
+            record["authoritative_reread"] = True
+            report(
+                stage="rereading",
+                message=(
+                    f"Read final value {reread_index} of "
+                    f"{authoritative_total}"
+                ),
+                percent=(
+                    95
+                    + int(
+                        3 * reread_index / max(authoritative_total, 1)
+                    )
+                ),
+                completed=reread_index,
+                total=authoritative_total,
+                object_current=reread_index,
+                object_total=authoritative_total,
+                operation_label="Authoritative value OCR",
+                candidate_count=authoritative_total,
+            )
+
+        # Refresh cheap neighbouring-token context after authoritative text has
+        # replaced preliminary OCR. Existing expanded context reads are kept.
+        for record in ocr_records:
+            if not record["recognized"] or not needs_expanded_filter_context(
+                record["text"],
+                record["bbox"],
+            ):
+                continue
+            reconstructed = reconstruct_line_context(record, ocr_records)
+            record["context_text"] = " ".join(
+                dict.fromkeys(
+                    part
+                    for part in (record["context_text"], reconstructed)
+                    if part
+                )
+            )
+
+        filter_candidates = build_filter_candidates()
+        filter_rule_counts: Counter[str] = Counter()
+        regions: list[dict[str, Any]] = []
+        review_candidates: list[dict[str, Any]] = []
+        candidate_outcomes: list[dict[str, Any]] = []
+        filtered_overlay_candidates: list[dict[str, object]] = []
 
         for filter_index, (record, filter_candidate) in enumerate(
             zip(ocr_records, filter_candidates),
@@ -2914,22 +3103,32 @@ class OcrPipeline:
                     f"Resolving final state for object {filter_index} of "
                     f"{detected_count}"
                 ),
-                percent=(
-                    95
-                    + int(3 * filter_index / max(detected_count, 1))
-                ),
+                percent=98 + int(filter_index / max(detected_count, 1)),
                 completed=filter_index,
                 total=detected_count,
                 object_current=filter_index,
                 object_total=detected_count,
-                operation_label="Editable page value filters",
+                operation_label="Final page value filters",
                 candidate_count=detected_count,
             )
-            decision = evaluate_page_value(
-                filter_candidate,
-                page_candidates=filter_candidates,
-                table_masks=table_masks,
-            )
+            if (
+                record.get("preliminary_state") == "excluded"
+                and not record.get("authoritative_reread", False)
+            ):
+                decision = preliminary_decisions[filter_index - 1]
+                final_state = "excluded"
+                final_reason = str(record.get("preliminary_reason") or "")
+            else:
+                decision = evaluate_page_value(
+                    filter_candidate,
+                    page_candidates=filter_candidates,
+                    table_masks=table_masks,
+                )
+                final_state, final_reason = resolve_candidate_state(
+                    record,
+                    decision,
+                    authoritative=bool(record.get("authoritative_reread")),
+                )
             if not record["recognized"] and decision.rule_name != "table_region":
                 filter_rule_counts["unread"] += 1
             else:
@@ -2937,38 +3136,19 @@ class OcrPipeline:
 
             candidate = record["candidate"]
             result = record["result"]
-            review_reason = str(result.get("review_reason") or "").strip()
-            if decision.rule_name in hard_exclusion_rules:
-                final_state = "excluded"
-                final_reason = decision.reason
-            elif not decision.accepted:
-                if (
-                    decision.rule_name == "no_numeric_component"
-                    and (
-                        result.get("stable_alpha")
-                        or not result.get("needs_review", False)
-                    )
-                ):
-                    final_state = "excluded"
-                    final_reason = decision.reason
-                else:
-                    final_state = "review"
-                    final_reason = review_reason or (
-                        "The detected object could not be read confidently"
-                    )
-            elif result.get("needs_review", False):
-                final_state = "review"
-                final_reason = review_reason or (
-                    "Recognition remains genuinely ambiguous after recovery"
-                )
-            else:
-                final_state = "eligible"
-                final_reason = decision.reason
+            # A non-numeric review proposal is safer as a blank editable value
+            # than misleading OCR such as "rat". Raw text remains diagnostic.
+            published_text = record["text"]
+            if (
+                final_state == "review"
+                and decision.rule_name == "no_numeric_component"
+            ):
+                published_text = ""
 
             common_region = {
                 "candidate_id": record["candidate_id"],
                 "bbox": record["bbox"],
-                "text": record["text"],
+                "text": published_text,
                 "confidence": result.get("confidence", 0.0),
                 "type": result.get("type"),
                 "orientation": result.get("orientation", "horizontal"),
@@ -2984,6 +3164,9 @@ class OcrPipeline:
                 "page_filter_reason": decision.reason,
                 "review_reason": final_reason if final_state == "review" else "",
                 "recovery_attempted": bool(result.get("recovery_attempted")),
+                "authoritative_reread": bool(
+                    result.get("authoritative_reread")
+                ),
             }
             if final_state == "eligible":
                 regions.append(common_region)
@@ -2995,12 +3178,15 @@ class OcrPipeline:
                 "bbox": dict(record["bbox"]),
                 "polygon": [list(point) for point in candidate.polygon],
                 "state": final_state,
-                "text": record["text"],
+                "text": published_text,
                 "confidence": float(result.get("confidence") or 0.0),
                 "recognized": record["recognized"],
                 "reason": final_reason,
                 "rule": decision.rule_name,
                 "recovery_attempted": bool(result.get("recovery_attempted")),
+                "authoritative_reread": bool(
+                    result.get("authoritative_reread")
+                ),
             }
             candidate_outcomes.append(outcome)
             filtered_overlay_candidates.append(
@@ -3008,7 +3194,7 @@ class OcrPipeline:
                     "id": record["candidate_id"],
                     "bbox": dict(record["bbox"]),
                     "state": final_state,
-                    "text": record["text"],
+                    "text": published_text,
                     "reason": final_reason,
                     "rule": decision.rule_name,
                 }

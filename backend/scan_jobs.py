@@ -17,18 +17,31 @@ from time import time
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
-ScanJobStatus = Literal["queued", "running", "succeeded", "failed"]
+ScanJobStatus = Literal[
+    "queued",
+    "running",
+    "cancelling",
+    "cancelled",
+    "succeeded",
+    "failed",
+]
 ScanLiveness = Literal[
     "queued",
     "working",
     "long_running",
     "slow_progress",
     "possibly_stalled",
+    "cancelling",
+    "cancelled",
     "complete",
     "failed",
 ]
 ProgressReporter = Callable[..., None]
 ScanWork = Callable[[ProgressReporter], dict[str, Any]]
+
+
+class _ScanJobCancelled(Exception):
+    """Internal cooperative-cancellation signal."""
 
 
 @dataclass
@@ -63,6 +76,7 @@ class _ScanJob:
     step_started_at: float = field(default_factory=time)
     stage_started_at: float = field(default_factory=time)
     stage_start_completed: int = 0
+    cancel_requested: bool = False
 
 
 class ScanJobManager:
@@ -113,11 +127,69 @@ class ScanJobManager:
             job = self._jobs.get(job_id)
             return self._snapshot(job) if job else None
 
+    def cancel(self, job_id: str) -> dict[str, Any] | None:
+        """Request atomic cancellation and return the updated snapshot.
+
+        A queued job can stop immediately. A running job enters ``cancelling``
+        until its current model call returns and reaches the next progress
+        checkpoint. Results remain hidden in both cases.
+        """
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            if job.status in {"cancelled", "succeeded", "failed"}:
+                return self._snapshot(job)
+
+            now = time()
+            job.cancel_requested = True
+            job.error = None
+            job.updated_at = now
+            job.last_progress_at = now
+            job.step_started_at = now
+            job.heartbeat_at = now
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.stage = "cancelled"
+                job.message = "Scan stopped before processing began"
+                job.finished_at = now
+            else:
+                job.status = "cancelling"
+                job.stage = "cancelling"
+                job.message = "Stopping after the current OCR operation"
+                job.operation_label = "Cancellation requested"
+            return self._snapshot(job)
+
     def shutdown(self, *, wait: bool = True) -> None:
         """Release worker threads; primarily used by fast unit tests."""
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
+    def _cancel_was_requested(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return bool(job and job.cancel_requested)
+
+    def _raise_if_cancelled(self, job_id: str) -> None:
+        if self._cancel_was_requested(job_id):
+            raise _ScanJobCancelled
+
+    def _finish_cancelled(self, job_id: str) -> None:
+        self._update(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            message="Scan stopped; no results were published",
+            operation_label="Scan stopped",
+            result=None,
+            error=None,
+            finished_at=time(),
+        )
+
     def _run(self, job_id: str, work: ScanWork) -> None:
+        if self._cancel_was_requested(job_id):
+            self._finish_cancelled(job_id)
+            return
         started_at = time()
         self._update(
             job_id,
@@ -128,6 +200,9 @@ class ScanJobManager:
             started_at=started_at,
             heartbeat_at=started_at,
         )
+        if self._cancel_was_requested(job_id):
+            self._finish_cancelled(job_id)
+            return
         heartbeat_stop = Event()
         heartbeat_thread = Thread(
             target=self._heartbeat_loop,
@@ -156,6 +231,7 @@ class ScanJobManager:
             operation_label: str = "",
             overlay: dict[str, Any] | None = None,
         ) -> None:
+            self._raise_if_cancelled(job_id)
             changes: dict[str, Any] = {
                 "status": "running",
                 "stage": stage,
@@ -179,18 +255,26 @@ class ScanJobManager:
             if overlay is not None:
                 changes["overlay"] = deepcopy(overlay)
             self._update(job_id, **changes)
+            self._raise_if_cancelled(job_id)
 
         try:
+            self._raise_if_cancelled(job_id)
             result = work(report_progress)
+            self._raise_if_cancelled(job_id)
+        except _ScanJobCancelled:
+            self._finish_cancelled(job_id)
         except Exception as exc:  # noqa: BLE001 - the job must expose all failures
-            self._update(
-                job_id,
-                status="failed",
-                stage="failed",
-                message="Scan failed",
-                error=str(exc) or exc.__class__.__name__,
-                finished_at=time(),
-            )
+            if self._cancel_was_requested(job_id):
+                self._finish_cancelled(job_id)
+            else:
+                self._update(
+                    job_id,
+                    status="failed",
+                    stage="failed",
+                    message="Scan failed",
+                    error=str(exc) or exc.__class__.__name__,
+                    finished_at=time(),
+                )
         else:
             self._update(
                 job_id,
@@ -214,7 +298,7 @@ class ScanJobManager:
         while not stop.wait(self._heartbeat_interval_seconds):
             with self._lock:
                 job = self._jobs.get(job_id)
-                if not job or job.status != "running":
+                if not job or job.status not in {"running", "cancelling"}:
                     return
                 job.heartbeat_at = time()
 
@@ -224,6 +308,32 @@ class ScanJobManager:
             if not job:
                 return
             now = time()
+            incoming_status = changes.get("status")
+            if job.cancel_requested and incoming_status == "running":
+                # A progress report can race with the cancel request. Preserve
+                # the user-visible stopping state until the worker observes it.
+                changes.update(
+                    status="cancelling",
+                    stage="cancelling",
+                    message="Stopping after the current OCR operation",
+                    operation_label="Cancellation requested",
+                )
+            elif job.cancel_requested and incoming_status in {
+                "succeeded",
+                "failed",
+            }:
+                # Cancellation and terminal publication can occur in adjacent
+                # instructions. Resolve that race atomically under this lock so
+                # a stopped job can never expose its result.
+                changes.update(
+                    status="cancelled",
+                    stage="cancelled",
+                    message="Scan stopped; no results were published",
+                    operation_label="Scan stopped",
+                    result=None,
+                    error=None,
+                    finished_at=now,
+                )
             incoming_stage = changes.get("stage", job.stage)
             stage_changed = incoming_stage != job.stage
             progress_fields = {
@@ -271,7 +381,7 @@ class ScanJobManager:
                 job.last_progress_at = now
             if started_step:
                 job.step_started_at = now
-            if changes.get("status") in {"succeeded", "failed"}:
+            if changes.get("status") in {"cancelled", "succeeded", "failed"}:
                 job.heartbeat_at = now
             job.updated_at = now
 
@@ -280,7 +390,8 @@ class ScanJobManager:
         expired = [
             job_id
             for job_id, job in self._jobs.items()
-            if job.status in {"succeeded", "failed"} and job.updated_at < cutoff
+            if job.status in {"cancelled", "succeeded", "failed"}
+            and job.updated_at < cutoff
         ]
         for job_id in expired:
             self._jobs.pop(job_id, None)
@@ -324,6 +435,10 @@ class ScanJobManager:
         liveness: ScanLiveness
         if job.status == "queued":
             liveness = "queued"
+        elif job.status == "cancelling":
+            liveness = "cancelling"
+        elif job.status == "cancelled":
+            liveness = "cancelled"
         elif job.status == "succeeded":
             liveness = "complete"
         elif job.status == "failed":

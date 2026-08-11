@@ -105,7 +105,9 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     pipeline.detect_regions = detect_regions
     pipeline._expand_clusters = lambda _image, clusters, **_kwargs: clusters
     pipeline.recognize = lambda _image, **_kwargs: {
-        "text": "25.00",
+        # Section mode must pass through short/plain values that the former
+        # is_segment_worthy policy rejected before publication.
+        "text": "50",
         "confidence": 0.98,
         "type": "Linear",
         "orientation": "horizontal",
@@ -124,6 +126,10 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     )
 
     assert result["count"] == 1
+    assert result["regions"][0]["text"] == "50"
+    assert result["detected_count"] == result["recognized_count"] == 1
+    assert result["eligible_count"] == 1
+    assert result["excluded_count"] == result["review_count"] == 0
     assert events[0]["stage"] == "preparing"
     assert events[-1]["stage"] == "finalizing"
     detection_events = [
@@ -242,6 +248,8 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
     pipeline._page_batch_recognition_available = True
     detector_calls: list[tuple[tuple[int, int], int]] = []
     recognition_batches: list[tuple[str, int]] = []
+    authoritative_crops: list[tuple[int, int]] = []
+    authoritative_texts = iter(("30°±3°", "R5.00"))
     source_box = {"x": 40.0, "y": 30.0, "w": 40.0, "h": 16.0}
     layout = PageLayout(
         width=400,
@@ -309,9 +317,26 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
     def fail_selection(*_args, **_kwargs):
         raise AssertionError("page scan must not call the section pipeline")
 
+    def fake_authoritative(crop, **kwargs):
+        assert kwargs["compute_text_bbox"] is False
+        authoritative_crops.append(crop.size)
+        text = next(authoritative_texts)
+        return {
+            "text": text,
+            "raw_ocr": text,
+            "confidence": 0.99,
+            "agreement": 1.0,
+            "needs_review": False,
+            "type": "Angle" if "°" in text else "Radius",
+            "orientation": "horizontal",
+            "rotation": 0,
+            "engine": "paddleocr+compose",
+            "symbols_detected": {},
+        }
+
     pipeline._detector_only_boxes = fake_detector
     pipeline.segment = fail_selection
-    pipeline.recognize = fail_selection
+    pipeline.recognize = fake_authoritative
     pipeline._recognize_page_batch = fake_batch
     events: list[dict] = []
 
@@ -341,6 +366,11 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         ("batch_recognition", 4),
         ("recovery_rectified", 1),
     ]
+    # Only the two preliminarily publishable values use accurate OCR; scale and
+    # note exclusions do not pay for a reread. Padding changes the crop only,
+    # never the published detector bbox.
+    assert len(authoritative_crops) == 2
+    assert all(width > 40 and height > 16 for width, height in authoritative_crops)
     assert any(
         event["pass_total"] == 8 and event["tile_total"] == 4
         for event in events
@@ -350,6 +380,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         for event in events
     )
     assert any(event["stage"] == "recovering" for event in events)
+    assert any(event["stage"] == "rereading" for event in events)
     assert any(event["stage"] == "filtering" for event in events)
     assert any(event["overlay"] is not None for event in events)
     assert events[-1]["candidate_count"] == 2
@@ -361,6 +392,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         "R5.00",
     ]
     assert result["regions"][0]["page_filter_rule"] == "engineering_value"
+    assert all(region["authoritative_reread"] for region in result["regions"])
     assert result["filter_rule_counts"] == {
         "engineering_value": 2,
         "note_information": 1,
@@ -430,6 +462,19 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
 
     pipeline._detector_only_boxes = fake_detector
     pipeline._recognize_page_batch = fake_batch
+    pipeline.recognize = lambda _crop, **_kwargs: {
+        "text": "25.00",
+        "raw_ocr": "25.00",
+        "confidence": 0.41,
+        "agreement": 0.25,
+        # Confidence alone must not demote a structurally valid accurate read.
+        "needs_review": True,
+        "type": "Linear",
+        "orientation": "horizontal",
+        "rotation": 0,
+        "engine": "paddleocr",
+        "symbols_detected": {},
+    }
 
     result = pipeline.segment_page(
         Image.new("RGB", (200, 100), "white"),
@@ -441,12 +486,13 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
     assert result["regions"][0]["boundary_review"]
 
 
-def test_page_scan_reviews_mixed_numeric_text_without_extra_ocr() -> None:
+def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
     pipeline._page_batch_recognition_available = True
     detector_calls = 0
     recognition_profiles: list[str] = []
+    authoritative_calls = 0
     layout = PageLayout(
         width=200,
         height=100,
@@ -485,21 +531,41 @@ def test_page_scan_reviews_mixed_numeric_text_without_extra_ocr() -> None:
     pipeline._detector_only_boxes = fake_detector
     pipeline._recognize_page_batch = fake_batch
 
+    def fake_authoritative(_crop, **_kwargs):
+        nonlocal authoritative_calls
+        authoritative_calls += 1
+        return {
+            "text": "25.00",
+            "raw_ocr": "25.00",
+            "confidence": 0.99,
+            "agreement": 1.0,
+            "needs_review": False,
+            "type": "Linear",
+            "orientation": "horizontal",
+            "rotation": 0,
+            "engine": "paddleocr",
+            "symbols_detected": {},
+        }
+
+    pipeline.recognize = fake_authoritative
+
     result = pipeline.segment_page(
         Image.new("RGB", (200, 100), "white"),
         layout=layout,
     )
 
-    assert result["eligible_count"] == 0
+    assert result["eligible_count"] == 1
     assert result["excluded_count"] == 0
-    assert result["review_count"] == 1
+    assert result["review_count"] == 0
+    assert result["regions"][0]["text"] == "25.00"
     assert result["candidate_outcomes"][0]["rule"] == (
-        "invalid_engineering_value"
+        "engineering_value"
     )
     assert recognition_profiles == ["batch_recognition"]
+    assert authoritative_calls == 1
 
 
-def test_page_scan_publishes_confusable_candidate_for_review() -> None:
+def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
     pipeline._page_batch_recognition_available = True
@@ -544,6 +610,18 @@ def test_page_scan_publishes_confusable_candidate_for_review() -> None:
 
     pipeline._detector_only_boxes = fake_detector
     pipeline._recognize_page_batch = fake_batch
+    pipeline.recognize = lambda _crop, **_kwargs: {
+        "text": "",
+        "raw_ocr": "",
+        "confidence": 0.0,
+        "agreement": 0.0,
+        "needs_review": False,
+        "type": "Unknown",
+        "orientation": "horizontal",
+        "rotation": 0,
+        "engine": "paddleocr",
+        "symbols_detected": {},
+    }
 
     result = pipeline.segment_page(
         Image.new("RGB", (160, 100), "white"),
@@ -555,8 +633,10 @@ def test_page_scan_publishes_confusable_candidate_for_review() -> None:
     assert result["excluded_count"] == 0
     assert result["review_count"] == 1
     assert result["review_candidates"][0]["candidate_id"] == "C0001"
-    assert "conflict" in result["review_candidates"][0]["review_reason"].lower()
+    assert result["review_candidates"][0]["text"] == ""
+    assert "no text" in result["review_candidates"][0]["review_reason"].lower()
     assert result["candidate_outcomes"][0]["state"] == "review"
+    assert result["candidate_outcomes"][0]["text"] == ""
     assert recognition_profiles == [
         "batch_recognition",
         "recovery_rectified",

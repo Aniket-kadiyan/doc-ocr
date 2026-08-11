@@ -87,5 +87,9 @@ describe("scan progress display helpers", () => {
     expect(scanLivenessLabel.possibly_stalled).toBe(
       "Heartbeat missing — possibly stalled"
     );
+    expect(scanLivenessLabel.cancelling).toBe(
+      "Stopping after current OCR operation"
+    );
+    expect(scanLivenessLabel.cancelled).toBe("Stopped");
   });
 });

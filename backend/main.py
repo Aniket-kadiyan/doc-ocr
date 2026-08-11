@@ -30,12 +30,10 @@ from config_env import get_cors_origins, load_env_files
 from debug_dump import dump_status
 from ocr_pipeline import get_pipeline
 from page_layout import (
-    PageLayout,
     analyze_page_layout,
-    crop_masked_section,
+    crop_section,
 )
 from page_layout_cache import PageLayoutCache
-from page_value_filters import PageValueCandidate, evaluate_scan_value
 from scan_jobs import ProgressReporter, ScanJobManager
 
 # Draw config from the project's root .env.local / .env (same file the frontend
@@ -328,20 +326,15 @@ def _map_section_result_to_page(
     seg: dict[str, Any],
     *,
     origin: tuple[int, int],
-    layout: PageLayout,
 ) -> tuple[dict[str, Any], list[dict[str, object]]]:
-    """Restore section candidates and enforce the global table exclusion.
+    """Restore every non-empty section result to full-page coordinates.
 
-    A mixed table/drawing selection is processed candidate by candidate.  Only
-    candidates whose centre or majority overlap lies in a table mask are
-    rejected; the remaining drawing values are returned unchanged.
+    The selected section is the user's explicit boundary.  Page table masks,
+    value syntax, confidence, and text-length policies therefore do not run on
+    this path.
     """
 
-    from collections import Counter
-
     origin_x, origin_y = origin
-    table_masks = [mask.to_dict() for mask in layout.table_masks]
-    filter_counts: Counter[str] = Counter()
     mapped_regions: list[dict[str, Any]] = []
     overlay_candidates: list[dict[str, object]] = []
     source_regions = list(seg.get("regions", []))
@@ -355,38 +348,29 @@ def _map_section_result_to_page(
             "height": round(float(local.get("height", 0.0)), 1),
         }
         text = str(region.get("text") or "").strip()
-        decision = evaluate_scan_value(
-            PageValueCandidate(text=text, bbox=page_bbox),
-            scope_kind="section",
-            table_masks=table_masks,
-        )
-        filter_counts[decision.rule_name] += 1
+        if not text:
+            continue
         overlay_candidates.append(
             {
                 "bbox": page_bbox,
-                "state": "eligible" if decision.accepted else "excluded",
+                "state": "eligible",
                 "text": text,
-                "reason": decision.reason,
-                "rule": decision.rule_name,
+                "reason": "Selected-section passthrough",
+                "rule": "section_passthrough",
             }
         )
-        if not decision.accepted:
-            continue
         mapped_regions.append(
             {
                 **region,
                 "bbox": page_bbox,
-                "page_filter_rule": decision.rule_name,
-                "page_filter_reason": decision.reason,
+                "page_filter_rule": "section_passthrough",
+                "page_filter_reason": "Selected-section passthrough",
             }
         )
 
     detected_count = int(seg.get("detected_count", len(source_regions)))
-    recognized_count = int(seg.get("recognized_count", len(source_regions)))
-    excluded_count = max(0, len(source_regions) - len(mapped_regions))
-    unread_count = int(
-        seg.get("unread_count", max(0, detected_count - recognized_count))
-    )
+    recognized_count = len(mapped_regions)
+    unread_count = max(0, detected_count - recognized_count)
     return (
         {
             **seg,
@@ -394,10 +378,14 @@ def _map_section_result_to_page(
             "detected_count": detected_count,
             "recognized_count": recognized_count,
             "eligible_count": len(mapped_regions),
-            "excluded_count": excluded_count,
+            "excluded_count": 0,
             "review_count": 0,
             "unread_count": unread_count,
-            "filter_rule_counts": dict(sorted(filter_counts.items())),
+            "filter_rule_counts": (
+                {"section_passthrough": len(mapped_regions)}
+                if mapped_regions
+                else {}
+            ),
             "coordinate_space": "page",
             "regions": mapped_regions,
             "review_candidates": [],
@@ -502,10 +490,9 @@ async def create_scan_job(
             )
             seg["coordinate_space"] = "page"
         else:
-            section_image, section_origin, _clipped_scope = crop_masked_section(
+            section_image, section_origin, _clipped_scope = crop_section(
                 image,
                 scope_bbox,
-                layout.table_masks,
             )
 
             def report_section_progress(**event: Any) -> None:
@@ -526,19 +513,18 @@ async def create_scan_job(
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
                 origin=section_origin,
-                layout=layout,
             )
             report_progress(
                 stage="finalizing",
                 message=(
                     f"Prepared {seg['eligible_count']} section values; "
-                    f"{seg['excluded_count']} table candidates excluded"
+                    "no automatic filters applied"
                 ),
                 percent=99,
                 completed=int(seg["detected_count"]),
                 total=int(seg["detected_count"]),
                 candidate_count=int(seg["eligible_count"]),
-                operation_label="Section table exclusion complete",
+                operation_label="Section passthrough complete",
                 overlay=layout.overlay(
                     scope_kind="section",
                     candidates=section_overlay_candidates,
@@ -566,6 +552,16 @@ async def create_scan_job(
 def get_scan_job(job_id: str) -> dict[str, Any]:
     """Poll genuine scan progress; candidates appear only after success."""
     job = scan_job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    return job
+
+
+@app.post("/ocr/scan-jobs/{job_id}/cancel")
+def cancel_scan_job(job_id: str) -> dict[str, Any]:
+    """Stop a scan cooperatively without publishing partial results."""
+
+    job = scan_job_manager.cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job

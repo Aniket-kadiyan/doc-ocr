@@ -4,6 +4,7 @@ import type {
   ScanLiveness,
   ScanOverlayCandidateState,
   ScanOverlayPanelState,
+  ScanJobStatus,
   ScanProgress,
   ScanScopeKind,
 } from "@/types/scanJob";
@@ -47,7 +48,7 @@ interface ApiScanOverlay {
 
 interface ApiScanJobSnapshot {
   job_id: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: ScanJobStatus;
   stage: string;
   message: string;
   percent: number;
@@ -93,6 +94,27 @@ export interface ScanJobResult {
   unread: number;
   reviewCandidates: SegmentRegion[];
   filterRuleCounts: Record<string, number>;
+}
+
+export class ScanJobCancelledError extends Error {
+  readonly code = "SCAN_CANCELLED";
+
+  constructor(message = "Auto-balloon scan stopped") {
+    super(message);
+    this.name = "ScanJobCancelledError";
+  }
+}
+
+export function isScanJobCancelledError(
+  error: unknown
+): error is ScanJobCancelledError {
+  return (
+    error instanceof ScanJobCancelledError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "SCAN_CANCELLED")
+  );
 }
 
 const sleep = (milliseconds: number) =>
@@ -188,6 +210,22 @@ function scanRequestOptions(): {
   return { query: params.toString(), headers };
 }
 
+/** Request cooperative cancellation and return the backend's new state. */
+export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
+  if (!jobId) throw new Error("Cannot stop a scan before it has started");
+
+  const response = await fetch(
+    `${getOcrApiUrl()}/ocr/scan-jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: "POST", cache: "no-store" }
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readError(response, `Could not stop scan: ${response.status}`)
+    );
+  }
+  return toProgress((await response.json()) as ApiScanJobSnapshot);
+}
+
 /**
  * Run one backend scan job and return candidates only after it succeeds.
  * Polling exposes genuine stage/counter progress without publishing partial
@@ -236,7 +274,11 @@ export async function runScanJob({
   let snapshot = (await created.json()) as ApiScanJobSnapshot;
   onProgress?.(toProgress(snapshot));
 
-  while (snapshot.status === "queued" || snapshot.status === "running") {
+  while (
+    snapshot.status === "queued" ||
+    snapshot.status === "running" ||
+    snapshot.status === "cancelling"
+  ) {
     await sleep(POLL_INTERVAL_MS);
     const response = await fetch(
       `${baseUrl}/ocr/scan-jobs/${encodeURIComponent(snapshot.job_id)}`,
@@ -253,6 +295,11 @@ export async function runScanJob({
 
   if (snapshot.status === "failed") {
     throw new Error(snapshot.error || "Auto-balloon scan failed");
+  }
+  if (snapshot.status === "cancelled") {
+    throw new ScanJobCancelledError(
+      snapshot.message || "Auto-balloon scan stopped"
+    );
   }
   if (!snapshot.result) {
     throw new Error("Auto-balloon scan completed without a result");

@@ -37,6 +37,8 @@ export const scanLivenessLabel: Record<ScanLiveness, string> = {
   long_running: "Long-running step",
   slow_progress: "Service responsive — slow progress",
   possibly_stalled: "Heartbeat missing — possibly stalled",
+  cancelling: "Stopping after current OCR operation",
+  cancelled: "Stopped",
   complete: "Complete",
   failed: "Failed",
 };

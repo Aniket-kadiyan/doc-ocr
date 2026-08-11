@@ -29,6 +29,7 @@ LAYOUT_PANEL_OVERLAP_MIN = 24
 LAYOUT_PANEL_OVERLAP_MAX = 80
 
 TABLE_MASK_PADDING_RATIO = 0.002
+TABLE_BOUNDARY_MAX_DISTANCE_RATIO = 0.02
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,11 @@ class PageLayout:
             "page_width": self.width,
             "page_height": self.height,
             "scope_kind": scope_kind,
-            "table_masks": [box.to_dict() for box in self.table_masks],
+            "table_masks": (
+                [box.to_dict() for box in self.table_masks]
+                if scope_kind == "page"
+                else []
+            ),
             "panels": (
                 [
                     panel.to_dict(
@@ -534,7 +539,12 @@ def _discard_mostly_contained_boxes(
 
 
 def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
-    """Detect repeated grid regions without assuming a title-block location."""
+    """Detect repeated grids that belong to a page-boundary data table.
+
+    Repeated line work inside the drawing body can legitimately resemble a
+    table.  Production data/title/revision tables live at the sheet boundary,
+    so only grid regions touching or very near an edge become hard masks.
+    """
 
     width, height = image.size
     if width < 64 or height < 64:
@@ -566,6 +576,16 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
             tolerance=intersection_tolerance * 2,
         )
     )
+    boundary_distance = max(
+        1,
+        int(round(min(width, height) * TABLE_BOUNDARY_MAX_DISTANCE_RATIO)),
+    )
+    boxes = [
+        box
+        for box in boxes
+        if min(box.x, box.y, width - box.x1, height - box.y1)
+        <= boundary_distance
+    ]
 
     padded: list[LayoutBox] = []
     for box in boxes:
@@ -824,18 +844,17 @@ def analyze_page_layout(image: Image.Image) -> PageLayout:
     )
 
 
-def crop_masked_section(
+def crop_section(
     image: Image.Image,
     scope_bbox: dict[str, float],
-    table_masks: Sequence[LayoutBox],
     *,
     padding: int = 20,
 ) -> tuple[Image.Image, tuple[int, int], LayoutBox]:
-    """Recreate the former padded section crop after page-level masking.
+    """Return a padded raw section crop in the page coordinate system.
 
     The returned origin maps crop-local coordinates—including padding—back to
-    the full page.  Only intersecting table pixels are removed; a mixed
-    drawing/table selection is never rejected as one unit.
+    the full page.  Section mode is deliberately user-bounded and filter-free,
+    so table-like pixels are retained exactly as selected.
     """
 
     x0 = max(0, floor(float(scope_bbox["x"])))
@@ -851,8 +870,7 @@ def crop_masked_section(
     if x1 <= x0 or y1 <= y0:
         raise ValueError("The selected scan section is outside the page")
 
-    masked_page = mask_table_regions(image, table_masks)
-    section = masked_page.crop((x0, y0, x1, y1))
+    section = image.convert("RGB").crop((x0, y0, x1, y1))
     padded = Image.new(
         "RGB",
         (section.width + padding * 2, section.height + padding * 2),

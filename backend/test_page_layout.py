@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 from page_layout import (
     LAYOUT_MAX_PANELS,
     analyze_page_layout,
-    crop_masked_section,
+    crop_section,
     detect_table_masks,
 )
 from page_layout_cache import PageLayoutCache
@@ -22,7 +22,7 @@ def synthetic_drawing() -> Image.Image:
     draw.line((270, 300, 350, 300), fill="black", width=2)
 
     # A repeated 3x4 grid is unambiguously tabular.
-    x_values = (400, 460, 520, 580)
+    x_values = (458, 518, 578, 638)
     y_values = (30, 90, 150, 210, 270)
     for x in x_values:
         draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
@@ -39,8 +39,21 @@ def test_table_detection_requires_repeated_cells_not_one_rectangle() -> None:
     masks = detect_table_masks(synthetic_drawing())
 
     assert masks
-    assert any(_contains(mask, 500, 120) for mask in masks)
+    assert any(_contains(mask, 560, 120) for mask in masks)
     assert not any(_contains(mask, 120, 120) for mask in masks)
+
+
+def test_interior_repeated_grid_is_not_a_page_table_mask() -> None:
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    x_values = (280, 340, 400, 460)
+    y_values = (80, 130, 180, 230, 280)
+    for x in x_values:
+        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
+    for y in y_values:
+        draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
+
+    assert detect_table_masks(image) == ()
 
 
 def test_adaptive_layout_never_uses_the_complete_page_as_one_panel() -> None:
@@ -56,26 +69,22 @@ def test_adaptive_layout_never_uses_the_complete_page_as_one_panel() -> None:
     assert layout.overlaps
 
 
-def test_mixed_section_masks_only_the_table_part() -> None:
+def test_section_crop_keeps_selected_table_and_drawing_pixels() -> None:
     image = synthetic_drawing()
     layout = analyze_page_layout(image)
-    section, origin, clipped = crop_masked_section(
+    section, origin, clipped = crop_section(
         image,
         {"x": 250, "y": 0, "width": 360, "height": 340},
-        layout.table_masks,
         padding=20,
     )
 
     assert origin == (230, -20)
     assert clipped.box == (250, 0, 610, 340)
-    # Page (500, 120) is inside the grid and is whitened.
-    assert section.getpixel((500 - origin[0], 120 - origin[1])) == (
-        255,
-        255,
-        255,
-    )
+    # Boundary-table ink remains because section mode is user-controlled.
+    assert section.getpixel((578 - origin[0], 120 - origin[1])) == (0, 0, 0)
     # Page (300, 300) is drawing ink outside the table and remains visible.
     assert section.getpixel((300 - origin[0], 300 - origin[1])) == (0, 0, 0)
+    assert layout.overlay(scope_kind="section")["table_masks"] == []
 
 
 def test_page_layout_cache_is_bounded_and_reuses_geometry() -> None:

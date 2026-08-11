@@ -8,15 +8,25 @@ import {
 
 interface ScanProgressBannerProps {
   progress: ScanProgress;
+  onStop: () => void;
 }
 
-export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
+export function ScanProgressBanner({
+  progress,
+  onStop,
+}: ScanProgressBannerProps) {
   const percent = Math.max(0, Math.min(100, progress.percent));
   const counter = scanWorkCounter(progress);
+  const isStopping = progress.status === "cancelling";
+  const isActive =
+    progress.status === "queued" ||
+    progress.status === "running" ||
+    isStopping;
   const needsAttention =
     progress.liveness === "long_running" ||
     progress.liveness === "slow_progress" ||
-    progress.liveness === "possibly_stalled";
+    progress.liveness === "possibly_stalled" ||
+    isStopping;
   const stageTitle: Record<string, string> = {
     queued: "Queued",
     layout: "Analysing page layout",
@@ -29,7 +39,10 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
     recovering: "Recovering uncertain values",
     context: "Reading filter context",
     filtering: "Classifying candidates",
+    rereading: "Reading final values",
     finalizing: "Finalizing balloons",
+    cancelling: "Stopping scan",
+    cancelled: "Scan stopped",
     complete: "Scan complete",
     failed: "Scan failed",
   };
@@ -75,6 +88,16 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
           <span className="w-10 text-right font-medium tabular-nums">
             {percent}%
           </span>
+          {isActive && (
+            <button
+              type="button"
+              onClick={onStop}
+              disabled={!progress.jobId || isStopping}
+              className="rounded border border-current px-2 py-0.5 font-semibold disabled:cursor-wait disabled:opacity-50"
+            >
+              {isStopping ? "Stopping…" : "Stop"}
+            </button>
+          )}
         </div>
 
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
@@ -85,11 +108,11 @@ export function ScanProgressBanner({ progress }: ScanProgressBannerProps) {
           <span className="inline-flex items-center gap-1.5 font-medium">
             <span
               className={`h-2 w-2 rounded-full ${progressTone} ${
-                progress.status === "running" ? "animate-pulse" : ""
+                isActive ? "animate-pulse" : ""
               }`}
             />
             {scanLivenessLabel[progress.liveness]}
-            {progress.status === "running" && (
+            {(progress.status === "running" || isStopping) && (
               <> · {heartbeatLabel(progress.heartbeatAgeSeconds)}</>
             )}
           </span>

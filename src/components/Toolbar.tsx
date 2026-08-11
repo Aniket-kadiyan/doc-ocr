@@ -17,9 +17,11 @@ interface ToolbarProps {
   currentPage: number;
   totalPages: number;
   scale: number;
+  balloonsVisible: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
   onToggleDrawValue: () => void;
+  onToggleBalloons: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onPrevPage: () => void;
@@ -39,9 +41,11 @@ export function Toolbar({
   currentPage,
   totalPages,
   scale,
+  balloonsVisible,
   onSelectScanSection,
   onScanWholePage,
   onToggleDrawValue,
+  onToggleBalloons,
   onZoomIn,
   onZoomOut,
   onPrevPage,
@@ -129,6 +133,16 @@ export function Toolbar({
         } disabled:opacity-50`}
       >
         {isDrawingValue ? "Drawing Value…" : "Draw Value"}
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleBalloons}
+        disabled={!canSaveProject}
+        title="Show or hide saved balloon markers and value boxes"
+        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      >
+        {balloonsVisible ? "Hide Balloons" : "Show Balloons"}
       </button>
 
       {isProcessing && !isScanRunning && (

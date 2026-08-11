@@ -11,7 +11,13 @@ import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
-import { runAutoBalloonScan, runOCR, preloadOcr } from "@/lib/clientOcr";
+import {
+  isScanJobCancelledError,
+  preloadOcr,
+  runAutoBalloonScan,
+  runOCR,
+  stopAutoBalloonScan,
+} from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { filterNewScanRegions } from "@/lib/scanCandidates";
 import { deriveRange } from "@/lib/valueFields";
@@ -57,6 +63,7 @@ import type {
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
+const BALLOON_VISIBILITY_STORAGE_KEY = "doc-ocr:balloons-visible";
 
 type PageScanReviewCandidate = SegmentRegion & { page: number };
 
@@ -101,6 +108,7 @@ export function DrawingViewer() {
   const [scanReviewCandidates, setScanReviewCandidates] = useState<
     PageScanReviewCandidate[]
   >([]);
+  const [balloonsVisible, setBalloonsVisible] = useState(true);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -178,6 +186,16 @@ export function DrawingViewer() {
 
   useEffect(() => {
     void preloadOcr();
+  }, []);
+
+  useEffect(() => {
+    try {
+      setBalloonsVisible(
+        window.localStorage.getItem(BALLOON_VISIBILITY_STORAGE_KEY) !== "false"
+      );
+    } catch {
+      // Browser privacy settings may disable storage; default visibility stays.
+    }
   }, []);
 
 
@@ -609,11 +627,18 @@ export function DrawingViewer() {
           );
         }
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : "Auto-balloon scan failed unexpectedly";
-        setSelectionError(message);
+        if (isScanJobCancelledError(err)) {
+          setScanOverlay(null);
+          setSelectionError(
+            "Scan stopped. No balloons or review candidates were added."
+          );
+        } else {
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Auto-balloon scan failed unexpectedly";
+          setSelectionError(message);
+        }
       } finally {
         setScanProgress(null);
         setIsProcessing(false);
@@ -622,6 +647,54 @@ export function DrawingViewer() {
     },
     [addAnnotations, setIsProcessing, setIsSegmenting]
   );
+
+  const stopActiveScan = useCallback(async () => {
+    const active = scanProgress;
+    if (
+      !active?.jobId ||
+      !["queued", "running"].includes(active.status)
+    ) {
+      return;
+    }
+
+    setScanProgress((current) =>
+      current?.jobId === active.jobId
+        ? {
+            ...current,
+            status: "cancelling",
+            stage: "cancelling",
+            message: "Stopping after the current OCR operation",
+            operationLabel: "Cancellation requested",
+            liveness: "cancelling",
+          }
+        : current
+    );
+    try {
+      const updated = await stopAutoBalloonScan(active.jobId);
+      setScanProgress((current) =>
+        current?.jobId === active.jobId ? updated : current
+      );
+    } catch (err) {
+      setSelectionError(
+        err instanceof Error ? err.message : "Could not stop the active scan"
+      );
+    }
+  }, [scanProgress]);
+
+  const toggleBalloons = useCallback(() => {
+    setBalloonsVisible((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(
+          BALLOON_VISIBILITY_STORAGE_KEY,
+          String(next)
+        );
+      } catch {
+        // Visibility remains usable even when browser storage is unavailable.
+      }
+      return next;
+    });
+  }, []);
 
   const finishSegmentBox = useCallback(
     async (bbox: BBox) => {
@@ -852,7 +925,12 @@ export function DrawingViewer() {
           and leave it for later.
         </div>
       )}
-      {scanProgress && <ScanProgressBanner progress={scanProgress} />}
+      {scanProgress && (
+        <ScanProgressBanner
+          progress={scanProgress}
+          onStop={() => void stopActiveScan()}
+        />
+      )}
       {lastDebugDump && (
         <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
           OCR debug: {lastDebugDump}
@@ -896,6 +974,7 @@ export function DrawingViewer() {
         currentPage={currentPage}
         totalPages={totalPages}
         scale={scale}
+        balloonsVisible={balloonsVisible}
         onSelectScanSection={() => {
           setSelectionError(null);
           setScanSummary(null);
@@ -909,6 +988,7 @@ export function DrawingViewer() {
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
         }}
+        onToggleBalloons={toggleBalloons}
         onZoomIn={() => setScale(Math.min(scale + 0.25, 4))}
         onZoomOut={() => setScale(Math.max(scale - 0.25, 0.5))}
         onPrevPage={() => setCurrentPage(Math.max(1, currentPage - 1))}
@@ -975,7 +1055,7 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {pageAnnotations.map((ann) => {
+                    {balloonsVisible && pageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
                       return (
@@ -1010,7 +1090,7 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {pageAnnotations.map((ann) => (
+                    {balloonsVisible && pageAnnotations.map((ann) => (
                       <Balloon
                         key={`balloon-${ann.id}`}
                         annotation={ann}

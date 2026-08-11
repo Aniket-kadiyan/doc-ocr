@@ -8,7 +8,12 @@ import type {
   RunScanJobOptions,
   ScanJobResult,
 } from "@/lib/scanJobClient";
-import { runScanJob } from "@/lib/scanJobClient";
+import {
+  cancelScanJob,
+  isScanJobCancelledError,
+  runScanJob,
+} from "@/lib/scanJobClient";
+import type { ScanProgress } from "@/types/scanJob";
 import {
   checkOcrApiHealth,
   runPaddleOcr,
@@ -19,6 +24,7 @@ import {
 } from "@/lib/paddleOcrClient";
 
 export type { OcrEngine, OcrApiHealth, SegmentRegion };
+export { isScanJobCancelledError };
 
 export type OCRResultWithEngine = OCRResult & { engine?: OcrEngine };
 
@@ -98,6 +104,12 @@ export async function runAutoBalloonScan(
 
   activeEngine = "paddleocr";
   return runScanJob(options);
+}
+
+export async function stopAutoBalloonScan(
+  jobId: string
+): Promise<ScanProgress> {
+  return cancelScanJob(jobId);
 }
 
 export async function terminateOCR(): Promise<void> {

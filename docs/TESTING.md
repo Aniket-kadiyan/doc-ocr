@@ -63,11 +63,13 @@ The fast suite verifies:
 - Whole-page auto-ballooning bypasses the section cascade: every page is split
   into four to eight adaptive overlapping panels, with two bounded standalone
   detector calls (`0°` and `90°`) per panel.
-- Repeated-cell table grids produce page-coordinate hard-exclusion masks while
-  isolated drawing rectangles remain unmasked. Mixed section selections reject
-  only candidates inside those masks.
+- Repeated-cell grids produce hard-exclusion masks only when they touch or lie
+  within 2% of the shorter page dimension from a page edge. Interior table-like
+  drawing geometry remains unmasked. Section crops retain all selected pixels.
 - Whole-page crops use standalone orientation and recognition modules in
-  batches; the slow full OCR pipeline is not a permitted fallback.
+  batches for preliminary policy decisions. Every preliminary eligible/review
+  candidate is then reread through the complete Draw Value accuracy pipeline;
+  preliminary text is never published as a balloon or review proposal.
 - Detector quadrilaterals survive page-coordinate restoration and deduplication.
   Only unread, explicitly truncated, or genuinely confusable primary reads enter
   recovery. The rectified variant runs first; the expanded/sharpened variant runs
@@ -88,7 +90,11 @@ The fast suite verifies:
   strong dimension such as an angular tolerance.
 - Scan results remain hidden until success while heartbeat, liveness,
   panel/pass/batch counters, elapsed time, stage-rate ETA, and temporary debug
-  geometry remain observable.
+  geometry remain observable. Cooperative cancellation publishes no partial
+  annotations and enters `cancelling` until the current model call returns.
+- Section scans return every non-empty recognized object after clustering and
+  duplicate suppression, without table, length, numeric, syntax, confidence,
+  or whole-page eligibility filters.
 
 Automated tests do not claim OCR accuracy on real manufacturing drawings or
 pixel-perfect browser rendering. Those remain manual acceptance checks.
@@ -135,6 +141,10 @@ identify the offending balloon and block final output once the edit is saved.
   constant and the pointer remains anchored.
 - Confirm numbers `1`, `35`, and `128` fit without clipping.
 - Confirm selection adds a blue halo without recolouring the artwork.
+- Toggle **Hide Balloons** and confirm saved red boxes, leaders, markers, and
+  numbers disappear while the sidebar, review boxes, and scan progress remain.
+  Toggle **Show Balloons**, reload the browser, and confirm visibility persists
+  without changing saved annotations, numbering, or exports.
 - Replace only `public/balloon-style.json`, refresh, and verify old, new, and
   loaded-project balloons all change without changing their data.
 - Test a missing, malformed, and corrupt-artwork style file separately; the app
@@ -147,7 +157,8 @@ identify the offending balloon and block final output once the edit is saved.
   `text_detector: true`, `text_recognizer: true`,
   `text_line_orientation: true`, and `page_batch_recognition: true`. Whole-page
   scanning must fail clearly if a standalone page model is unavailable; it
-  must not fall back to per-object full-pipeline calls.
+  uses those models for preliminary page processing before authoritative
+  per-candidate Draw Value OCR.
 - Read at least one horizontal dimension, vertical dimension, diameter,
   decimal tolerance, and DMS angle from representative drawings.
 - Verify an OCR failure still opens an editable empty Value dialog without
@@ -189,6 +200,11 @@ identify the offending balloon and block final output once the edit is saved.
   or review for a usable numeric value. Pure text also skips recovery. Only
   unread, explicitly truncated, corrected-confusable, or suspicious
   letter/digit candidates enter the capped recovery route.
+- Confirm only preliminary eligible/review candidates enter **Reading final
+  values**. Their final Value, type, confidence, and symbols must match Draw
+  Value OCR on the same crop; preliminary strings such as `rat`, `Ø0`, or
+  `5×050` must never reach balloons, review proposals, or CSV export. A failed
+  authoritative read must create a blank review value.
 - Confirm angled detections are rectified from their detector polygons. A usable
   first recovery result must skip the expanded/sharpened variant; that second
   variant runs only for unread or numerically conflicting first results. Valid
@@ -216,19 +232,26 @@ identify the offending balloon and block final output once the edit is saved.
   the angle must remain eligible. Place the same labels beside `2:1`, a compact
   identifier, or a single-character revision marker; those context-prone
   values must be excluded. Isolated `0`, `1`, or `8` and mixed text such as
-  `ZONE A 25` must remain review candidates rather than automatic balloons.
-- Record the standalone OCR batch profiles before and after this check. The
-  classifier must not add detection, recovery, or context OCR calls, and the
-  representative whole-page runtime should remain around seven minutes.
-- Confirm the upper specification grid, revision history, title block, and
-  bottom tolerance grid produce no balloons in whole-page or section mode.
-  Select an area containing both a table and a legitimate drawing value: only
-  the table part is red/masked, and the drawing value must still be processed.
+  `ZONE A 25` must enter authoritative rereading rather than becoming automatic
+  balloons; they remain review candidates only when the accurate read is still
+  unresolved.
+- Record standalone batch and authoritative OCR profiles separately. The page
+  classifier must not add detector/recovery/context calls, and total runtime
+  must remain below ten minutes on the representative Windows drawing.
+- Confirm boundary specification/revision/title/tolerance grids produce no
+  balloons in whole-page mode. Confirm a repeated-cell structure in the drawing
+  interior remains available to detection. In section mode, deliberately select
+  a table and confirm its non-empty OCR results are returned because the user
+  selection—not automatic filtering—is the boundary.
 - Disable one whole-page rule in `backend/page_value_filters.py`, restart the
-  backend, and confirm only that rule changes. Section scans bypass those
-  whole-page rules but still obey the global table exclusion.
+  backend, and confirm only that rule changes. Section scans bypass both those
+  whole-page rules and table exclusions.
 - Confirm finalization is visible and all balloons still appear together only
   after the complete job succeeds.
+- Press **Stop** during detection, batch recognition, and final-value rereading.
+  The banner must show **Stopping…** until the active model call returns, then
+  close with a stopped message. Existing saved balloons remain; the stopped job
+  adds no balloons or review candidates.
 - During a section scan, confirm the banner advances through bridge filtering,
   spatial grouping, fragment merging, orientation splitting, bounded local
   refinement, and overlap merging. The current candidate count must remain
@@ -248,12 +271,10 @@ Use a warm OCR service, exclude manual review time, and retain
 at least the accepted detection/recognition accuracy. Neither limit is an
 automatic cancellation timeout. For whole-page runs record total time plus
 layout analysis, masked panel detection, atomic deduplication, primary batched
-recognition, bounded recovery, filter-context recognition, filtering, and
-finalization time so the next optimization targets measured work. The
+recognition, bounded recovery, filter-context recognition, preliminary
+filtering, authoritative Draw Value OCR, final filtering, and finalization time
+so the next optimization targets measured work. The
 section-only morphology and refinement timings are not part of this route.
-
-Frontend job cancellation remains queued after this detection correction and
-is not part of the current acceptance run.
 
 ## Explicitly deferred until after auto-ballooning
 

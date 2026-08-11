@@ -17,7 +17,11 @@ def _wait_for_terminal(
     deadline = monotonic() + timeout
     while monotonic() < deadline:
         snapshot = manager.get(job_id)
-        if snapshot and snapshot["status"] in {"succeeded", "failed"}:
+        if snapshot and snapshot["status"] in {
+            "cancelled",
+            "succeeded",
+            "failed",
+        }:
             return snapshot
         sleep(0.01)
     raise AssertionError("scan job did not finish")
@@ -92,6 +96,128 @@ def test_failure_publishes_an_error_but_no_partial_result() -> None:
         assert failed["result"] is None
         assert failed["percent"] == 60
     finally:
+        manager.shutdown()
+
+
+def test_running_job_cancels_after_the_current_work_unit_without_result() -> None:
+    manager = ScanJobManager(
+        max_workers=1,
+        heartbeat_interval_seconds=0.01,
+    )
+    model_call_started = Event()
+    model_call_finished = Event()
+
+    def work(report):
+        report(
+            stage="recognizing",
+            message="Running one blocking OCR operation",
+            percent=60,
+            completed=0,
+            total=2,
+        )
+        model_call_started.set()
+        assert model_call_finished.wait(1.0)
+        # This progress checkpoint observes the cancellation request and aborts
+        # before the synthetic partial result can be returned.
+        report(
+            stage="recognizing",
+            message="OCR operation complete",
+            percent=80,
+            completed=1,
+            total=2,
+        )
+        return {"count": 1, "regions": [{"text": "25"}]}
+
+    try:
+        initial = manager.submit(work)
+        assert model_call_started.wait(1.0)
+
+        cancelling = manager.cancel(initial["job_id"])
+        assert cancelling is not None
+        assert cancelling["status"] == "cancelling"
+        assert cancelling["liveness"] == "cancelling"
+        assert cancelling["result"] is None
+
+        model_call_finished.set()
+        cancelled = _wait_for_terminal(manager, initial["job_id"])
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["liveness"] == "cancelled"
+        assert cancelled["result"] is None
+        assert cancelled["error"] is None
+        assert cancelled["percent"] == 60
+    finally:
+        model_call_finished.set()
+        manager.shutdown()
+
+
+def test_queued_job_can_be_cancelled_before_its_worker_starts() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release_first = Event()
+    queued_work_ran = Event()
+
+    def blocking_work(_report):
+        first_started.set()
+        assert release_first.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    def queued_work(_report):
+        queued_work_ran.set()
+        return {"count": 1, "regions": [{"text": "50"}]}
+
+    try:
+        first = manager.submit(blocking_work)
+        assert first_started.wait(1.0)
+        queued = manager.submit(queued_work)
+        cancelled = manager.cancel(queued["job_id"])
+        assert cancelled is not None
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["result"] is None
+
+        release_first.set()
+        assert _wait_for_terminal(manager, first["job_id"])["status"] == "succeeded"
+        sleep(0.05)
+        assert not queued_work_ran.is_set()
+        assert manager.get(queued["job_id"])["status"] == "cancelled"
+    finally:
+        release_first.set()
+        manager.shutdown()
+
+
+def test_cancel_request_wins_a_race_with_terminal_result_publication() -> None:
+    manager = ScanJobManager(max_workers=1)
+    work_started = Event()
+    release_work = Event()
+
+    def work(_report):
+        work_started.set()
+        assert release_work.wait(1.0)
+        return {"count": 1, "regions": [{"text": "25"}]}
+
+    try:
+        initial = manager.submit(work)
+        assert work_started.wait(1.0)
+        assert manager.cancel(initial["job_id"])["status"] == "cancelling"
+
+        # Simulate the worker reaching terminal publication in the same instant
+        # as the cancellation request. The manager must discard the result.
+        manager._update(
+            initial["job_id"],
+            status="succeeded",
+            stage="complete",
+            message="Scan complete",
+            percent=100,
+            result={"count": 1, "regions": [{"text": "25"}]},
+        )
+        raced = manager.get(initial["job_id"])
+        assert raced is not None
+        assert raced["status"] == "cancelled"
+        assert raced["result"] is None
+
+        release_work.set()
+        assert _wait_for_terminal(manager, initial["job_id"])["status"] == "cancelled"
+    finally:
+        release_work.set()
         manager.shutdown()
 
 
