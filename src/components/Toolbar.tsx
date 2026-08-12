@@ -192,7 +192,7 @@ export function Toolbar({
           <button
             type="button"
             onClick={onPrevPage}
-            disabled={currentPage <= 1 || isProcessing}
+            disabled={currentPage <= 1 || isProcessing || isSelectingScanArea}
             className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm disabled:opacity-40"
           >
             ‹
@@ -203,7 +203,11 @@ export function Toolbar({
           <button
             type="button"
             onClick={onNextPage}
-            disabled={currentPage >= totalPages || isProcessing}
+            disabled={
+              currentPage >= totalPages ||
+              isProcessing ||
+              isSelectingScanArea
+            }
             className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm disabled:opacity-40"
           >
             ›

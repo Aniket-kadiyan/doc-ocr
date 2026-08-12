@@ -117,6 +117,34 @@ describe("project and integration exports", () => {
     expect(serialized).not.toContain("artwork");
   });
 
+  it("persists individual visibility without removing hidden values from exports", () => {
+    const hiddenValue = makeAnnotation({
+      id: "hidden",
+      number: 1,
+      hidden: true,
+    });
+    const serialized = buildProjectBundle({
+      projectName: "Visibility test",
+      source: {
+        fileName: "drawing.png",
+        mimeType: "image/png",
+        fileType: "image",
+        dataUrl: "data:image/png;base64,AA==",
+      },
+      annotations: [hiddenValue],
+      savedAt: 123,
+    });
+    const bundle = parseProjectBundle(serialized);
+    const payload = buildVerificationPayload(
+      bundle.annotations,
+      "Visibility test"
+    );
+
+    expect(bundle.annotations[0].hidden).toBe(true);
+    expect(payload.items).toHaveLength(1);
+    expect(payload.items[0].value).toBe(hiddenValue.value);
+  });
+
   it("builds a verification payload with no separate label items", () => {
     const payload = buildVerificationPayload(
       values,

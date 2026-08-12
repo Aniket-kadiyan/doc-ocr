@@ -61,6 +61,24 @@ describe("scan candidate duplicate protection", () => {
     expect(result.skippedDuplicates).toBe(0);
   });
 
+  it("keeps individually hidden balloons active for duplicate prevention", () => {
+    const result = filterNewScanRegions(
+      [
+        makeRegion("25", {
+          x: 10,
+          y: 20,
+          width: 30,
+          height: 12,
+        }),
+      ],
+      [makeAnnotation({ hidden: true })],
+      1
+    );
+
+    expect(result.accepted).toEqual([]);
+    expect(result.skippedExisting).toBe(1);
+  });
+
   it("deduplicates one batch and returns survivors in stable page order", () => {
     const result = filterNewScanRegions(
       [

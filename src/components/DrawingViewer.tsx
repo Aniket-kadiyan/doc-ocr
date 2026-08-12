@@ -6,7 +6,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { Stage, Layer, Image as KonvaImage, Rect } from "react-konva";
+import {
+  Stage,
+  Layer,
+  Group,
+  Image as KonvaImage,
+  Rect,
+  Text,
+} from "react-konva";
 import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
@@ -20,6 +27,13 @@ import {
 } from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { filterNewScanRegions } from "@/lib/scanCandidates";
+import { mergePageReviewCandidates } from "@/lib/scanReviewCandidates";
+import {
+  runSectionScanQueue,
+  type QueuedScanSection,
+  type ScanRunOutcome,
+  type SectionQueuePosition,
+} from "@/lib/sectionScanQueue";
 import { deriveRange } from "@/lib/valueFields";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
@@ -64,8 +78,21 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
 const BALLOON_VISIBILITY_STORAGE_KEY = "doc-ocr:balloons-visible";
+const DRAWING_BACKGROUND_NAME = "drawing-background";
 
-type PageScanReviewCandidate = SegmentRegion & { page: number };
+type PageScanReviewCandidate = Omit<SegmentRegion, "candidateId"> & {
+  candidateId: string;
+  page: number;
+  reviewOrder: number;
+};
+
+interface AutoBalloonRunOptions {
+  manageProcessing?: boolean;
+  sectionPosition?: SectionQueuePosition;
+}
+
+const waitForBrowserPaint = () =>
+  new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
 const legacyMigrationWarning = (orphanLabelCount: number) =>
   orphanLabelCount > 0
@@ -97,6 +124,9 @@ export function DrawingViewer() {
   const [projectId, setProjectId] = useState(() => uuidv4());
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<
+    string | null
+  >(null);
   const [currentBox, setCurrentBox] = useState<BBox | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [lastDebugDump, setLastDebugDump] = useState<string | null>(null);
@@ -107,6 +137,11 @@ export function DrawingViewer() {
     useState<ScanCompletionSummary | null>(null);
   const [scanReviewCandidates, setScanReviewCandidates] = useState<
     PageScanReviewCandidate[]
+  >([]);
+  const scanReviewCandidatesRef = useRef<PageScanReviewCandidate[]>([]);
+  const reviewOrderRef = useRef(0);
+  const [selectedScanSections, setSelectedScanSections] = useState<
+    QueuedScanSection[]
   >([]);
   const [balloonsVisible, setBalloonsVisible] = useState(true);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -140,8 +175,22 @@ export function DrawingViewer() {
     (annotation) =>
       annotation.page === currentPage && annotation.kind !== "label"
   );
+  const visiblePageAnnotations = pageAnnotations.filter(
+    (annotation) => !annotation.hidden
+  );
   const pageScanReviewCandidates = scanReviewCandidates.filter(
     (candidate) => candidate.page === currentPage
+  );
+  const pageSelectedScanSections = selectedScanSections.filter(
+    (section) => section.page === currentPage
+  );
+
+  const replaceScanReviewCandidates = useCallback(
+    (next: PageScanReviewCandidate[]) => {
+      scanReviewCandidatesRef.current = next;
+      setScanReviewCandidates(next);
+    },
+    []
   );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
@@ -181,8 +230,11 @@ export function DrawingViewer() {
 
   useEffect(() => {
     // Review boxes are temporary scan output, never project data.
-    setScanReviewCandidates([]);
-  }, [projectId]);
+    replaceScanReviewCandidates([]);
+    reviewOrderRef.current = 0;
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+  }, [projectId, replaceScanReviewCandidates]);
 
   useEffect(() => {
     void preloadOcr();
@@ -296,6 +348,8 @@ export function DrawingViewer() {
     setProjectId(id);
     setAnnotations([]);
     setSelectedId(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -352,6 +406,8 @@ export function DrawingViewer() {
     sourceFileRef.current = null;
     setAnnotations([]);
     setSelectedId(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -370,6 +426,10 @@ export function DrawingViewer() {
     setSelectionError(null);
     setScanProgress(null);
     setScanSummary(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
     try {
       const bundle = parseProjectBundle(await file.text());
       const id = uuidv4();
@@ -409,9 +469,13 @@ export function DrawingViewer() {
   // Select an annotation and follow it to its page so it's actually on screen.
   const handleSelect = useCallback(
     (id: string | null) => {
-      setSelectedId(id);
-      if (!id) return;
+      setSelectedReviewCandidateId(null);
+      if (!id) {
+        setSelectedId(null);
+        return;
+      }
       const ann = annotations.find((a) => a.id === id);
+      setSelectedId(ann?.hidden ? null : id);
       if (ann && ann.page !== currentPage) setCurrentPage(ann.page);
     },
     [annotations, currentPage, setCurrentPage]
@@ -430,6 +494,26 @@ export function DrawingViewer() {
       if (editingValueId === id) setEditingValueId(null);
     },
     [editingValueId, projectId, removeAnnotation, setEditingValueId]
+  );
+
+  const toggleAnnotationVisibility = useCallback(
+    (id: string) => {
+      const annotation = useAnnotationStore
+        .getState()
+        .annotations.find((candidate) => candidate.id === id);
+      if (!annotation) return;
+
+      const hidden = !annotation.hidden;
+      updateAnnotation(id, { hidden });
+      if (hidden) {
+        setSelectedId((current) => (current === id ? null : current));
+      }
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+    },
+    [projectId, updateAnnotation]
   );
 
   // Read one drawn value and open the value/tolerance confirmation popup.
@@ -487,13 +571,32 @@ export function DrawingViewer() {
   );
 
   const runAutoBalloon = useCallback(
-    async (bbox: BBox, scopeKind: ScanScopeKind, scanPage: number) => {
-      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
+    async (
+      bbox: BBox,
+      scopeKind: ScanScopeKind,
+      scanPage: number,
+      options: AutoBalloonRunOptions = {}
+    ): Promise<ScanRunOutcome> => {
+      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) {
+        setSelectionError("The selected scan section is too small.");
+        return { status: "failed" };
+      }
       const source = sourceCanvasRef.current;
-      if (!source) return;
+      if (!source) {
+        setSelectionError("No drawing is available to scan.");
+        return { status: "failed" };
+      }
 
       const projectAtStart = projectIdRef.current;
-      setIsProcessing(true);
+      const scanRunId = uuidv4();
+      const manageProcessing = options.manageProcessing ?? true;
+      const sectionLabel = options.sectionPosition
+        ? "Section " +
+          options.sectionPosition.current +
+          " of " +
+          options.sectionPosition.total
+        : "";
+      if (manageProcessing) setIsProcessing(true);
       setSelectionError(null);
       setScanSummary(null);
       setScanOverlay(null);
@@ -501,7 +604,9 @@ export function DrawingViewer() {
         jobId: "",
         status: "queued",
         stage: "preparing",
-        message: "Preparing selected area",
+        message: sectionLabel
+          ? sectionLabel + " · Preparing selected area"
+          : "Preparing selected area",
         percent: 0,
         completed: 0,
         total: 0,
@@ -514,7 +619,7 @@ export function DrawingViewer() {
         batchCurrent: 0,
         batchTotal: 0,
         candidateCount: 0,
-        operationLabel: "",
+        operationLabel: sectionLabel,
         elapsedSeconds: 0,
         stepElapsedSeconds: 0,
         heartbeatAgeSeconds: 0,
@@ -531,7 +636,16 @@ export function DrawingViewer() {
           scopeKind,
           displayScale: 1,
           onProgress: (progress) => {
-            setScanProgress(progress);
+            const displayedProgress = sectionLabel
+              ? {
+                  ...progress,
+                  message: sectionLabel + " · " + progress.message,
+                  operationLabel: progress.operationLabel
+                    ? sectionLabel + " · " + progress.operationLabel
+                    : sectionLabel,
+                }
+              : progress;
+            setScanProgress(displayedProgress);
             if (SCAN_DEBUG_OVERLAY_ENABLED && progress.overlay) {
               setScanOverlay(progress.overlay);
             }
@@ -590,62 +704,100 @@ export function DrawingViewer() {
         const reviewCandidates: PageScanReviewCandidate[] =
           filteredReview.accepted.map((candidate) => ({
             ...candidate,
-            candidateId: `${projectAtStart}:${scanPage}:${
-              candidate.candidateId ?? uuidv4()
-            }`,
+            candidateId: [
+              projectAtStart,
+              scanPage,
+              scanRunId,
+              candidate.candidateId ?? uuidv4(),
+            ].join(":"),
             page: scanPage,
+            reviewOrder: reviewOrderRef.current++,
           }));
 
+        const mergedReviews = mergePageReviewCandidates({
+          existing: scanReviewCandidatesRef.current,
+          incoming: reviewCandidates,
+          newAnnotations,
+          page: scanPage,
+          scopeKind,
+        });
+        const incomingReviewIds = new Set(
+          reviewCandidates.map((candidate) => candidate.candidateId)
+        );
+        const addedReviewCount = mergedReviews.candidates.filter((candidate) =>
+          incomingReviewIds.has(candidate.candidateId)
+        ).length;
+        const pageReviewCount = mergedReviews.candidates.filter(
+          (candidate) => candidate.page === scanPage
+        ).length;
+
         if (newAnnotations.length > 0) {
-          // Atomic frontend commit: annotations become visible only here.
+          // Atomic per-section commit: save these balloons before the queue is
+          // allowed to start its next section.
           addAnnotations(newAnnotations);
+          await saveAnnotations(
+            projectAtStart,
+            useAnnotationStore.getState().annotations
+          );
         }
-        setScanReviewCandidates((current) => [
-          ...current.filter((candidate) => candidate.page !== scanPage),
-          ...reviewCandidates,
-        ]);
+        replaceScanReviewCandidates(mergedReviews.candidates);
         setScanOverlay(null);
-        setScanSummary({
+        const summary: ScanCompletionSummary = {
           scopeKind,
           added: newAnnotations.length,
           detected: scanResult.detected,
           recognized: scanResult.recognized,
           eligible: scanResult.eligible,
           excluded: scanResult.excluded,
-          reviewRequired: reviewCandidates.length,
+          reviewRequired:
+            scopeKind === "section" ? pageReviewCount : addedReviewCount,
           unread: scanResult.unread,
           skippedExisting:
             filtered.skippedExisting + filteredReview.skippedExisting,
           skippedDuplicates:
-            filtered.skippedDuplicates + filteredReview.skippedDuplicates,
-        });
-        if (newAnnotations.length === 0 && reviewCandidates.length === 0) {
+            filtered.skippedDuplicates +
+            filteredReview.skippedDuplicates +
+            mergedReviews.skippedDuplicates,
+        };
+        setScanSummary(summary);
+        if (newAnnotations.length === 0 && addedReviewCount === 0) {
           setSelectionError(
             scopeKind === "page"
               ? "No eligible numeric values remained after whole-page filtering."
-              : "No values were detected outside excluded table regions in the scanned area."
+              : "No values were detected in the selected section."
           );
         }
+        return { status: "succeeded", summary };
       } catch (err) {
         if (isScanJobCancelledError(err)) {
           setScanOverlay(null);
           setSelectionError(
-            "Scan stopped. No balloons or review candidates were added."
+            options.sectionPosition
+              ? sectionLabel +
+                  " stopped. Earlier completed sections remain saved; no results from this section were added."
+              : "Scan stopped. No balloons or review candidates were added."
           );
+          return { status: "cancelled" };
         } else {
           const message =
             err instanceof Error
               ? err.message
               : "Auto-balloon scan failed unexpectedly";
           setSelectionError(message);
+          return { status: "failed" };
         }
       } finally {
         setScanProgress(null);
-        setIsProcessing(false);
+        if (manageProcessing) setIsProcessing(false);
         setIsSegmenting(false);
       }
     },
-    [addAnnotations, setIsProcessing, setIsSegmenting]
+    [
+      addAnnotations,
+      replaceScanReviewCandidates,
+      setIsProcessing,
+      setIsSegmenting,
+    ]
   );
 
   const stopActiveScan = useCallback(async () => {
@@ -682,6 +834,7 @@ export function DrawingViewer() {
   }, [scanProgress]);
 
   const toggleBalloons = useCallback(() => {
+    setSelectedId(null);
     setBalloonsVisible((current) => {
       const next = !current;
       try {
@@ -697,17 +850,65 @@ export function DrawingViewer() {
   }, []);
 
   const finishSegmentBox = useCallback(
-    async (bbox: BBox) => {
+    (bbox: BBox) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
-      setIsSegmenting(false);
-      await runAutoBalloon(bbox, "section", currentPage);
+      setSelectedScanSections((current) => [
+        ...current,
+        { id: uuidv4(), bbox, page: currentPage },
+      ]);
     },
-    [currentPage, runAutoBalloon, setIsSegmenting]
+    [currentPage]
   );
+
+  const cancelSectionSelection = useCallback(() => {
+    drawStartRef.current = null;
+    currentBoxRef.current = null;
+    setCurrentBox(null);
+    setSelectedScanSections([]);
+    setIsSegmenting(false);
+  }, [setIsSegmenting]);
+
+  const startSelectedSectionScan = useCallback(async () => {
+    const sections = [...selectedScanSections];
+    if (sections.length === 0) return;
+
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setIsProcessing(true);
+    try {
+      const result = await runSectionScanQueue({
+        sections,
+        runSection: (section, position) =>
+          runAutoBalloon(section.bbox, "section", section.page, {
+            manageProcessing: false,
+            sectionPosition: position,
+          }),
+        afterSection: async (_section, _position, aggregate) => {
+          setScanSummary(aggregate);
+          // Yield after the atomic insert/save so this section's balloons are
+          // visibly painted before the next OCR job starts.
+          await waitForBrowserPaint();
+        },
+      });
+      if (result.completedSections > 0) {
+        setScanSummary(result.summary);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [
+    runAutoBalloon,
+    selectedScanSections,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+  ]);
 
   const scanWholePage = useCallback(async () => {
     const source = sourceCanvasRef.current;
     if (!source) return;
+    setSelectedScanSections([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     await runAutoBalloon(
@@ -720,8 +921,10 @@ export function DrawingViewer() {
 
   const openScanReviewCandidate = useCallback(
     (candidate: PageScanReviewCandidate) => {
-      if (!candidate.candidateId) return;
       setSelectionError(null);
+      setSelectedId(null);
+      setSelectedReviewCandidateId(candidate.candidateId);
+      if (candidate.page !== currentPage) setCurrentPage(candidate.page);
       setPending({
         bbox: candidate.valueBox,
         page: candidate.page,
@@ -743,16 +946,31 @@ export function DrawingViewer() {
         },
       });
     },
-    [setPending]
+    [currentPage, setCurrentPage, setPending]
+  );
+
+  const selectScanReviewCandidate = useCallback(
+    (candidateId: string) => {
+      const candidate = scanReviewCandidatesRef.current.find(
+        (item) => item.candidateId === candidateId
+      );
+      if (candidate) openScanReviewCandidate(candidate);
+    },
+    [openScanReviewCandidate]
   );
 
   const resolveScanReviewCandidate = useCallback(
     (candidateId: string, action: "accepted" | "ignored") => {
-      const resolved = scanReviewCandidates.find(
+      const resolved = scanReviewCandidatesRef.current.find(
         (candidate) => candidate.candidateId === candidateId
       );
-      setScanReviewCandidates((current) =>
-        current.filter((candidate) => candidate.candidateId !== candidateId)
+      replaceScanReviewCandidates(
+        scanReviewCandidatesRef.current.filter(
+          (candidate) => candidate.candidateId !== candidateId
+        )
+      );
+      setSelectedReviewCandidateId((current) =>
+        current === candidateId ? null : current
       );
       if (resolved?.page === currentPage) {
         setScanSummary((summary) =>
@@ -766,7 +984,7 @@ export function DrawingViewer() {
         );
       }
     },
-    [currentPage, scanReviewCandidates]
+    [currentPage, replaceScanReviewCandidates]
   );
 
   const isCompletingDraw = useRef(false);
@@ -774,8 +992,16 @@ export function DrawingViewer() {
   const drawingActive = isDrawingValue || isSegmenting;
 
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!drawingActive) return;
     const stage = e.target.getStage();
+    if (!drawingActive) {
+      if (
+        e.target === stage ||
+        e.target.name() === DRAWING_BACKGROUND_NAME
+      ) {
+        handleSelect(null);
+      }
+      return;
+    }
     // Relative pointer position undoes the Stage zoom transform, so the box is
     // captured in base (unzoomed) canvas coords — the system bboxes are stored in.
     const pos = stage?.getRelativePointerPosition();
@@ -952,13 +1178,39 @@ export function DrawingViewer() {
         </div>
       )}
       {isSegmenting && !isProcessing && (
-        <div className="flex items-center justify-center gap-3 bg-emerald-600 px-4 py-2.5 text-center text-sm font-medium text-white">
+        <div className="flex flex-wrap items-center justify-center gap-2 bg-emerald-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
-            Drag a rectangle around the section to auto-balloon.
+            Draw sections in scan order. {selectedScanSections.length} selected.
           </span>
           <button
             type="button"
-            onClick={() => setIsSegmenting(false)}
+            onClick={() => void startSelectedSectionScan()}
+            disabled={selectedScanSections.length === 0}
+            className="rounded bg-white px-2 py-0.5 font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Start Scan
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedScanSections((current) => current.slice(0, -1))
+            }
+            disabled={selectedScanSections.length === 0}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20 disabled:opacity-50"
+          >
+            Undo Last
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedScanSections([])}
+            disabled={selectedScanSections.length === 0}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20 disabled:opacity-50"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={cancelSectionSelection}
             className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
           >
             Cancel
@@ -978,6 +1230,7 @@ export function DrawingViewer() {
         onSelectScanSection={() => {
           setSelectionError(null);
           setScanSummary(null);
+          setSelectedScanSections([]);
           setIsDrawingValue(false);
           setIsSegmenting(true);
         }}
@@ -985,6 +1238,7 @@ export function DrawingViewer() {
         onToggleDrawValue={() => {
           setSelectionError(null);
           setScanSummary(null);
+          setSelectedScanSections([]);
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
         }}
@@ -1004,7 +1258,14 @@ export function DrawingViewer() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto p-4">
+          <div
+            className="flex-1 overflow-auto p-4"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !drawingActive) {
+                handleSelect(null);
+              }
+            }}
+          >
             {!konvaImage ? (
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-white text-slate-500">
                 <p className="text-lg font-medium">No drawing loaded</p>
@@ -1035,6 +1296,7 @@ export function DrawingViewer() {
                 >
                   <Layer>
                     <KonvaImage
+                      name={DRAWING_BACKGROUND_NAME}
                       image={konvaImage}
                       width={stageSize.width}
                       height={stageSize.height}
@@ -1051,11 +1313,12 @@ export function DrawingViewer() {
                         candidates={pageScanReviewCandidates}
                         scale={scale}
                         disabled={drawingActive || isProcessing}
+                        selectedCandidateId={selectedReviewCandidateId}
                         onSelect={openScanReviewCandidate}
                       />
                     )}
 
-                    {balloonsVisible && pageAnnotations.map((ann) => {
+                    {balloonsVisible && visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
                       return (
@@ -1078,6 +1341,33 @@ export function DrawingViewer() {
                       );
                     })}
 
+                    {pageSelectedScanSections.map((section) => {
+                      const order =
+                        selectedScanSections.findIndex(
+                          (candidate) => candidate.id === section.id
+                        ) + 1;
+                      return (
+                        <Group key={section.id} listening={false}>
+                          <Rect
+                            {...section.bbox}
+                            fill="#10b981"
+                            opacity={0.08}
+                            stroke="#059669"
+                            strokeWidth={2.5 / scale}
+                            dash={[8 / scale, 4 / scale]}
+                          />
+                          <Text
+                            x={section.bbox.x + 4 / scale}
+                            y={section.bbox.y + 3 / scale}
+                            text={String(order)}
+                            fill="#047857"
+                            fontSize={14 / scale}
+                            fontStyle="bold"
+                          />
+                        </Group>
+                      );
+                    })}
+
                     {currentBox && (
                       <Rect
                         x={currentBox.x}
@@ -1090,7 +1380,7 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {balloonsVisible && pageAnnotations.map((ann) => (
+                    {balloonsVisible && visiblePageAnnotations.map((ann) => (
                       <Balloon
                         key={`balloon-${ann.id}`}
                         annotation={ann}
@@ -1110,9 +1400,14 @@ export function DrawingViewer() {
 
         <Sidebar
           annotations={annotations}
+          reviewCandidates={scanReviewCandidates}
+          disabled={isSegmenting || isProcessing}
           selectedId={selectedId}
+          selectedReviewCandidateId={selectedReviewCandidateId}
           onSelect={(id) => handleSelect(id)}
+          onSelectReview={selectScanReviewCandidate}
           onDelete={handleDelete}
+          onToggleVisibility={toggleAnnotationVisibility}
           onEdit={(id) => {
             handleSelect(id);
             setEditingValueId(id);
@@ -1120,7 +1415,14 @@ export function DrawingViewer() {
         />
       </div>
 
-      <AnnotationPopup onReviewResolved={resolveScanReviewCandidate} />
+      <AnnotationPopup
+        onReviewResolved={resolveScanReviewCandidate}
+        onReviewCancelled={(candidateId) =>
+          setSelectedReviewCandidateId((current) =>
+            current === candidateId ? null : current
+          )
+        }
+      />
 
       {(() => {
         const editingValue = annotations.find(

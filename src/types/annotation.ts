@@ -50,6 +50,9 @@ export interface Annotation {
   kind?: AnnotationKind;
   /** Backend flagged the OCR read as uncertain. */
   needsReview?: boolean;
+  /** Presentation-only per-balloon visibility. Hidden values remain numbered,
+   * persisted, exported, and active for duplicate prevention. */
+  hidden?: boolean;
   /** Legacy label-first project field. */
   labelSource?: LabelSource;
   /** Optional inspection method associated directly with this value. */

@@ -145,6 +145,13 @@ identify the offending balloon and block final output once the edit is saved.
   numbers disappear while the sidebar, review boxes, and scan progress remain.
   Toggle **Show Balloons**, reload the browser, and confirm visibility persists
   without changing saved annotations, numbering, or exports.
+- Use **Hide** on one sidebar value and confirm only that value box, leader,
+  marker, and number disappear. Its sidebar row must remain with a **Hidden**
+  badge, and it must still be present in saved projects, checksheets, exports,
+  and duplicate protection. The global toggle must not reset individual choices.
+- Select a balloon, then click blank drawing space or the surrounding workspace.
+  Confirm selection clears and every visible balloon returns to full opacity.
+  Hiding the selected balloon must clear selection as well.
 - Replace only `public/balloon-style.json`, refresh, and verify old, new, and
   loaded-project balloons all change without changing their data.
 - Test a missing, malformed, and corrupt-artwork style file separately; the app
@@ -219,7 +226,9 @@ identify the offending balloon and block final output once the edit is saved.
   processing overlay disappears. **OK** creates a normal balloon and removes
   the review box; **Ignore** removes it without creating data; **Cancel** leaves
   it available. Review boxes must not appear in saved projects or exports until
-  accepted.
+  accepted. Every unresolved object must also appear in the right panel after
+  all numbered balloons; selecting that row must open the same review workflow
+  and navigate to its page.
 - Confirm whole-page filtering accepts values such as `50`, `.25`, `R5.00`,
   `Ø24.80`, `15°±3°`, `32°20'40"`, `M8`, `2X Ø10`, `SS304`, `R0.2 MAX`, and
   standalone `2:1` without requiring units, leaders, arrows, or other geometry.
@@ -246,12 +255,23 @@ identify the offending balloon and block final output once the edit is saved.
 - Disable one whole-page rule in `backend/page_value_filters.py`, restart the
   backend, and confirm only that rule changes. Section scans bypass both those
   whole-page rules and table exclusions.
-- Confirm finalization is visible and all balloons still appear together only
-  after the complete job succeeds.
+- For **Select Sections**, draw at least three non-overlapping areas and confirm
+  they receive visible `1`, `2`, `3` order markers. Verify **Undo Last**,
+  **Clear**, and **Cancel**, then start the queue.
+- Confirm section jobs run strictly in the selected order. Each section must
+  publish and save its complete balloon batch before the next section starts;
+  the progress banner must identify `Section N of M`. Overlapping later
+  sections must skip balloons already added by earlier sections.
+- Confirm whole-page finalization remains atomic: all whole-page balloons appear
+  together only after that complete job succeeds. Section batches are atomic per
+  section and never publish a partially completed active section.
 - Press **Stop** during detection, batch recognition, and final-value rereading.
   The banner must show **Stopping…** until the active model call returns, then
   close with a stopped message. Existing saved balloons remain; the stopped job
   adds no balloons or review candidates.
+- Press **Stop** during the second item of a multi-section queue. Balloons and
+  reviews from the first section must remain; the active section must publish
+  nothing, and no later queued section may start.
 - During a section scan, confirm the banner advances through bridge filtering,
   spatial grouping, fragment merging, orientation splitting, bounded local
   refinement, and overlap merging. The current candidate count must remain
@@ -285,10 +305,9 @@ current auto-ballooning milestones:
    embedded in Value.
 2. Export validation evaluates committed annotation data; exporting while the
    latest editor changes are still unsaved can miss those pending changes.
-3. Clicking the currently selected balloon does not deselect it.
-4. Balloons cannot yet be reordered by the user. Reordering must preserve
+3. Balloons cannot yet be reordered by the user. Reordering must preserve
    contiguous `1...N` numbering in the drawing, sidebar, project, and exports.
-Do not mark tests for these four behaviors as passing until their later fixes are
+Do not mark tests for these three behaviors as passing until their later fixes are
 implemented.
 
 ## Reporting a failure

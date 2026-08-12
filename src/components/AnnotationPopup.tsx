@@ -14,9 +14,13 @@ interface AnnotationPopupProps {
     candidateId: string,
     action: "accepted" | "ignored"
   ) => void;
+  onReviewCancelled?: (candidateId: string) => void;
 }
 
-export function AnnotationPopup({ onReviewResolved }: AnnotationPopupProps) {
+export function AnnotationPopup({
+  onReviewResolved,
+  onReviewCancelled,
+}: AnnotationPopupProps) {
   const pending = useAnnotationStore((state) => state.pending);
   const addAnnotation = useAnnotationStore((state) => state.addAnnotation);
   const getNextNumber = useAnnotationStore((state) => state.getNextNumber);
@@ -103,6 +107,9 @@ export function AnnotationPopup({ onReviewResolved }: AnnotationPopupProps) {
   };
 
   const handleCancel = () => {
+    if (isScanReview && pending.reviewCandidateId) {
+      onReviewCancelled?.(pending.reviewCandidateId);
+    }
     setPending(null);
     resetForm();
   };

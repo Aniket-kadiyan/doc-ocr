@@ -50,7 +50,7 @@ export function AutoBalloonMenu({
         {running
           ? "Auto Ballooning…"
           : selectingSection
-            ? "Select Scan Area…"
+            ? "Selecting Sections…"
             : "Auto Balloon ▾"}
       </button>
 
@@ -61,9 +61,9 @@ export function AutoBalloonMenu({
             onClick={() => choose(onSelectSection)}
             className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-emerald-50"
           >
-            <span className="font-medium">Select Section</span>
+            <span className="font-medium">Select Sections</span>
             <span className="block text-[11px] text-slate-400">
-              Draw a rectangle around the area to scan
+              Draw one or more areas, then scan them in order
             </span>
           </button>
           <button
