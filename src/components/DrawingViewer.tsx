@@ -77,7 +77,6 @@ import type {
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
-const BALLOON_VISIBILITY_STORAGE_KEY = "doc-ocr:balloons-visible";
 const DRAWING_BACKGROUND_NAME = "drawing-background";
 
 type PageScanReviewCandidate = Omit<SegmentRegion, "candidateId"> & {
@@ -143,7 +142,6 @@ export function DrawingViewer() {
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
-  const [balloonsVisible, setBalloonsVisible] = useState(true);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -151,6 +149,9 @@ export function DrawingViewer() {
   const setAnnotations = useAnnotationStore((s) => s.setAnnotations);
   const addAnnotations = useAnnotationStore((s) => s.addAnnotations);
   const updateAnnotation = useAnnotationStore((s) => s.updateAnnotation);
+  const setAllBalloonVisibility = useAnnotationStore(
+    (s) => s.setAllBalloonVisibility
+  );
   const removeAnnotation = useAnnotationStore((s) => s.removeAnnotation);
   const setPending = useAnnotationStore((s) => s.setPending);
   const currentPage = useAnnotationStore((s) => s.currentPage);
@@ -178,6 +179,12 @@ export function DrawingViewer() {
   const visiblePageAnnotations = pageAnnotations.filter(
     (annotation) => !annotation.hidden
   );
+  const valueAnnotations = annotations.filter(
+    (annotation) => annotation.kind !== "label"
+  );
+  const balloonsVisible =
+    valueAnnotations.length > 0 &&
+    valueAnnotations.every((annotation) => !annotation.hidden);
   const pageScanReviewCandidates = scanReviewCandidates.filter(
     (candidate) => candidate.page === currentPage
   );
@@ -239,17 +246,6 @@ export function DrawingViewer() {
   useEffect(() => {
     void preloadOcr();
   }, []);
-
-  useEffect(() => {
-    try {
-      setBalloonsVisible(
-        window.localStorage.getItem(BALLOON_VISIBILITY_STORAGE_KEY) !== "false"
-      );
-    } catch {
-      // Browser privacy settings may disable storage; default visibility stays.
-    }
-  }, []);
-
 
   useEffect(() => {
     if (annotations.length === 0) return;
@@ -635,6 +631,13 @@ export function DrawingViewer() {
           page: scanPage,
           scopeKind,
           displayScale: 1,
+          existingValueBoxes: useAnnotationStore
+            .getState()
+            .annotations.filter(
+              (annotation) =>
+                annotation.kind !== "label" && annotation.page === scanPage
+            )
+            .map((annotation) => annotation.bbox),
           onProgress: (progress) => {
             const displayedProgress = sectionLabel
               ? {
@@ -753,7 +756,9 @@ export function DrawingViewer() {
             scopeKind === "section" ? pageReviewCount : addedReviewCount,
           unread: scanResult.unread,
           skippedExisting:
-            filtered.skippedExisting + filteredReview.skippedExisting,
+            scanResult.skippedExisting +
+            filtered.skippedExisting +
+            filteredReview.skippedExisting,
           skippedDuplicates:
             filtered.skippedDuplicates +
             filteredReview.skippedDuplicates +
@@ -835,19 +840,12 @@ export function DrawingViewer() {
 
   const toggleBalloons = useCallback(() => {
     setSelectedId(null);
-    setBalloonsVisible((current) => {
-      const next = !current;
-      try {
-        window.localStorage.setItem(
-          BALLOON_VISIBILITY_STORAGE_KEY,
-          String(next)
-        );
-      } catch {
-        // Visibility remains usable even when browser storage is unavailable.
-      }
-      return next;
-    });
-  }, []);
+    setAllBalloonVisibility(!balloonsVisible);
+    void saveAnnotations(
+      projectId,
+      useAnnotationStore.getState().annotations
+    );
+  }, [balloonsVisible, projectId, setAllBalloonVisibility]);
 
   const finishSegmentBox = useCallback(
     (bbox: BBox) => {
@@ -1227,6 +1225,7 @@ export function DrawingViewer() {
         totalPages={totalPages}
         scale={scale}
         balloonsVisible={balloonsVisible}
+        hasBalloons={valueAnnotations.length > 0}
         onSelectScanSection={() => {
           setSelectionError(null);
           setScanSummary(null);
@@ -1318,7 +1317,7 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {balloonsVisible && visiblePageAnnotations.map((ann) => {
+                    {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
                       return (
@@ -1380,7 +1379,7 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {balloonsVisible && visiblePageAnnotations.map((ann) => (
+                    {visiblePageAnnotations.map((ann) => (
                       <Balloon
                         key={`balloon-${ann.id}`}
                         annotation={ann}

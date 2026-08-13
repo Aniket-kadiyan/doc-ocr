@@ -5,8 +5,10 @@ from __future__ import annotations
 from detection_passes import DetectionTile
 from page_scan import (
     assign_candidate_ids,
+    bbox_overlap_fraction,
     deduplicate_page_candidates,
     map_tile_candidate,
+    overlaps_existing_value,
     strict_same_object,
 )
 
@@ -113,3 +115,13 @@ def test_page_candidate_keeps_polygon_and_receives_stable_id() -> None:
     )
     [identified] = assign_candidate_ids([candidate])
     assert identified.candidate_id == "C0001"
+
+
+def test_existing_balloon_overlap_uses_the_smaller_box() -> None:
+    detector_box = {"x": 105, "y": 102, "width": 35, "height": 14}
+    saved_box = {"x": 100, "y": 98, "width": 46, "height": 22}
+    neighbour = {"x": 160, "y": 98, "width": 40, "height": 22}
+
+    assert bbox_overlap_fraction(detector_box, saved_box) > 0.55
+    assert overlaps_existing_value(detector_box, (saved_box,))
+    assert not overlaps_existing_value(detector_box, (neighbour,))

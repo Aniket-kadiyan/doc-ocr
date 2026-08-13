@@ -43,7 +43,7 @@ def test_table_detection_requires_repeated_cells_not_one_rectangle() -> None:
     assert not any(_contains(mask, 120, 120) for mask in masks)
 
 
-def test_interior_repeated_grid_is_not_a_page_table_mask() -> None:
+def test_interior_repeated_grid_is_a_page_table_mask() -> None:
     image = Image.new("RGB", (640, 420), "white")
     draw = ImageDraw.Draw(image)
     x_values = (280, 340, 400, 460)
@@ -53,7 +53,10 @@ def test_interior_repeated_grid_is_not_a_page_table_mask() -> None:
     for y in y_values:
         draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
 
-    assert detect_table_masks(image) == ()
+    masks = detect_table_masks(image)
+
+    assert masks
+    assert any(_contains(mask, 370, 180) for mask in masks)
 
 
 def test_adaptive_layout_never_uses_the_complete_page_as_one_panel() -> None:

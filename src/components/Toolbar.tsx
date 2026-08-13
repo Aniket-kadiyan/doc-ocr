@@ -18,6 +18,7 @@ interface ToolbarProps {
   totalPages: number;
   scale: number;
   balloonsVisible: boolean;
+  hasBalloons: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
   onToggleDrawValue: () => void;
@@ -42,6 +43,7 @@ export function Toolbar({
   totalPages,
   scale,
   balloonsVisible,
+  hasBalloons,
   onSelectScanSection,
   onScanWholePage,
   onToggleDrawValue,
@@ -138,7 +140,7 @@ export function Toolbar({
       <button
         type="button"
         onClick={onToggleBalloons}
-        disabled={!canSaveProject}
+        disabled={!canSaveProject || !hasBalloons}
         title="Show or hide saved balloon markers and value boxes"
         className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
       >

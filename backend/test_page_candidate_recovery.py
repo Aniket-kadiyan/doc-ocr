@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from PIL import Image, ImageDraw
+import page_candidate_recovery
 
 from page_candidate_recovery import (
+    assess_authoritative_result,
+    authoritative_result_needs_retry,
+    build_authoritative_crops,
     build_recovery_crops,
     engineering_values_agree,
     is_usable_engineering_value,
     reconstruct_line_context,
     resolve_recovery_consensus,
+    resolve_authoritative_hypotheses,
     result_needs_recovery,
     result_needs_second_recovery,
     select_recovery_record_indexes,
@@ -190,6 +195,127 @@ def test_degenerate_polygon_uses_safe_axis_aligned_recovery() -> None:
 
     assert len(crops) == 2
     assert all(crop.image.width > 1 and crop.image.height > 1 for crop in crops)
+
+
+def test_authoritative_crops_rectify_and_retain_the_detector_target() -> None:
+    image = Image.new("RGB", (240, 140), "white")
+    polygon = [[60, 58], [180, 42], [184, 62], [64, 78]]
+    bbox = {"x": 60, "y": 42, "width": 124, "height": 36}
+
+    tight, padded = build_authoritative_crops(image, bbox, polygon)
+
+    assert tight.profile == "authoritative_tight_rectified"
+    assert padded.profile == "authoritative_padded_rectified"
+    assert tight.polygon_usable and padded.polygon_usable
+    assert tight.image.width > tight.image.height
+    assert tight.target_bbox["width"] > 1
+    assert tight.target_bbox["height"] > 1
+    assert padded.image.width > tight.image.width
+    assert padded.image.height > tight.image.height
+
+
+def test_authoritative_polygon_rectification_has_a_pillow_fallback(
+    monkeypatch,
+) -> None:
+    image = Image.new("RGB", (240, 140), "white")
+    polygon = [[60, 58], [180, 42], [184, 62], [64, 78]]
+    bbox = {"x": 60, "y": 42, "width": 124, "height": 36}
+    monkeypatch.setattr(page_candidate_recovery, "cv2", None)
+
+    tight, padded = build_authoritative_crops(image, bbox, polygon)
+
+    assert tight.profile == "authoritative_tight_rectified"
+    assert padded.profile == "authoritative_padded_rectified"
+    assert tight.polygon_usable and padded.polygon_usable
+
+
+def test_authoritative_crop_uses_tight_axis_fallback_for_bad_polygon() -> None:
+    image = Image.new("RGB", (100, 60), "white")
+    bbox = {"x": 25, "y": 20, "width": 40, "height": 14}
+
+    tight, padded = build_authoritative_crops(
+        image,
+        bbox,
+        [[25, 20], [25, 20], [25, 20], [25, 20]],
+    )
+
+    assert tight.profile == "authoritative_tight_axis"
+    assert padded.profile == "authoritative_padded_axis"
+    assert tight.image.width < 60
+    assert not tight.polygon_usable
+
+
+def test_authoritative_target_lock_rejects_an_adjacent_value() -> None:
+    image = Image.new("RGB", (260, 100), "white")
+    bbox = {"x": 70, "y": 35, "width": 110, "height": 24}
+    polygon = [[70, 35], [180, 35], [180, 59], [70, 59]]
+    _tight, padded = build_authoritative_crops(image, bbox, polygon)
+    target = padded.target_bbox
+    owned = assess_authoritative_result(
+        {
+            "text": "96.4°±0.5°",
+            "text_bbox": dict(target),
+        },
+        padded,
+    )
+    neighbour = assess_authoritative_result(
+        {
+            "text": "105",
+            "text_bbox": {
+                "x": target["x"] + target["width"] + 1,
+                "y": target["y"],
+                "width": 12,
+                "height": target["height"],
+            },
+        },
+        padded,
+    )
+
+    assert owned["authoritative_valid"]
+    assert not authoritative_result_needs_retry(owned)
+    assert not neighbour["authoritative_target_owned"]
+    assert authoritative_result_needs_retry(neighbour)
+
+
+def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> None:
+    equivalent = resolve_authoritative_hypotheses(
+        _result("30°±3°", confidence=0.40),
+        [
+            {
+                **_result("30±3", confidence=0.99),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+    conflict = resolve_authoritative_hypotheses(
+        _result("96.4°±0.5°"),
+        [
+            {
+                **_result("105"),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+    untargeted = resolve_authoritative_hypotheses(
+        _result("96.4°±0.5°"),
+        [
+            {
+                **_result("105"),
+                "authoritative_valid": False,
+                "authoritative_target_owned": False,
+            }
+        ],
+    )
+
+    assert equivalent["text"] == "30°±3°"
+    assert not equivalent["needs_review"]
+    assert conflict["text"] == "105"
+    assert conflict["numeric_conflict"]
+    assert conflict["authoritative_review_required"]
+    assert untargeted["text"] == ""
+    assert untargeted["needs_review"]
 
 
 def test_same_line_context_rejoins_split_scale_label() -> None:

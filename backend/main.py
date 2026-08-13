@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
+import math
 import os
 import re
 from enum import Enum
@@ -34,6 +36,7 @@ from page_layout import (
     crop_section,
 )
 from page_layout_cache import PageLayoutCache
+from page_value_filters import normalize_page_value_text
 from scan_jobs import ProgressReporter, ScanJobManager
 
 # Draw config from the project's root .env.local / .env (same file the frontend
@@ -51,6 +54,7 @@ app = FastAPI(
 # while still returning the HTTP request immediately.
 scan_job_manager = ScanJobManager(max_workers=1)
 page_layout_cache = PageLayoutCache(max_entries=8)
+MAX_EXISTING_VALUE_BOXES = 5000
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -314,6 +318,7 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "excluded_count": excluded_count,
         "review_count": review_count,
         "unread_count": unread_count,
+        "skipped_existing_count": int(seg.get("skipped_existing_count", 0)),
         "filter_rule_counts": filter_rule_counts,
         "coordinate_space": str(seg.get("coordinate_space", "scope")),
         "regions": regions,
@@ -327,12 +332,7 @@ def _map_section_result_to_page(
     *,
     origin: tuple[int, int],
 ) -> tuple[dict[str, Any], list[dict[str, object]]]:
-    """Restore every non-empty section result to full-page coordinates.
-
-    The selected section is the user's explicit boundary.  Page table masks,
-    value syntax, confidence, and text-length policies therefore do not run on
-    this path.
-    """
+    """Restore light-filtered section values to page coordinates."""
 
     origin_x, origin_y = origin
     mapped_regions: list[dict[str, Any]] = []
@@ -347,52 +347,111 @@ def _map_section_result_to_page(
             "width": round(float(local.get("width", 0.0)), 1),
             "height": round(float(local.get("height", 0.0)), 1),
         }
-        text = str(region.get("text") or "").strip()
+        text = normalize_page_value_text(str(region.get("text") or ""))
         if not text:
             continue
+        rule = str(region.get("page_filter_rule") or "section_engineering_value")
+        reason = str(
+            region.get("page_filter_reason")
+            or "Matches the light section engineering-value syntax gate"
+        )
         overlay_candidates.append(
             {
                 "bbox": page_bbox,
                 "state": "eligible",
                 "text": text,
-                "reason": "Selected-section passthrough",
-                "rule": "section_passthrough",
+                "reason": reason,
+                "rule": rule,
             }
         )
         mapped_regions.append(
             {
                 **region,
                 "bbox": page_bbox,
-                "page_filter_rule": "section_passthrough",
-                "page_filter_reason": "Selected-section passthrough",
+                "text": text,
+                "page_filter_rule": rule,
+                "page_filter_reason": reason,
             }
         )
 
-    detected_count = int(seg.get("detected_count", len(source_regions)))
-    recognized_count = len(mapped_regions)
-    unread_count = max(0, detected_count - recognized_count)
+    mapped_outcomes: list[dict[str, Any]] = []
+    for outcome in list(seg.get("candidate_outcomes", [])):
+        local = dict(outcome.get("bbox", {}))
+        mapped_outcomes.append(
+            {
+                **outcome,
+                "bbox": {
+                    "x": round(origin_x + float(local.get("x", 0.0)), 1),
+                    "y": round(origin_y + float(local.get("y", 0.0)), 1),
+                    "width": round(float(local.get("width", 0.0)), 1),
+                    "height": round(float(local.get("height", 0.0)), 1),
+                },
+            }
+        )
+
     return (
         {
             **seg,
             "count": len(mapped_regions),
-            "detected_count": detected_count,
-            "recognized_count": recognized_count,
             "eligible_count": len(mapped_regions),
-            "excluded_count": 0,
-            "review_count": 0,
-            "unread_count": unread_count,
-            "filter_rule_counts": (
-                {"section_passthrough": len(mapped_regions)}
-                if mapped_regions
-                else {}
-            ),
             "coordinate_space": "page",
             "regions": mapped_regions,
-            "review_candidates": [],
-            "candidate_outcomes": [],
+            "candidate_outcomes": mapped_outcomes,
         },
         overlay_candidates,
     )
+
+
+def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
+    """Validate saved balloon geometry supplied for pre-OCR exclusion."""
+
+    try:
+        decoded = json.loads(payload or "[]")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="existing_value_boxes must be valid JSON",
+        ) from exc
+    if not isinstance(decoded, list):
+        raise HTTPException(
+            status_code=422,
+            detail="existing_value_boxes must be a JSON array",
+        )
+    if len(decoded) > MAX_EXISTING_VALUE_BOXES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"At most {MAX_EXISTING_VALUE_BOXES} existing boxes are allowed",
+        )
+
+    boxes: list[dict[str, float]] = []
+    for item in decoded:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="Each existing value box must be an object",
+            )
+        try:
+            box = {
+                key: float(item[key])
+                for key in ("x", "y", "width", "height")
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Each existing value box needs numeric x, y, width, and height",
+            ) from exc
+        if not all(math.isfinite(value) for value in box.values()):
+            raise HTTPException(
+                status_code=422,
+                detail="Existing value box coordinates must be finite",
+            )
+        if box["width"] <= 0 or box["height"] <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Existing value box dimensions must be positive",
+            )
+        boxes.append(box)
+    return boxes
 
 
 @app.post("/ocr/scan-jobs", status_code=202)
@@ -404,6 +463,7 @@ async def create_scan_job(
     scope_y: float = Form(0),
     scope_width: float = Form(...),
     scope_height: float = Form(...),
+    existing_value_boxes: str = Form("[]"),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -424,6 +484,7 @@ async def create_scan_job(
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=422, detail="The scan image is empty")
+    saved_value_boxes = _parse_existing_value_boxes(existing_value_boxes)
 
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
@@ -487,6 +548,7 @@ async def create_scan_job(
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
+                existing_value_boxes=saved_value_boxes,
             )
             seg["coordinate_space"] = "page"
         else:
@@ -494,6 +556,21 @@ async def create_scan_job(
                 image,
                 scope_bbox,
             )
+            section_existing_boxes = [
+                {
+                    "x": box["x"] - section_origin[0],
+                    "y": box["y"] - section_origin[1],
+                    "width": box["width"],
+                    "height": box["height"],
+                }
+                for box in saved_value_boxes
+                if (
+                    box["x"] + box["width"] > section_origin[0]
+                    and box["y"] + box["height"] > section_origin[1]
+                    and box["x"] < section_origin[0] + section_image.width
+                    and box["y"] < section_origin[1] + section_image.height
+                )
+            ]
 
             def report_section_progress(**event: Any) -> None:
                 # Keep the section detector/recognizer unchanged while fitting
@@ -509,6 +586,7 @@ async def create_scan_job(
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
                 progress_callback=report_section_progress,
+                existing_value_boxes=section_existing_boxes,
             )
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
@@ -518,13 +596,13 @@ async def create_scan_job(
                 stage="finalizing",
                 message=(
                     f"Prepared {seg['eligible_count']} section values; "
-                    "no automatic filters applied"
+                    f"ignored {seg['excluded_count']} non-value OCR objects"
                 ),
                 percent=99,
                 completed=int(seg["detected_count"]),
                 total=int(seg["detected_count"]),
                 candidate_count=int(seg["eligible_count"]),
-                operation_label="Section passthrough complete",
+                operation_label="Section light filtering complete",
                 overlay=layout.overlay(
                     scope_kind="section",
                     candidates=section_overlay_candidates,
@@ -544,6 +622,7 @@ async def create_scan_job(
             # This is not a resume checkpoint yet. It gives the future
             # stop/resume design a stable identity for the complete page.
             "page_fingerprint": fingerprint,
+            "existing_value_box_count": len(saved_value_boxes),
         },
     )
 

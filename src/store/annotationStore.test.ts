@@ -81,4 +81,24 @@ describe("annotationStore numbering", () => {
       { id: "auto-b", number: 3 },
     ]);
   });
+
+  it("uses the same hidden field for master and individual visibility", () => {
+    useAnnotationStore.getState().setAnnotations([
+      makeAnnotation({ id: "visible" }),
+      makeAnnotation({ id: "hidden", hidden: true }),
+    ]);
+
+    useAnnotationStore.getState().setAllBalloonVisibility(true);
+    expect(
+      useAnnotationStore.getState().annotations.map((item) => item.hidden)
+    ).toEqual([false, false]);
+
+    useAnnotationStore.getState().updateAnnotation("visible", { hidden: true });
+    expect(useAnnotationStore.getState().annotations[0].hidden).toBe(true);
+
+    useAnnotationStore.getState().setAllBalloonVisibility(false);
+    expect(
+      useAnnotationStore.getState().annotations.map((item) => item.hidden)
+    ).toEqual([true, true]);
+  });
 });

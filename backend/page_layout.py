@@ -6,8 +6,8 @@ temporary overlapping processing panels from whitespace and ink density, and
 provides page-coordinate geometry for the live debug overlay.
 
 Nothing in this module decides whether a recognized value is technically
-meaningful.  Table masks are a global hard exclusion; all other value policy
-remains in :mod:`page_value_filters`.
+meaningful.  Table masks are a whole-page hard exclusion; selected-section
+pixels remain raw and use only the light value gate in :mod:`page_value_filters`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ LAYOUT_PANEL_OVERLAP_MIN = 24
 LAYOUT_PANEL_OVERLAP_MAX = 80
 
 TABLE_MASK_PADDING_RATIO = 0.002
-TABLE_BOUNDARY_MAX_DISTANCE_RATIO = 0.02
 
 
 @dataclass(frozen=True)
@@ -539,12 +538,7 @@ def _discard_mostly_contained_boxes(
 
 
 def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
-    """Detect repeated grids that belong to a page-boundary data table.
-
-    Repeated line work inside the drawing body can legitimately resemble a
-    table.  Production data/title/revision tables live at the sheet boundary,
-    so only grid regions touching or very near an edge become hard masks.
-    """
+    """Detect every repeated-cell grid that should be masked in page scans."""
 
     width, height = image.size
     if width < 64 or height < 64:
@@ -576,17 +570,6 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
             tolerance=intersection_tolerance * 2,
         )
     )
-    boundary_distance = max(
-        1,
-        int(round(min(width, height) * TABLE_BOUNDARY_MAX_DISTANCE_RATIO)),
-    )
-    boxes = [
-        box
-        for box in boxes
-        if min(box.x, box.y, width - box.x1, height - box.y1)
-        <= boundary_distance
-    ]
-
     padded: list[LayoutBox] = []
     for box in boxes:
         x0 = max(0, box.x - padding)
@@ -853,8 +836,9 @@ def crop_section(
     """Return a padded raw section crop in the page coordinate system.
 
     The returned origin maps crop-local coordinates—including padding—back to
-    the full page.  Section mode is deliberately user-bounded and filter-free,
-    so table-like pixels are retained exactly as selected.
+    the full page.  Section mode is deliberately user-bounded and layout-mask
+    free, so table-like pixels are retained exactly as selected. A later light
+    text gate may still discard pure letters, symbols, and prose.
     """
 
     x0 = max(0, floor(float(scope_bbox["x"])))

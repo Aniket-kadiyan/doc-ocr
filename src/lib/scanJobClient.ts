@@ -81,6 +81,7 @@ export interface RunScanJobOptions {
   page: number;
   scopeKind: ScanScopeKind;
   displayScale?: number;
+  existingValueBoxes?: BBox[];
   onProgress?: (progress: ScanProgress) => void;
 }
 
@@ -92,6 +93,7 @@ export interface ScanJobResult {
   excluded: number;
   reviewRequired: number;
   unread: number;
+  skippedExisting: number;
   reviewCandidates: SegmentRegion[];
   filterRuleCounts: Record<string, number>;
 }
@@ -237,6 +239,7 @@ export async function runScanJob({
   page,
   scopeKind,
   displayScale = 1,
+  existingValueBoxes = [],
   onProgress,
 }: RunScanJobOptions): Promise<ScanJobResult> {
   const blob = await new Promise<Blob>((resolve, reject) => {
@@ -254,6 +257,7 @@ export async function runScanJob({
   form.append("scope_y", String(bbox.y));
   form.append("scope_width", String(bbox.width));
   form.append("scope_height", String(bbox.height));
+  form.append("existing_value_boxes", JSON.stringify(existingValueBoxes));
 
   const baseUrl = getOcrApiUrl();
   const { query, headers } = scanRequestOptions();
@@ -341,6 +345,7 @@ export async function runScanJob({
   const reviewRequired =
     snapshot.result.review_count ?? reviewCandidates.length;
   const filterRuleCounts = snapshot.result.filter_rule_counts ?? {};
+  const skippedExisting = snapshot.result.skipped_existing_count ?? 0;
 
   return {
     regions,
@@ -350,6 +355,7 @@ export async function runScanJob({
     excluded,
     reviewRequired,
     unread,
+    skippedExisting,
     reviewCandidates,
     filterRuleCounts,
   };

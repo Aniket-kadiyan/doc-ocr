@@ -6,8 +6,8 @@ here and restart the backend.
 
 Policy order:
 
-1. Reject table-region content for every auto-balloon scope.
-2. For section scans, accept every remaining recognized value.
+1. Reject table-region content whenever the caller supplies page table masks.
+2. For section scans, apply only a light complete-value syntax gate.
 3. Normalize harmless OCR symbol and crop-boundary noise.
 4. For whole-page scans, reject an enabled never-balloon rule.
 5. Reject whole-page text with no numeric component.
@@ -146,6 +146,7 @@ _KEYWORD_CONFUSABLES = str.maketrans(
 def _normalize_symbols(text: str) -> str:
     normalized = str(text or "")
     normalized = re.sub(r"\+\s*/\s*[-−]", "±", normalized)
+    normalized = re.sub(r"\+\s*[-−](?=\s*\d)", "±", normalized)
     normalized = (
         normalized.replace("º", "°")
         .replace("˚", "°")
@@ -172,7 +173,7 @@ def _unwrapped_value(text: str) -> str:
     return text
 
 
-def _is_complete_engineering_value(text: str) -> bool:
+def is_complete_engineering_value(text: str) -> bool:
     """Recognize a complete value without extracting digits from prose."""
 
     value = _unwrapped_value(text)
@@ -202,7 +203,7 @@ def normalize_page_value_text(text: str) -> str:
     normalized = _normalize_symbols(text)
     stripped = _BOUNDARY_NOISE_START.sub("", normalized)
     stripped = _BOUNDARY_NOISE_END.sub("", stripped).strip()
-    if stripped != normalized and _is_complete_engineering_value(stripped):
+    if stripped != normalized and is_complete_engineering_value(stripped):
         return stripped
     return normalized
 
@@ -263,7 +264,7 @@ def _is_context_exclusion_prone(text: str) -> bool:
         SCALE_RATIO_VALUE.fullmatch(normalized)
         or _is_compact_identifier(normalized)
         or SINGLE_CHARACTER_VALUE.fullmatch(normalized)
-        or not _is_complete_engineering_value(normalized)
+        or not is_complete_engineering_value(normalized)
     )
 
 
@@ -468,8 +469,8 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
 
 REQUIRE_NUMERIC_COMPONENT = True
 
-# Global table policy.  Changing these values affects page and section scans,
-# but never manual Draw Value OCR.
+# Table policy. Whole-page scans supply masks; raw section scans deliberately
+# do not. Manual Draw Value OCR never uses this policy.
 EXCLUDE_TABLE_REGIONS = True
 TABLE_OVERLAP_REJECTION_RATIO = 0.50
 TABLE_CENTER_REJECTION = True
@@ -542,10 +543,22 @@ def evaluate_scan_value(
         )
 
     if scope_kind == "section":
+        if not NUMERIC_COMPONENT.search(normalized.text):
+            return PageValueFilterDecision(
+                accepted=False,
+                rule_name="section_no_numeric_component",
+                reason="Section text has no numeric component",
+            )
+        if not is_complete_engineering_value(normalized.text):
+            return PageValueFilterDecision(
+                accepted=False,
+                rule_name="section_invalid_engineering_value",
+                reason="Section text is not one complete engineering value",
+            )
         return PageValueFilterDecision(
             accepted=True,
-            rule_name="section_passthrough",
-            reason="Section scans bypass whole-page value exclusions",
+            rule_name="section_engineering_value",
+            reason="Matches the light section engineering-value syntax gate",
         )
 
     context = tuple(
@@ -583,7 +596,7 @@ def evaluate_scan_value(
             reason="Isolated 0, 1, or 8 may be an OCR-confused drawing label",
         )
 
-    if not _is_complete_engineering_value(normalized.text):
+    if not is_complete_engineering_value(normalized.text):
         return PageValueFilterDecision(
             accepted=False,
             rule_name="invalid_engineering_value",

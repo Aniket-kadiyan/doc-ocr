@@ -24,6 +24,7 @@ interface AnnotationState {
   addAnnotation: (annotation: Annotation) => void;
   addAnnotations: (annotations: Annotation[]) => void;
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  setAllBalloonVisibility: (visible: boolean) => void;
   removeAnnotation: (id: string) => void;
   setPending: (pending: PendingSelection | null) => void;
   setCurrentPage: (page: number) => void;
@@ -86,6 +87,15 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     set((state) => ({
       annotations: state.annotations.map((a) =>
         a.id === id ? { ...a, ...patch } : a
+      ),
+    })),
+
+  setAllBalloonVisibility: (visible) =>
+    set((state) => ({
+      annotations: state.annotations.map((annotation) =>
+        isValue(annotation)
+          ? { ...annotation, hidden: !visible }
+          : annotation
       ),
     })),
 

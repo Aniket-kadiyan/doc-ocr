@@ -164,6 +164,7 @@ export interface ApiSegmentResponse {
   excluded_count?: number;
   review_count?: number;
   unread_count?: number;
+  skipped_existing_count?: number;
   filter_rule_counts?: Record<string, number>;
   coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];

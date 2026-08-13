@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/.test-venv
 /.pnp
 .pnp.*
 .yarn/*

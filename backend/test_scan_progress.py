@@ -172,6 +172,35 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     )
 
 
+def test_section_skips_existing_balloon_before_recognition() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline.detect_regions = lambda *_args, **_kwargs: [
+        {
+            "x": 10.0,
+            "y": 10.0,
+            "w": 40.0,
+            "h": 12.0,
+            "text": "50",
+            "conf": 0.9,
+        }
+    ]
+    pipeline._expand_clusters = lambda _image, clusters, **_kwargs: clusters
+    pipeline.recognize = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("an existing section balloon must not be reread")
+    )
+
+    result = pipeline.segment(
+        Image.new("RGB", (100, 60), "white"),
+        existing_value_boxes=(
+            {"x": 8, "y": 8, "width": 45, "height": 18},
+        ),
+    )
+
+    assert result["detected_count"] == 0
+    assert result["count"] == 0
+    assert result["skipped_existing_count"] == 1
+
+
 def test_oversized_cluster_refinement_is_detector_only_and_capped() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
@@ -318,7 +347,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         raise AssertionError("page scan must not call the section pipeline")
 
     def fake_authoritative(crop, **kwargs):
-        assert kwargs["compute_text_bbox"] is False
+        assert kwargs["compute_text_bbox"] is True
         authoritative_crops.append(crop.size)
         text = next(authoritative_texts)
         return {
@@ -332,6 +361,12 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
             "rotation": 0,
             "engine": "paddleocr+compose",
             "symbols_detected": {},
+            "text_bbox": {
+                "x": 2,
+                "y": 2,
+                "width": max(1, crop.width - 4),
+                "height": max(1, crop.height - 4),
+            },
         }
 
     pipeline._detector_only_boxes = fake_detector
@@ -418,6 +453,46 @@ def test_page_scan_never_falls_back_to_full_ocr_for_detection() -> None:
         raise AssertionError("missing standalone detector should fail clearly")
 
 
+def test_page_scan_skips_existing_balloon_before_primary_ocr() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    detector_calls = 0
+    layout = PageLayout(
+        width=200,
+        height=100,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 200, 100)),),
+        overlaps=(),
+    )
+
+    def fake_detector(_image, **_kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return (
+            [{"x": 40, "y": 30, "w": 45, "h": 16, "conf": 0.95}]
+            if detector_calls == 1
+            else []
+        )
+
+    pipeline._detector_only_boxes = fake_detector
+    pipeline._recognize_page_batch = lambda *_args, **_kwargs: (
+        _ for _ in ()
+    ).throw(AssertionError("an existing page balloon must not enter primary OCR"))
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (200, 100), "white"),
+        layout=layout,
+        existing_value_boxes=(
+            {"x": 38, "y": 28, "width": 50, "height": 22},
+        ),
+    )
+
+    assert result["detected_count"] == 0
+    assert result["skipped_existing_count"] == 1
+    assert result["candidate_outcomes"] == []
+
+
 def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
@@ -462,19 +537,28 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
 
     pipeline._detector_only_boxes = fake_detector
     pipeline._recognize_page_batch = fake_batch
-    pipeline.recognize = lambda _crop, **_kwargs: {
-        "text": "25.00",
-        "raw_ocr": "25.00",
-        "confidence": 0.41,
-        "agreement": 0.25,
-        # Confidence alone must not demote a structurally valid accurate read.
-        "needs_review": True,
-        "type": "Linear",
-        "orientation": "horizontal",
-        "rotation": 0,
-        "engine": "paddleocr",
-        "symbols_detected": {},
-    }
+    def fake_authoritative(crop, **_kwargs):
+        return {
+            "text": "25.00",
+            "raw_ocr": "25.00",
+            "confidence": 0.41,
+            "agreement": 0.25,
+            # Confidence alone must not demote a structurally valid accurate read.
+            "needs_review": True,
+            "type": "Linear",
+            "orientation": "horizontal",
+            "rotation": 0,
+            "engine": "paddleocr",
+            "symbols_detected": {},
+            "text_bbox": {
+                "x": 2,
+                "y": 2,
+                "width": max(1, crop.width - 4),
+                "height": max(1, crop.height - 4),
+            },
+        }
+
+    pipeline.recognize = fake_authoritative
 
     result = pipeline.segment_page(
         Image.new("RGB", (200, 100), "white"),
@@ -531,7 +615,7 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
     pipeline._detector_only_boxes = fake_detector
     pipeline._recognize_page_batch = fake_batch
 
-    def fake_authoritative(_crop, **_kwargs):
+    def fake_authoritative(crop, **_kwargs):
         nonlocal authoritative_calls
         authoritative_calls += 1
         return {
@@ -545,6 +629,12 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
             "rotation": 0,
             "engine": "paddleocr",
             "symbols_detected": {},
+            "text_bbox": {
+                "x": 2,
+                "y": 2,
+                "width": max(1, crop.width - 4),
+                "height": max(1, crop.height - 4),
+            },
         }
 
     pipeline.recognize = fake_authoritative
@@ -634,7 +724,7 @@ def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
     assert result["review_count"] == 1
     assert result["review_candidates"][0]["candidate_id"] == "C0001"
     assert result["review_candidates"][0]["text"] == ""
-    assert "no text" in result["review_candidates"][0]["review_reason"].lower()
+    assert "detector target" in result["review_candidates"][0]["review_reason"].lower()
     assert result["candidate_outcomes"][0]["state"] == "review"
     assert result["candidate_outcomes"][0]["text"] == ""
     assert recognition_profiles == [

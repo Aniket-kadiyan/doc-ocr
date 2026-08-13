@@ -4,7 +4,7 @@ PaddleOCR pipeline: best digit read + balanced symbol compose.
 
 from __future__ import annotations
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -1668,6 +1668,7 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
         detection_only: bool = False,
+        existing_value_boxes: Sequence[Mapping[str, float]] = (),
     ) -> dict[str, Any]:
         """
         Auto-segment a multi-value selection into individual dimensions.
@@ -1692,6 +1693,12 @@ class OcrPipeline:
             union_bbox,
         )
         from segment_quality import dedupe_regions
+        from page_scan import overlaps_existing_value
+        from page_value_filters import (
+            PageValueCandidate,
+            evaluate_scan_value,
+            normalize_page_value_text,
+        )
 
         def report(
             *,
@@ -1944,9 +1951,23 @@ class OcrPipeline:
             candidate_count=len(clusters),
         )
         clusters = order_clusters(merge_overlapping_clusters(clusters))
+        clusters_before_existing = len(clusters)
+        if existing_value_boxes:
+            clusters = [
+                cluster
+                for cluster in clusters
+                if not overlaps_existing_value(
+                    union_bbox(cluster),
+                    existing_value_boxes,
+                )
+            ]
+        skipped_existing_count = clusters_before_existing - len(clusters)
         report(
             stage="grouping",
-            message=f"Prepared {len(clusters)} candidate objects",
+            message=(
+                f"Prepared {len(clusters)} candidate objects; "
+                f"skipped {skipped_existing_count} existing balloons"
+            ),
             percent=42,
             completed=grouping_units,
             total=grouping_units,
@@ -1988,6 +2009,7 @@ class OcrPipeline:
                 )
             return {
                 "count": len(detected_regions),
+                "skipped_existing_count": skipped_existing_count,
                 "regions": detected_regions,
             }
 
@@ -2070,6 +2092,42 @@ class OcrPipeline:
         )
         regions = self._complete_angle_regions(image, regions)
         regions = dedupe_regions(regions)
+        recognized_count = len(regions)
+        filtered_regions: list[dict[str, Any]] = []
+        candidate_outcomes: list[dict[str, Any]] = []
+        filter_rule_counts: dict[str, int] = {}
+        for region in regions:
+            text = normalize_page_value_text(str(region.get("text") or ""))
+            decision = evaluate_scan_value(
+                PageValueCandidate(text=text, bbox=region["bbox"]),
+                scope_kind="section",
+                table_masks=(),
+            )
+            filter_rule_counts[decision.rule_name] = (
+                filter_rule_counts.get(decision.rule_name, 0) + 1
+            )
+            state = "eligible" if decision.accepted else "excluded"
+            candidate_outcomes.append(
+                {
+                    "bbox": dict(region["bbox"]),
+                    "state": state,
+                    "text": text,
+                    "recognized": True,
+                    "reason": decision.reason,
+                    "rule": decision.rule_name,
+                }
+            )
+            if decision.accepted:
+                filtered_regions.append(
+                    {
+                        **region,
+                        "text": text,
+                        "recognized": True,
+                        "page_filter_rule": decision.rule_name,
+                        "page_filter_reason": decision.reason,
+                    }
+                )
+        regions = filtered_regions
         report(
             stage="finalizing",
             message=f"Prepared {len(regions)} balloon candidates",
@@ -2078,23 +2136,20 @@ class OcrPipeline:
             total=len(regions),
             candidate_count=len(regions),
         )
-        recognized_count = len(regions)
+        excluded_count = recognized_count - len(regions)
         return {
-            "count": recognized_count,
+            "count": len(regions),
             "detected_count": cluster_total,
             "recognized_count": recognized_count,
-            "eligible_count": recognized_count,
-            "excluded_count": 0,
+            "eligible_count": len(regions),
+            "excluded_count": excluded_count,
             "review_count": 0,
             "unread_count": max(0, cluster_total - recognized_count),
-            "filter_rule_counts": (
-                {"section_passthrough": recognized_count}
-                if recognized_count
-                else {}
-            ),
+            "skipped_existing_count": skipped_existing_count,
+            "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "regions": regions,
             "review_candidates": [],
-            "candidate_outcomes": [],
+            "candidate_outcomes": candidate_outcomes,
         }
 
     def segment_page(
@@ -2106,6 +2161,7 @@ class OcrPipeline:
         debug_dump_force: bool = False,
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
+        existing_value_boxes: Sequence[Mapping[str, float]] = (),
     ) -> dict[str, Any]:
         """Scan a whole page through the bounded technical-value route.
 
@@ -2142,14 +2198,18 @@ class OcrPipeline:
             assign_candidate_ids,
             deduplicate_page_candidates,
             map_tile_candidate,
+            overlaps_existing_value,
         )
         from page_candidate_recovery import (
             CONTEXT_MAX_CANDIDATES,
             RECOVERY_MAX_CANDIDATES,
+            assess_authoritative_result,
+            authoritative_result_needs_retry,
+            build_authoritative_crops,
             build_context_crop,
             build_recovery_crops,
-            expanded_axis_crop,
             reconstruct_line_context,
+            resolve_authoritative_hypotheses,
             resolve_recovery_consensus,
             result_needs_recovery,
             result_needs_second_recovery,
@@ -2410,10 +2470,20 @@ class OcrPipeline:
             operation_label="Atomic candidate deduplication",
             candidate_count=len(page_candidates),
         )
-        final_candidates = assign_candidate_ids(
-            deduplicate_page_candidates(page_candidates)
+        deduplicated_candidates = deduplicate_page_candidates(page_candidates)
+        duplicates_removed = len(page_candidates) - len(deduplicated_candidates)
+        new_candidates = [
+            candidate
+            for candidate in deduplicated_candidates
+            if not overlaps_existing_value(
+                candidate.bbox,
+                existing_value_boxes,
+            )
+        ]
+        skipped_existing_count = (
+            len(deduplicated_candidates) - len(new_candidates)
         )
-        duplicates_removed = len(page_candidates) - len(final_candidates)
+        final_candidates = assign_candidate_ids(new_candidates)
         neutral_overlay_candidates = [
             {
                 "id": candidate.candidate_id,
@@ -2426,7 +2496,8 @@ class OcrPipeline:
             stage="grouping",
             message=(
                 f"Prepared {len(final_candidates)} page objects; "
-                f"removed {duplicates_removed} same-object duplicates"
+                f"removed {duplicates_removed} same-object duplicates and "
+                f"skipped {skipped_existing_count} existing balloons"
             ),
             percent=57,
             completed=1,
@@ -2935,6 +3006,12 @@ class OcrPipeline:
                     "review",
                     review_reason or "Accurate recognition returned no text",
                 )
+            if result.get("authoritative_review_required"):
+                return (
+                    "review",
+                    review_reason
+                    or "Authoritative OCR requires manual confirmation",
+                )
             if not decision.accepted:
                 if (
                     decision.rule_name == "no_numeric_component"
@@ -3025,26 +3102,39 @@ class OcrPipeline:
                 operation_label="Authoritative value OCR",
                 candidate_count=authoritative_total,
             )
-            authoritative_crop = expanded_axis_crop(
+            previous_result = dict(record["result"])
+            record["preliminary_result"] = previous_result
+            authoritative_crops = build_authoritative_crops(
                 image,
                 record["bbox"],
+                record["polygon"],
             )
-            previous_result = record["result"]
-            accurate_result = self.recognize(
-                authoritative_crop,
+            tight_crop = authoritative_crops[0]
+            tight_result = self.recognize(
+                tight_crop.image,
                 debug_dump=debug_dump,
                 debug_dump_force=debug_dump_force,
-                compute_text_bbox=False,
+                compute_text_bbox=True,
             )
-            accurate_text = normalize_page_value_text(
-                str(accurate_result.get("text") or "")
+            authoritative_attempts = [
+                assess_authoritative_result(tight_result, tight_crop)
+            ]
+            if authoritative_result_needs_retry(authoritative_attempts[0]):
+                padded_crop = authoritative_crops[1]
+                padded_result = self.recognize(
+                    padded_crop.image,
+                    debug_dump=debug_dump,
+                    debug_dump_force=debug_dump_force,
+                    compute_text_bbox=True,
+                )
+                authoritative_attempts.append(
+                    assess_authoritative_result(padded_result, padded_crop)
+                )
+            accurate_result = resolve_authoritative_hypotheses(
+                previous_result,
+                authoritative_attempts,
             )
-            accurate_result["text"] = accurate_text
-            accurate_result["ocr_profile"] = "authoritative_accuracy"
-            accurate_result["authoritative_reread"] = True
-            accurate_result["recovery_attempted"] = bool(
-                previous_result.get("recovery_attempted")
-            )
+            accurate_text = str(accurate_result.get("text") or "")
             record["result"] = accurate_result
             record["text"] = accurate_text
             record["recognized"] = bool(accurate_text)
@@ -3167,6 +3257,10 @@ class OcrPipeline:
                 "authoritative_reread": bool(
                     result.get("authoritative_reread")
                 ),
+                "authoritative_target_owned": bool(
+                    result.get("authoritative_target_owned")
+                ),
+                "numeric_conflict": bool(result.get("numeric_conflict")),
             }
             if final_state == "eligible":
                 regions.append(common_region)
@@ -3240,6 +3334,7 @@ class OcrPipeline:
             "review_count": review_count,
             "unread_count": unread_count,
             "duplicates_removed": duplicates_removed,
+            "skipped_existing_count": skipped_existing_count,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "regions": regions,
             "review_candidates": review_candidates,

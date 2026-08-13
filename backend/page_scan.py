@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from math import inf
+from typing import Mapping, Sequence
 
 from detection_passes import DetectionTile
 
@@ -23,6 +24,45 @@ PAGE_SCAN_MAX_DETECTOR_CALLS = 16
 # restoring the selection cascade. The shared detector still caps at 2400px.
 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
 PAGE_SCAN_RECOGNITION_BATCH_SIZE = 16
+EXISTING_VALUE_OVERLAP_THRESHOLD = 0.55
+
+
+def bbox_overlap_fraction(
+    left: Mapping[str, float],
+    right: Mapping[str, float],
+) -> float:
+    """Intersection as a fraction of the smaller box."""
+
+    x0 = max(float(left["x"]), float(right["x"]))
+    y0 = max(float(left["y"]), float(right["y"]))
+    x1 = min(
+        float(left["x"]) + float(left["width"]),
+        float(right["x"]) + float(right["width"]),
+    )
+    y1 = min(
+        float(left["y"]) + float(left["height"]),
+        float(right["y"]) + float(right["height"]),
+    )
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    intersection = (x1 - x0) * (y1 - y0)
+    left_area = max(float(left["width"]) * float(left["height"]), 1.0)
+    right_area = max(float(right["width"]) * float(right["height"]), 1.0)
+    return intersection / min(left_area, right_area)
+
+
+def overlaps_existing_value(
+    bbox: Mapping[str, float],
+    existing_value_boxes: Sequence[Mapping[str, float]],
+    *,
+    threshold: float = EXISTING_VALUE_OVERLAP_THRESHOLD,
+) -> bool:
+    """Return whether a detected object is already represented by a balloon."""
+
+    return any(
+        bbox_overlap_fraction(bbox, existing) >= threshold
+        for existing in existing_value_boxes
+    )
 
 
 @dataclass(frozen=True)

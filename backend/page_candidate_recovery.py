@@ -50,6 +50,17 @@ class RecoveryCrop:
     image: Image.Image
 
 
+@dataclass(frozen=True)
+class AuthoritativeCrop:
+    """One final OCR crop plus its detector target in crop coordinates."""
+
+    profile: str
+    image: Image.Image
+    target_bbox: dict[str, float]
+    target_polygon: tuple[tuple[float, float], ...]
+    polygon_usable: bool
+
+
 def _normalize_engineering_text(text: str) -> str:
     """Canonicalize harmless OCR formatting differences for comparison."""
 
@@ -249,7 +260,13 @@ def _ordered_quad(
     return ordered
 
 
-def _expanded_quad(quad: np.ndarray, padding_ratio: float) -> np.ndarray:
+def _expanded_quad(
+    quad: np.ndarray,
+    padding_ratio: float,
+    *,
+    minimum_padding: float = 4.0,
+    horizontal_padding_scale: float = 1.25,
+) -> np.ndarray:
     top_left, top_right, bottom_right, bottom_left = quad
     horizontal = (top_right - top_left) + (bottom_right - bottom_left)
     vertical = (bottom_left - top_left) + (bottom_right - top_right)
@@ -268,8 +285,8 @@ def _expanded_quad(quad: np.ndarray, padding_ratio: float) -> np.ndarray:
         float(np.linalg.norm(bottom_left - top_left)),
         float(np.linalg.norm(bottom_right - top_right)),
     )
-    pad = max(4.0, min(width, height) * padding_ratio)
-    half_width = width / 2.0 + pad * 1.25
+    pad = max(minimum_padding, min(width, height) * padding_ratio)
+    half_width = width / 2.0 + pad * horizontal_padding_scale
     half_height = height / 2.0 + pad
     center = quad.mean(axis=0)
     return np.asarray(
@@ -373,6 +390,467 @@ def rectify_polygon_crop(
     )
 
 
+def _polygon_area(points: Sequence[Sequence[float]]) -> float:
+    if len(points) < 3:
+        return 0.0
+    return 0.5 * abs(
+        sum(
+            float(points[index][0]) * float(points[(index + 1) % len(points)][1])
+            - float(points[(index + 1) % len(points)][0])
+            * float(points[index][1])
+            for index in range(len(points))
+        )
+    )
+
+
+def _target_bbox(
+    polygon: Sequence[Sequence[float]],
+    image_size: tuple[int, int],
+) -> dict[str, float]:
+    width, height = image_size
+    x0 = max(0.0, min(float(point[0]) for point in polygon))
+    y0 = max(0.0, min(float(point[1]) for point in polygon))
+    x1 = min(float(width), max(float(point[0]) for point in polygon))
+    y1 = min(float(height), max(float(point[1]) for point in polygon))
+    return {
+        "x": round(x0, 2),
+        "y": round(y0, 2),
+        "width": round(max(0.0, x1 - x0), 2),
+        "height": round(max(0.0, y1 - y0), 2),
+    }
+
+
+def _axis_authoritative_crop(
+    image: Image.Image,
+    bbox: Mapping[str, float],
+    *,
+    padded: bool,
+) -> AuthoritativeCrop:
+    short_edge = max(1.0, min(float(bbox["width"]), float(bbox["height"])))
+    padding_ratio = 0.20 if padded else 0.06
+    minimum_padding = 4.0 if padded else 2.0
+    pad = max(minimum_padding, short_edge * padding_ratio)
+    x0, y0, x1, y1 = _clip_bbox(
+        bbox,
+        image.size,
+        pad_x=pad,
+        pad_y=pad,
+    )
+    if x1 <= x0 or y1 <= y0:
+        crop_image = Image.new("RGB", (1, 1), "white")
+        target = {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+    else:
+        crop_image = image.crop((x0, y0, x1, y1)).convert("RGB")
+        target = {
+            "x": max(0.0, float(bbox["x"]) - x0),
+            "y": max(0.0, float(bbox["y"]) - y0),
+            "width": min(float(bbox["width"]), float(x1 - x0)),
+            "height": min(float(bbox["height"]), float(y1 - y0)),
+        }
+    target_polygon = (
+        (target["x"], target["y"]),
+        (target["x"] + target["width"], target["y"]),
+        (
+            target["x"] + target["width"],
+            target["y"] + target["height"],
+        ),
+        (target["x"], target["y"] + target["height"]),
+    )
+    return AuthoritativeCrop(
+        profile=(
+            "authoritative_padded_axis"
+            if padded
+            else "authoritative_tight_axis"
+        ),
+        image=crop_image,
+        target_bbox={key: round(value, 2) for key, value in target.items()},
+        target_polygon=target_polygon,
+        polygon_usable=False,
+    )
+
+
+def _perspective_matrix(
+    source: np.ndarray,
+    destination: np.ndarray,
+) -> np.ndarray | None:
+    """Solve a four-point projective transform without requiring OpenCV."""
+
+    rows: list[list[float]] = []
+    values: list[float] = []
+    for (source_x, source_y), (target_x, target_y) in zip(
+        source,
+        destination,
+    ):
+        rows.extend(
+            (
+                [
+                    float(source_x),
+                    float(source_y),
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    -float(target_x) * float(source_x),
+                    -float(target_x) * float(source_y),
+                ],
+                [
+                    0.0,
+                    0.0,
+                    0.0,
+                    float(source_x),
+                    float(source_y),
+                    1.0,
+                    -float(target_y) * float(source_x),
+                    -float(target_y) * float(source_y),
+                ],
+            )
+        )
+        values.extend((float(target_x), float(target_y)))
+    try:
+        coefficients = np.linalg.solve(
+            np.asarray(rows, dtype=np.float64),
+            np.asarray(values, dtype=np.float64),
+        )
+    except np.linalg.LinAlgError:
+        return None
+    return np.asarray(
+        [
+            [coefficients[0], coefficients[1], coefficients[2]],
+            [coefficients[3], coefficients[4], coefficients[5]],
+            [coefficients[6], coefficients[7], 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _transform_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    homogeneous = np.column_stack(
+        (points.astype(np.float64), np.ones(len(points), dtype=np.float64))
+    )
+    mapped = homogeneous @ matrix.T
+    denominators = mapped[:, 2:3]
+    denominators[np.abs(denominators) < 1e-9] = 1e-9
+    return (mapped[:, :2] / denominators).astype(np.float32)
+
+
+def _rectified_authoritative_crop(
+    image: Image.Image,
+    quad: np.ndarray,
+    *,
+    padded: bool,
+) -> AuthoritativeCrop | None:
+    if _polygon_area(quad) < 4.0:
+        return None
+    expanded = _expanded_quad(
+        quad,
+        0.20 if padded else 0.06,
+        minimum_padding=4.0 if padded else 2.0,
+        horizontal_padding_scale=1.15 if padded else 1.05,
+    )
+    if len(np.unique(expanded, axis=0)) < 4 or _polygon_area(expanded) < 4.0:
+        return None
+
+    top_left, top_right, bottom_right, bottom_left = expanded
+    target_width = max(
+        1,
+        int(
+            round(
+                max(
+                    np.linalg.norm(top_right - top_left),
+                    np.linalg.norm(bottom_right - bottom_left),
+                )
+            )
+        ),
+    )
+    target_height = max(
+        1,
+        int(
+            round(
+                max(
+                    np.linalg.norm(bottom_left - top_left),
+                    np.linalg.norm(bottom_right - top_right),
+                )
+            )
+        ),
+    )
+    destination = np.asarray(
+        [
+            [0, 0],
+            [target_width - 1, 0],
+            [target_width - 1, target_height - 1],
+            [0, target_height - 1],
+        ],
+        dtype=np.float32,
+    )
+    if cv2 is not None:
+        transform = cv2.getPerspectiveTransform(expanded, destination)
+        warped_image = Image.fromarray(
+            cv2.warpPerspective(
+                np.asarray(image.convert("RGB")),
+                transform,
+                (target_width, target_height),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
+        ).convert("RGB")
+        mapped_target = cv2.perspectiveTransform(
+            quad.reshape(1, -1, 2),
+            transform,
+        )[0]
+    else:
+        transform = _perspective_matrix(expanded, destination)
+        inverse = _perspective_matrix(destination, expanded)
+        if transform is None or inverse is None:
+            return None
+        coefficients = (
+            inverse[0, 0],
+            inverse[0, 1],
+            inverse[0, 2],
+            inverse[1, 0],
+            inverse[1, 1],
+            inverse[1, 2],
+            inverse[2, 0],
+            inverse[2, 1],
+        )
+        warped_image = image.convert("RGB").transform(
+            (target_width, target_height),
+            Image.Transform.PERSPECTIVE,
+            data=coefficients,
+            resample=Image.Resampling.BICUBIC,
+            fillcolor=(255, 255, 255),
+        )
+        mapped_target = _transform_points(quad, transform)
+    target_polygon = tuple(
+        (round(float(point[0]), 2), round(float(point[1]), 2))
+        for point in mapped_target
+    )
+    return AuthoritativeCrop(
+        profile=(
+            "authoritative_padded_rectified"
+            if padded
+            else "authoritative_tight_rectified"
+        ),
+        image=warped_image,
+        target_bbox=_target_bbox(target_polygon, (target_width, target_height)),
+        target_polygon=target_polygon,
+        polygon_usable=True,
+    )
+
+
+def build_authoritative_crops(
+    image: Image.Image,
+    bbox: Mapping[str, float],
+    polygon: Sequence[Sequence[float]],
+) -> tuple[AuthoritativeCrop, AuthoritativeCrop]:
+    """Build tight and padded final-read crops around the detector polygon.
+
+    The caller always tries the tight crop first and invokes the padded crop
+    only when the first read is incomplete or fails target ownership.
+    """
+
+    quad = _ordered_quad(polygon)
+    if quad is not None:
+        tight = _rectified_authoritative_crop(image, quad, padded=False)
+        padded = _rectified_authoritative_crop(image, quad, padded=True)
+        if tight is not None and padded is not None:
+            return tight, padded
+    return (
+        _axis_authoritative_crop(image, bbox, padded=False),
+        _axis_authoritative_crop(image, bbox, padded=True),
+    )
+
+
+def _point_in_polygon(
+    x: float,
+    y: float,
+    polygon: Sequence[Sequence[float]],
+) -> bool:
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = float(previous[0]), float(previous[1])
+        x2, y2 = float(current[0]), float(current[1])
+        cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+        if abs(cross) <= 1e-6 and (
+            min(x1, x2) - 1e-6 <= x <= max(x1, x2) + 1e-6
+            and min(y1, y2) - 1e-6 <= y <= max(y1, y2) + 1e-6
+        ):
+            return True
+        if (y1 > y) != (y2 > y):
+            intersection_x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+            if x <= intersection_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _clip_polygon_to_text_box(
+    polygon: Sequence[Sequence[float]],
+    bbox: Mapping[str, float],
+) -> list[tuple[float, float]]:
+    points = [(float(point[0]), float(point[1])) for point in polygon]
+    left = float(bbox["x"])
+    top = float(bbox["y"])
+    right = left + float(bbox["width"])
+    bottom = top + float(bbox["height"])
+
+    def clip(
+        source: list[tuple[float, float]],
+        inside: Any,
+        intersection: Any,
+    ) -> list[tuple[float, float]]:
+        if not source:
+            return []
+        output: list[tuple[float, float]] = []
+        previous = source[-1]
+        previous_inside = inside(previous)
+        for current in source:
+            current_inside = inside(current)
+            if current_inside != previous_inside:
+                output.append(intersection(previous, current))
+            if current_inside:
+                output.append(current)
+            previous = current
+            previous_inside = current_inside
+        return output
+
+    def vertical_intersection(
+        first: tuple[float, float],
+        second: tuple[float, float],
+        boundary: float,
+    ) -> tuple[float, float]:
+        delta = second[0] - first[0]
+        ratio = 0.0 if abs(delta) < 1e-9 else (boundary - first[0]) / delta
+        return boundary, first[1] + ratio * (second[1] - first[1])
+
+    def horizontal_intersection(
+        first: tuple[float, float],
+        second: tuple[float, float],
+        boundary: float,
+    ) -> tuple[float, float]:
+        delta = second[1] - first[1]
+        ratio = 0.0 if abs(delta) < 1e-9 else (boundary - first[1]) / delta
+        return first[0] + ratio * (second[0] - first[0]), boundary
+
+    points = clip(
+        points,
+        lambda point: point[0] >= left,
+        lambda first, second: vertical_intersection(first, second, left),
+    )
+    points = clip(
+        points,
+        lambda point: point[0] <= right,
+        lambda first, second: vertical_intersection(first, second, right),
+    )
+    points = clip(
+        points,
+        lambda point: point[1] >= top,
+        lambda first, second: horizontal_intersection(first, second, top),
+    )
+    return clip(
+        points,
+        lambda point: point[1] <= bottom,
+        lambda first, second: horizontal_intersection(first, second, bottom),
+    )
+
+
+def assess_authoritative_result(
+    result: Mapping[str, Any],
+    crop: AuthoritativeCrop,
+    *,
+    minimum_overlap: float = 0.60,
+) -> dict[str, Any]:
+    """Attach target-ownership and one-value validity to a final OCR read."""
+
+    from page_value_filters import (
+        is_complete_engineering_value,
+        normalize_page_value_text,
+    )
+
+    assessed = dict(result)
+    text = normalize_page_value_text(str(result.get("text") or ""))
+    assessed["text"] = text
+    assessed["ocr_profile"] = crop.profile
+    assessed["authoritative_target_bbox"] = dict(crop.target_bbox)
+    assessed["authoritative_target_polygon"] = [
+        list(point) for point in crop.target_polygon
+    ]
+    text_bbox = result.get("text_bbox")
+    if not isinstance(text_bbox, Mapping):
+        assessed.update(
+            authoritative_target_owned=False,
+            authoritative_valid=False,
+            authoritative_target_reason="Authoritative OCR returned no text location",
+        )
+        return assessed
+    try:
+        text_box = {
+            key: float(text_bbox[key])
+            for key in ("x", "y", "width", "height")
+        }
+    except (KeyError, TypeError, ValueError):
+        assessed.update(
+            authoritative_target_owned=False,
+            authoritative_valid=False,
+            authoritative_target_reason="Authoritative OCR returned an invalid text location",
+        )
+        return assessed
+    if text_box["width"] <= 0 or text_box["height"] <= 0:
+        assessed.update(
+            authoritative_target_owned=False,
+            authoritative_valid=False,
+            authoritative_target_reason="Authoritative OCR text location is empty",
+        )
+        return assessed
+
+    center_x = text_box["x"] + text_box["width"] / 2
+    center_y = text_box["y"] + text_box["height"] / 2
+    center_inside = _point_in_polygon(
+        center_x,
+        center_y,
+        crop.target_polygon,
+    )
+    intersection = _polygon_area(
+        _clip_polygon_to_text_box(crop.target_polygon, text_box)
+    )
+    text_area = max(text_box["width"] * text_box["height"], 1.0)
+    overlap = intersection / text_area
+    target_width = max(float(crop.target_bbox["width"]), 1.0)
+    target_height = max(float(crop.target_bbox["height"]), 1.0)
+    bounded_extent = (
+        text_box["width"] <= target_width * 1.75
+        and text_box["height"] <= target_height * 1.75
+    )
+    target_owned = bool(
+        center_inside and overlap >= minimum_overlap and bounded_extent
+    )
+    plausible = is_complete_engineering_value(text)
+    if not center_inside:
+        reason = "Authoritative text centre is outside the detector target"
+    elif overlap < minimum_overlap:
+        reason = "Authoritative text does not mostly overlap the detector target"
+    elif not bounded_extent:
+        reason = "Authoritative text spans beyond one detector target"
+    elif not plausible:
+        reason = "Authoritative text is not one complete engineering value"
+    else:
+        reason = "Authoritative text is locked to the detector target"
+    assessed.update(
+        authoritative_target_owned=target_owned,
+        authoritative_target_overlap=round(overlap, 4),
+        authoritative_valid=bool(target_owned and plausible),
+        authoritative_target_reason=reason,
+    )
+    return assessed
+
+
+def authoritative_result_needs_retry(result: Mapping[str, Any]) -> bool:
+    """Retry only an incomplete, invalid, or non-target tight final read."""
+
+    return not bool(result.get("authoritative_valid"))
+
+
 def build_recovery_crops(
     image: Image.Image,
     bbox: Mapping[str, float],
@@ -453,6 +931,138 @@ def engineering_values_agree(left: str, right: str) -> bool:
         left_signature is not None
         and left_signature == _semantic_signature(right)
     )
+
+
+def _merge_equivalent_symbol_evidence(
+    authoritative_text: str,
+    preliminary_text: str,
+) -> str:
+    """Use richer °/±/Ø/R notation only for numerically identical reads."""
+
+    authoritative = _normalize_engineering_text(authoritative_text)
+    preliminary = _normalize_engineering_text(preliminary_text)
+    from page_value_filters import is_complete_engineering_value
+
+    if not engineering_values_agree(authoritative, preliminary):
+        return authoritative
+    if not (
+        is_complete_engineering_value(authoritative)
+        and is_complete_engineering_value(preliminary)
+    ):
+        return authoritative
+
+    def symbol_score(text: str) -> int:
+        return (
+            sum(text.count(symbol) for symbol in ("°", "±", "Ø"))
+            + int(bool(re.match(r"^R(?=\s*\d)", text, re.IGNORECASE)))
+        )
+
+    return (
+        preliminary
+        if symbol_score(preliminary) > symbol_score(authoritative)
+        else authoritative
+    )
+
+
+def resolve_authoritative_hypotheses(
+    preliminary: Mapping[str, Any],
+    attempts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Resolve target-locked final OCR without losing preliminary evidence."""
+
+    from page_value_filters import normalize_page_value_text
+
+    preliminary_copy = dict(preliminary)
+    preliminary_text = normalize_page_value_text(
+        str(preliminary_copy.get("text") or "")
+    )
+    assessed_attempts = [dict(attempt) for attempt in attempts]
+    valid_attempts = [
+        attempt
+        for attempt in assessed_attempts
+        if attempt.get("authoritative_valid")
+    ]
+    owned_attempts = [
+        attempt
+        for attempt in assessed_attempts
+        if attempt.get("authoritative_target_owned")
+    ]
+
+    if valid_attempts:
+        # Attempts arrive tight-first. A valid tight result is authoritative;
+        # padded OCR exists only when the tight result could not be accepted.
+        resolved = dict(valid_attempts[0])
+        authoritative_text = normalize_page_value_text(
+            str(resolved.get("text") or "")
+        )
+        preliminary_signature = _semantic_signature(preliminary_text)
+        authoritative_signature = _semantic_signature(authoritative_text)
+        numeric_conflict = bool(
+            preliminary_signature is not None
+            and authoritative_signature is not None
+            and preliminary_signature != authoritative_signature
+        )
+        if numeric_conflict:
+            final_text = authoritative_text
+            review_reason = (
+                "Preliminary and target-locked authoritative OCR disagree on "
+                "the numeric value"
+            )
+        else:
+            final_text = _merge_equivalent_symbol_evidence(
+                authoritative_text,
+                preliminary_text,
+            )
+            review_reason = ""
+        resolved.update(
+            text=final_text,
+            needs_review=bool(numeric_conflict),
+            numeric_conflict=numeric_conflict,
+            authoritative_review_required=numeric_conflict,
+            review_reason=review_reason,
+            authoritative_reread=True,
+            preliminary_text=preliminary_text,
+            preliminary_result=preliminary_copy,
+            authoritative_attempt_count=len(assessed_attempts),
+            recovery_attempted=bool(
+                preliminary_copy.get("recovery_attempted")
+            ),
+        )
+        return resolved
+
+    resolved = dict(preliminary_copy)
+    if not owned_attempts:
+        final_text = ""
+        review_reason = (
+            "Authoritative OCR did not detect text belonging to the original "
+            "detector target"
+        )
+    else:
+        final_text = preliminary_text
+        review_reason = (
+            "Target-owned authoritative OCR did not form one complete "
+            "engineering value"
+        )
+    resolved.update(
+        text=final_text,
+        needs_review=True,
+        numeric_conflict=False,
+        authoritative_review_required=True,
+        authoritative_target_owned=bool(owned_attempts),
+        authoritative_valid=False,
+        authoritative_reread=True,
+        preliminary_text=preliminary_text,
+        preliminary_result=preliminary_copy,
+        authoritative_attempt_count=len(assessed_attempts),
+        review_reason=review_reason,
+        ocr_profile=(
+            str(assessed_attempts[-1].get("ocr_profile"))
+            if assessed_attempts
+            else "authoritative_unavailable"
+        ),
+        recovery_attempted=bool(preliminary_copy.get("recovery_attempted")),
+    )
+    return resolved
 
 
 def _format_quality(result: Mapping[str, Any]) -> tuple[float, ...]:

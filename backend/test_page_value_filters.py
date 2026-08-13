@@ -45,6 +45,7 @@ def test_complete_engineering_values_need_neither_units_nor_geometry() -> None:
         "Ø24.80",
         "15°±3°",
         "30 +/- 3",
+        "30+-3",
         "32°20'40\"",
         "25 +0.1 -0.2",
         "M8",
@@ -66,6 +67,7 @@ def test_harmless_symbol_and_boundary_noise_is_normalized() -> None:
         "?30º +/- 3º": "30° ± 3°",
         "|R5.00;": "R5.00",
         "12˚±3˚": "12°±3°",
+        "30 + - 3": "30 ± 3",
     }
 
     for source, expected in cases.items():
@@ -217,7 +219,7 @@ def test_each_never_balloon_rule_can_be_disabled_in_code() -> None:
     assert decision.accepted
 
 
-def test_table_region_is_a_global_hard_exclusion() -> None:
+def test_table_region_is_available_to_both_scope_policies() -> None:
     mask = {"x": 100, "y": 100, "width": 200, "height": 120}
     inside = candidate("50", x=120, y=130, width=30, height=14)
 
@@ -231,17 +233,31 @@ def test_table_region_is_a_global_hard_exclusion() -> None:
         assert decision.rule_name == "table_region"
 
 
+def test_section_light_filter_keeps_short_values_and_rejects_garbage() -> None:
+    accepted = ("0", "1", "6", "8", "50", "105", "Ø6", "R3", "30+-3")
+    rejected = ("A", "B", "D", "---", "DETAIL B (1:1)", "ZONE 25 VALUE")
+
+    for text in accepted:
+        decision = evaluate_scan_value(candidate(text), scope_kind="section")
+        assert decision.accepted, text
+        assert decision.rule_name == "section_engineering_value"
+
+    for text in rejected:
+        decision = evaluate_scan_value(candidate(text), scope_kind="section")
+        assert not decision.accepted, text
+
+
 def test_mixed_section_rejects_only_candidate_inside_the_table() -> None:
     mask = {"x": 100, "y": 100, "width": 200, "height": 120}
     table_value = candidate("50", x=120, y=130, width=30, height=14)
-    drawing_text = candidate("DATUM A", x=20, y=30, width=70, height=14)
+    drawing_value = candidate("50", x=20, y=30, width=30, height=14)
 
     assert candidate_is_in_table(table_value.bbox, (mask,))
-    assert not candidate_is_in_table(drawing_text.bbox, (mask,))
+    assert not candidate_is_in_table(drawing_value.bbox, (mask,))
     decision = evaluate_scan_value(
-        drawing_text,
+        drawing_value,
         scope_kind="section",
         table_masks=(mask,),
     )
     assert decision.accepted
-    assert decision.rule_name == "section_passthrough"
+    assert decision.rule_name == "section_engineering_value"
