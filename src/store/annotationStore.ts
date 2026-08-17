@@ -1,5 +1,8 @@
 import { create } from "zustand";
-import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import {
+  moveValueAnnotationToNumber,
+  renumberValueAnnotations,
+} from "@/lib/annotationNumbers";
 import type { Annotation, PendingSelection } from "@/types/annotation";
 
 const isValue = (annotation: Annotation) => annotation.kind !== "label";
@@ -24,6 +27,7 @@ interface AnnotationState {
   addAnnotation: (annotation: Annotation) => void;
   addAnnotations: (annotations: Annotation[]) => void;
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  moveAnnotationToNumber: (id: string, targetNumber: number) => void;
   setAllBalloonVisibility: (visible: boolean) => void;
   removeAnnotation: (id: string) => void;
   setPending: (pending: PendingSelection | null) => void;
@@ -87,6 +91,15 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     set((state) => ({
       annotations: state.annotations.map((a) =>
         a.id === id ? { ...a, ...patch } : a
+      ),
+    })),
+
+  moveAnnotationToNumber: (id, targetNumber) =>
+    set((state) => ({
+      annotations: moveValueAnnotationToNumber(
+        state.annotations,
+        id,
+        targetNumber
       ),
     })),
 

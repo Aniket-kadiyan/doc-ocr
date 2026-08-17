@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Annotation } from "@/types/annotation";
 import { BalloonThumbnail } from "@/components/BalloonThumbnail";
 
@@ -13,6 +14,7 @@ interface SidebarProps {
   onSelectReview: (candidateId: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onMove: (id: string, targetNumber: number) => void;
   onToggleVisibility: (id: string) => void;
 }
 
@@ -36,8 +38,11 @@ export function Sidebar({
   onSelectReview,
   onEdit,
   onDelete,
+  onMove,
   onToggleVisibility,
 }: SidebarProps) {
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [moveTarget, setMoveTarget] = useState("");
   const values = annotations
     .filter((annotation) => annotation.kind !== "label")
     .sort((left, right) => left.number - right.number);
@@ -75,6 +80,15 @@ export function Sidebar({
                 <ul>
                   {values.map((annotation) => {
                     const selected = selectedId === annotation.id;
+                    const moving = movingId === annotation.id;
+                    const targetNumber = Number(moveTarget);
+                    const targetIsValid =
+                      moving &&
+                      Number.isInteger(targetNumber) &&
+                      targetNumber >= 1 &&
+                      targetNumber <= values.length;
+                    const moveChangesNumber =
+                      targetIsValid && targetNumber !== annotation.number;
                     const details = [
                       annotation.type,
                       annotation.range && `Tolerance ${annotation.range}`,
@@ -152,14 +166,95 @@ export function Sidebar({
                             {annotation.hidden ? "Show" : "Hide"}
                           </button>
                         </div>
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => onDelete(annotation.id)}
-                          className="mt-0.5 w-full text-center text-[10px] text-red-500 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Remove
-                        </button>
+                        <div className="mt-0.5 flex items-center justify-center gap-2 text-[10px]">
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => {
+                              setMovingId(annotation.id);
+                              setMoveTarget(String(annotation.number));
+                            }}
+                            className="text-blue-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Move
+                          </button>
+                          <span className="text-slate-300">·</span>
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => onDelete(annotation.id)}
+                            className="text-red-500 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        {moving && (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              if (!moveChangesNumber) return;
+                              onMove(annotation.id, targetNumber);
+                              setMovingId(null);
+                              setMoveTarget("");
+                            }}
+                            className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-2"
+                          >
+                            <label
+                              htmlFor={`move-balloon-${annotation.id}`}
+                              className="block text-[11px] font-medium text-slate-700"
+                            >
+                              Move balloon {annotation.number} to number
+                            </label>
+                            <input
+                              id={`move-balloon-${annotation.id}`}
+                              type="number"
+                              min={1}
+                              max={values.length}
+                              step={1}
+                              value={moveTarget}
+                              onChange={(event) =>
+                                setMoveTarget(event.target.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") {
+                                  setMovingId(null);
+                                  setMoveTarget("");
+                                }
+                              }}
+                              autoFocus
+                              className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                            />
+                            <p className="mt-1 text-[10px] text-slate-500">
+                              {!targetIsValid
+                                ? `Enter a whole number from 1 to ${values.length}.`
+                                : targetNumber === annotation.number
+                                  ? `Balloon ${annotation.number} is already at this number.`
+                                  : targetNumber < annotation.number
+                                    ? `Balloons ${targetNumber}–${annotation.number - 1} become ${targetNumber + 1}–${annotation.number}.`
+                                    : `Balloons ${annotation.number + 1}–${targetNumber} become ${annotation.number}–${targetNumber - 1}.`}
+                            </p>
+                            <div className="mt-2 flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMovingId(null);
+                                  setMoveTarget("");
+                                }}
+                                className="rounded px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-200"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={!moveChangesNumber}
+                                className="rounded bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Apply
+                              </button>
+                            </div>
+                          </form>
+                        )}
                       </li>
                     );
                   })}

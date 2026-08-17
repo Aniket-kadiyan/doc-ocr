@@ -36,3 +36,53 @@ export function renumberValueAnnotations(
 
   return changed ? renumbered : annotations;
 }
+
+/**
+ * Move one value balloon to a new 1-based number and shift only the values in
+ * between. Stable annotation ids, array order, and all non-number metadata are
+ * preserved. Legacy label records do not participate in balloon numbering.
+ */
+export function moveValueAnnotationToNumber(
+  annotations: Annotation[],
+  id: string,
+  targetNumber: number
+): Annotation[] {
+  const orderedValues = annotations
+    .map((annotation, index) => ({ annotation, index }))
+    .filter(({ annotation }) => annotation.kind !== "label")
+    .sort((left, right) => {
+      const numberDifference =
+        left.annotation.number - right.annotation.number;
+      return numberDifference || left.index - right.index;
+    });
+
+  if (
+    !Number.isInteger(targetNumber) ||
+    targetNumber < 1 ||
+    targetNumber > orderedValues.length
+  ) {
+    return annotations;
+  }
+
+  const currentIndex = orderedValues.findIndex(
+    ({ annotation }) => annotation.id === id
+  );
+  const targetIndex = targetNumber - 1;
+  if (currentIndex < 0 || currentIndex === targetIndex) return annotations;
+
+  const reordered = [...orderedValues];
+  const [moved] = reordered.splice(currentIndex, 1);
+  reordered.splice(targetIndex, 0, moved);
+
+  const numberById = new Map(
+    reordered.map(({ annotation }, index) => [annotation.id, index + 1])
+  );
+
+  return annotations.map((annotation) => {
+    if (annotation.kind === "label") return annotation;
+    const number = numberById.get(annotation.id);
+    return number == null || number === annotation.number
+      ? annotation
+      : { ...annotation, number };
+  });
+}

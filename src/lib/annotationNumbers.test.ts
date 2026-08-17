@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import {
+  moveValueAnnotationToNumber,
+  renumberValueAnnotations,
+} from "@/lib/annotationNumbers";
 import { makeAnnotation } from "@/test/annotationFixture";
 
 describe("renumberValueAnnotations", () => {
@@ -35,5 +38,48 @@ describe("renumberValueAnnotations", () => {
     ];
 
     expect(renumberValueAnnotations(input)).toBe(input);
+  });
+});
+
+describe("moveValueAnnotationToNumber", () => {
+  const annotations = [
+    makeAnnotation({ id: "a", number: 1, value: "10" }),
+    makeAnnotation({ id: "b", number: 2, value: "20" }),
+    makeAnnotation({ id: "c", number: 3, value: "30" }),
+    makeAnnotation({ id: "d", number: 4, value: "40" }),
+    makeAnnotation({ id: "e", number: 5, value: "50" }),
+  ];
+
+  it("moves a later balloon upward and shifts the intervening range", () => {
+    const result = moveValueAnnotationToNumber(annotations, "e", 2);
+
+    expect(result.map(({ id }) => id)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(result.map(({ id, number }) => ({ id, number }))).toEqual([
+      { id: "a", number: 1 },
+      { id: "b", number: 3 },
+      { id: "c", number: 4 },
+      { id: "d", number: 5 },
+      { id: "e", number: 2 },
+    ]);
+    expect(result.find(({ id }) => id === "e")?.value).toBe("50");
+  });
+
+  it("moves an earlier balloon downward and shifts the intervening range", () => {
+    const result = moveValueAnnotationToNumber(annotations, "b", 5);
+
+    expect(result.map(({ id, number }) => ({ id, number }))).toEqual([
+      { id: "a", number: 1 },
+      { id: "b", number: 5 },
+      { id: "c", number: 2 },
+      { id: "d", number: 3 },
+      { id: "e", number: 4 },
+    ]);
+  });
+
+  it("does not change annotations for an invalid target or unknown id", () => {
+    expect(moveValueAnnotationToNumber(annotations, "e", 0)).toBe(annotations);
+    expect(moveValueAnnotationToNumber(annotations, "missing", 2)).toBe(
+      annotations
+    );
   });
 });

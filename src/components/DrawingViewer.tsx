@@ -149,6 +149,9 @@ export function DrawingViewer() {
   const setAnnotations = useAnnotationStore((s) => s.setAnnotations);
   const addAnnotations = useAnnotationStore((s) => s.addAnnotations);
   const updateAnnotation = useAnnotationStore((s) => s.updateAnnotation);
+  const moveAnnotationToNumber = useAnnotationStore(
+    (s) => s.moveAnnotationToNumber
+  );
   const setAllBalloonVisibility = useAnnotationStore(
     (s) => s.setAllBalloonVisibility
   );
@@ -510,6 +513,17 @@ export function DrawingViewer() {
       );
     },
     [projectId, updateAnnotation]
+  );
+
+  const handleMoveAnnotation = useCallback(
+    (id: string, targetNumber: number) => {
+      moveAnnotationToNumber(id, targetNumber);
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+    },
+    [moveAnnotationToNumber, projectId]
   );
 
   // Read one drawn value and open the value/tolerance confirmation popup.
@@ -1406,6 +1420,7 @@ export function DrawingViewer() {
           onSelect={(id) => handleSelect(id)}
           onSelectReview={selectScanReviewCandidate}
           onDelete={handleDelete}
+          onMove={handleMoveAnnotation}
           onToggleVisibility={toggleAnnotationVisibility}
           onEdit={(id) => {
             handleSelect(id);

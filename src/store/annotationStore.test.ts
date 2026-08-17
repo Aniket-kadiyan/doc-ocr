@@ -82,6 +82,34 @@ describe("annotationStore numbering", () => {
     ]);
   });
 
+  it("moves a balloon to a new number in one state update", () => {
+    useAnnotationStore.getState().setAnnotations([
+      makeAnnotation({ id: "a", number: 1 }),
+      makeAnnotation({ id: "b", number: 2 }),
+      makeAnnotation({ id: "c", number: 3 }),
+      makeAnnotation({ id: "d", number: 4 }),
+    ]);
+    let updates = 0;
+    const unsubscribe = useAnnotationStore.subscribe(() => {
+      updates += 1;
+    });
+
+    useAnnotationStore.getState().moveAnnotationToNumber("d", 2);
+    unsubscribe();
+
+    expect(updates).toBe(1);
+    expect(
+      useAnnotationStore
+        .getState()
+        .annotations.map(({ id, number }) => ({ id, number }))
+    ).toEqual([
+      { id: "a", number: 1 },
+      { id: "b", number: 3 },
+      { id: "c", number: 4 },
+      { id: "d", number: 2 },
+    ]);
+  });
+
   it("uses the same hidden field for master and individual visibility", () => {
     useAnnotationStore.getState().setAnnotations([
       makeAnnotation({ id: "visible" }),
