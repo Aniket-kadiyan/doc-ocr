@@ -40,6 +40,7 @@ import {
   loadPdfDocument,
   renderPdfPage,
   loadImageFile,
+  PDF_RENDER_SCALE,
 } from "@/lib/pdfLoader";
 import {
   saveAnnotations,
@@ -101,11 +102,6 @@ const legacyMigrationWarning = (orphanLabelCount: number) =>
         orphanLabelCount === 1 ? "was" : "were"
       } not imported.`
     : null;
-
-// PDFs are rasterized once at this fixed resolution; this canvas is the base
-// coordinate system every bbox is stored in. Zoom is applied as a Konva Stage
-// transform on top — never by re-rendering — so boxes stay aligned at any zoom.
-const PDF_RENDER_SCALE = 1.5;
 
 export function DrawingViewer() {
   const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
@@ -258,26 +254,12 @@ export function DrawingViewer() {
     return () => clearTimeout(t);
   }, [annotations, projectId]);
 
-  // Expose the current project id to the store so the Export menu can hand it to
-  // the checksheet web view (which opens in a separate browser tab).
+  // Expose the current project id so Export can retrieve the original drawing
+  // blob and create a durable backend checksheet snapshot.
   useEffect(() => {
     setStoreProjectId(projectId);
     projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
-
-  // Pull edits made in the checksheet tab back into the live drawing. The tab
-  // saves to IndexedDB and broadcasts the updated annotations on this channel.
-  useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return;
-    const channel = new BroadcastChannel("doc-ocr-box:checksheet");
-    channel.onmessage = (e) => {
-      const msg = e.data as { projectId?: string; annotations?: Annotation[] };
-      if (msg?.projectId === projectId && Array.isArray(msg.annotations)) {
-        setAnnotations(normalizeLegacyAnnotations(msg.annotations).annotations);
-      }
-    };
-    return () => channel.close();
-  }, [projectId, setAnnotations]);
 
   // Render a drawing onto the stage. Shared by fresh uploads and project loads
   // so both paths render at the same scale and produce matching bbox coords.

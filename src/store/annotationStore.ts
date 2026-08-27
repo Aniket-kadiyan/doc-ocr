@@ -20,7 +20,7 @@ interface AnnotationState {
   editingValueId: string | null;
   isProcessing: boolean;
   projectName: string;
-  /** id of the open project in IndexedDB — shared with the checksheet web view. */
+  /** id of the open IndexedDB project used to retrieve its source drawing. */
   projectId: string;
 
   setAnnotations: (annotations: Annotation[]) => void;

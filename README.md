@@ -12,8 +12,8 @@ symbol recovery. No cloud OCR service is required.
 4. Correct Value or Tolerance if required, then select **OK**.
 5. Edit the same balloon later from the drawing or **Values** sidebar.
 6. Optionally add Label, Method, and Tool metadata.
-7. Save a reloadable `.docbox.json` project or export JSON, CSV, XML, a Digital
-   Checksheet template, or a verification payload.
+7. Save a reloadable `.docbox.json` project, create an internal inspection
+   checksheet, or export JSON, CSV, XML, or a verification payload.
 
 The box saved with a manually created value is the box drawn by the user.
 Balloon numbers are always contiguous `1…N`; deleting a value immediately
@@ -83,6 +83,33 @@ scripts\win-ocr-setup.bat
 The `ocr-api`, `ocr-api:debug`, and `ocr-api:debug:force` commands choose the
 correct virtual-environment Python path on Windows, macOS, and Linux.
 
+## Internal checksheets
+
+Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a
+checksheet name and one or more measured-part columns. The backend saves an
+immutable snapshot of the specifications, balloon geometry, and original
+PDF/image, then opens the first draft inspection run.
+
+Use **Saved Checksheets** in the main toolbar to search definitions, reopen
+drafts, start another inspection, view completed history, rename, duplicate,
+archive, restore, or permanently delete an archived checksheet. Completing a
+run locks its readings.
+
+By default, durable checksheet data is written below
+`backend/data/checksheets/`. Set these variables in `.env.local` when deploying:
+
+```dotenv
+# Absolute or repo-relative backend storage location.
+CHECKSHEET_DATA_DIR=D:\doc-ocr-data\checksheets
+
+# Maximum accepted original drawing size in MB (default 200).
+CHECKSHEET_MAX_DOCUMENT_MB=200
+```
+
+Keep `CHECKSHEET_DATA_DIR` on a backed-up server volume. Other computers access
+it through the backend API; the browser is not the persistence layer for these
+checksheets.
+
 ## Drawing and OCR tips
 
 - Include the full `Ø`, `±`, degree, minute, or second symbol inside the box.
@@ -126,7 +153,7 @@ acceptance checklist, and explicitly deferred follow-ups.
 | Path | Purpose |
 |---|---|
 | `src/` | Next.js UI, annotation state, persistence, and exports |
-| `backend/` | FastAPI, PaddleOCR pipeline, image processing, and checksheet conversion |
+| `backend/` | FastAPI, PaddleOCR, image processing, and durable checksheet storage |
 | `public/balloon-style.json` | Single deployed balloon-style data file |
 | `tools/balloon_builder/` | Developer-only artwork conversion and validation utility |
 | `scripts/` | Cross-platform OCR and test launchers |

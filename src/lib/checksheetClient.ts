@@ -1,60 +1,196 @@
-import type { InspectionJSON } from "@/lib/export";
 import { getOcrApiUrl } from "@/lib/paddleOcrClient";
+import type {
+  ChecksheetDetail,
+  ChecksheetRunResponse,
+  ChecksheetSnapshotPayload,
+  ChecksheetSummary,
+  ReadingPatch,
+} from "@/types/checksheet";
 
-/** Result returned after the backend has persisted a generated template. */
-export interface SavedChecksheetTemplate {
-  template_id: string;
-  template_name: string;
-  file_name: string;
-  row_count: number;
-  replaced: boolean;
-  index_updated: boolean;
-}
+const endpoint = (path: string) => `${getOcrApiUrl()}${path}`;
 
-interface SaveChecksheetTemplateArgs {
-  sourceJson: InspectionJSON;
-  sourceFileName: string;
-}
-
-/** Extract a useful FastAPI error without assuming every error is JSON. */
 async function responseError(response: Response): Promise<string> {
   const fallback = `Server responded ${response.status} ${response.statusText}`;
   const text = await response.text().catch(() => "");
   if (!text.trim()) return fallback;
-
   try {
     const body = JSON.parse(text) as { detail?: unknown };
     if (typeof body.detail === "string" && body.detail.trim()) {
       return body.detail;
     }
+    if (Array.isArray(body.detail) && body.detail.length > 0) {
+      return body.detail
+        .map((item) => {
+          const entry = item as { msg?: unknown };
+          return typeof entry.msg === "string"
+            ? entry.msg
+            : JSON.stringify(item);
+        })
+        .join("; ");
+    }
   } catch {
-    // A non-JSON backend/proxy response is already useful as plain text.
+    // Keep the useful plain-text proxy/server response below.
   }
-
   return text.trim();
 }
 
-/**
- * Ask the local Python backend to convert and save one Digital Checksheet
- * template. The backend owns the configured destination directory; no path is
- * accepted from browser code.
- */
-export async function saveChecksheetTemplate({
-  sourceJson,
-  sourceFileName,
-}: SaveChecksheetTemplateArgs): Promise<SavedChecksheetTemplate> {
-  const response = await fetch(`${getOcrApiUrl()}/checksheet/templates`, {
+async function jsonRequest<T>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetch(endpoint(path), init);
+  if (!response.ok) throw new Error(await responseError(response));
+  return (await response.json()) as T;
+}
+
+function snapshotForm(
+  snapshot: ChecksheetSnapshotPayload,
+  document: File
+): FormData {
+  const form = new FormData();
+  form.append("snapshot_json", JSON.stringify(snapshot));
+  form.append("document", document, document.name);
+  return form;
+}
+
+export async function createChecksheet(
+  snapshot: ChecksheetSnapshotPayload,
+  document: File
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>("/checksheets", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      source_json: sourceJson,
-      source_file_name: sourceFileName,
-    }),
+    body: snapshotForm(snapshot, document),
   });
+}
 
-  if (!response.ok) {
-    throw new Error(await responseError(response));
-  }
+export async function createChecksheetRevision(
+  checksheetId: string,
+  snapshot: ChecksheetSnapshotPayload,
+  document: File
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>(
+    `/checksheets/${encodeURIComponent(checksheetId)}/revisions`,
+    {
+      method: "POST",
+      body: snapshotForm(snapshot, document),
+    }
+  );
+}
 
-  return (await response.json()) as SavedChecksheetTemplate;
+export async function listChecksheets(args?: {
+  search?: string;
+  archived?: boolean;
+}): Promise<ChecksheetSummary[]> {
+  const query = new URLSearchParams();
+  if (args?.search?.trim()) query.set("search", args.search.trim());
+  if (args?.archived) query.set("archived", "true");
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const result = await jsonRequest<{ items: ChecksheetSummary[] }>(
+    `/checksheets${suffix}`
+  );
+  return result.items;
+}
+
+export async function getChecksheet(
+  checksheetId: string
+): Promise<ChecksheetDetail> {
+  return jsonRequest<ChecksheetDetail>(
+    `/checksheets/${encodeURIComponent(checksheetId)}`
+  );
+}
+
+export async function getChecksheetRun(
+  checksheetId: string,
+  runId: string
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>(
+    `/checksheets/${encodeURIComponent(checksheetId)}/runs/${encodeURIComponent(
+      runId
+    )}`
+  );
+}
+
+export async function saveChecksheetReadings(
+  checksheetId: string,
+  runId: string,
+  readings: ReadingPatch[]
+): Promise<{ status: "saved"; updated_at: string }> {
+  return jsonRequest(
+    `/checksheets/${encodeURIComponent(checksheetId)}/runs/${encodeURIComponent(
+      runId
+    )}/readings`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ readings }),
+    }
+  );
+}
+
+export async function completeChecksheetRun(
+  checksheetId: string,
+  runId: string
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>(
+    `/checksheets/${encodeURIComponent(checksheetId)}/runs/${encodeURIComponent(
+      runId
+    )}/complete`,
+    { method: "POST" }
+  );
+}
+
+export async function startChecksheetRun(
+  checksheetId: string,
+  revisionId?: string
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>(
+    `/checksheets/${encodeURIComponent(checksheetId)}/runs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision_id: revisionId ?? null }),
+    }
+  );
+}
+
+export async function updateChecksheet(
+  checksheetId: string,
+  patch: { name?: string; archived?: boolean }
+): Promise<ChecksheetDetail> {
+  return jsonRequest<ChecksheetDetail>(
+    `/checksheets/${encodeURIComponent(checksheetId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }
+  );
+}
+
+export async function duplicateChecksheet(
+  checksheetId: string,
+  name?: string
+): Promise<ChecksheetRunResponse> {
+  return jsonRequest<ChecksheetRunResponse>(
+    `/checksheets/${encodeURIComponent(checksheetId)}/duplicate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name?.trim() || null }),
+    }
+  );
+}
+
+export async function permanentlyDeleteChecksheet(
+  checksheetId: string
+): Promise<void> {
+  const response = await fetch(
+    endpoint(`/checksheets/${encodeURIComponent(checksheetId)}`),
+    { method: "DELETE" }
+  );
+  if (!response.ok) throw new Error(await responseError(response));
+}
+
+export function checksheetDocumentUrl(documentId: string): string {
+  return endpoint(`/checksheet-documents/${encodeURIComponent(documentId)}`);
 }

@@ -111,6 +111,16 @@ export function Toolbar({
         Remove Drawing
       </button>
 
+      <a
+        href="/checksheets"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open saved checksheets and inspection history"
+        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+      >
+        Saved Checksheets
+      </a>
+
       <ExportPanel disabled={isProcessing} />
 
       <div className="mx-1 h-6 w-px bg-slate-200" />

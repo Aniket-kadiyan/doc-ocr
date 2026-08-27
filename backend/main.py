@@ -28,6 +28,8 @@ from checksheet_index import (
     ChecksheetIndexError,
     register_template_if_missing,
 )
+from checksheet_routes import router as checksheet_router
+from checksheet_storage import initialize_checksheet_storage
 from config_env import get_cors_origins, load_env_files
 from debug_dump import dump_status
 from ocr_pipeline import get_pipeline
@@ -48,6 +50,7 @@ app = FastAPI(
     description="Self-hosted engineering drawing OCR",
     version="0.2.0",
 )
+app.include_router(checksheet_router)
 
 # PaddleOCR is expensive and the local service normally serves one operator.
 # A single worker prevents concurrent scans from competing for the same model
@@ -114,6 +117,7 @@ def classify_dimension(text: str) -> DimensionType:
 
 @app.on_event("startup")
 def startup() -> None:
+    initialize_checksheet_storage()
     get_pipeline()
     st = dump_status()
     if st["enabled"]:
