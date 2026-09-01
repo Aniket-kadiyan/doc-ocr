@@ -243,10 +243,6 @@ def get_checksheet_document(document_id: str) -> FileResponse:
         document = get_checksheet_storage().get_document(document_id)
     except ChecksheetStorageError as error:
         _raise_storage_error(error)
-
-    # Use an internal preview MIME type and no Content-Disposition header.
-    # This prevents download managers such as IDM from capturing the PDF.
-    # The frontend already restores the real MIME type from checksheet metadata.
     return FileResponse(
         path=document.path,
         media_type="application/vnd.doc-ocr.preview",

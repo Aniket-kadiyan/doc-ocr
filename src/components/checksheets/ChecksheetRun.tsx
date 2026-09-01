@@ -302,24 +302,6 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
             pdfRenderScale={data.revision.pdf_render_scale}
             row={previewRow}
           />
-          {activeRow && (
-            <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-sm">
-              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                <span className="text-slate-400">Specification</span>
-                <span className="font-mono font-medium text-slate-900">
-                  {activeRow.specification}
-                </span>
-                <span className="text-slate-400">Tolerance</span>
-                <span className="font-mono text-slate-700">
-                  {activeRow.tolerance || "—"}
-                </span>
-                <span className="text-slate-400">Method</span>
-                <span className="text-slate-700">{activeRow.method || "—"}</span>
-                <span className="text-slate-400">Tool</span>
-                <span className="text-slate-700">{activeRow.tool || "—"}</span>
-              </div>
-            </div>
-          )}
         </aside>
       </div>
     </main>

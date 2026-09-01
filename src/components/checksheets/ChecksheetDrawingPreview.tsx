@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Image as KonvaImage, Layer, Rect, Stage } from "react-konva";
 import type Konva from "konva";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -98,7 +99,7 @@ export function ChecksheetDrawingPreview({
   const [viewport, setViewport] = useState({ width: 640, height: 288 });
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
   const [expanded, setExpanded] = useState(false);
-  const [mode, setMode] = useState<ViewMode>("focus");
+  const [mode, setMode] = useState<ViewMode>("fit");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -210,8 +211,17 @@ export function ChecksheetDrawingPreview({
   }, [drawingImage, mode, pageSize, row, viewport]);
 
   useEffect(() => {
-    setMode("focus");
+    setMode("fit");
   }, [row?.annotation_id]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const previousOverflow = window.document.body.style.overflow;
+    window.document.body.style.overflow = "hidden";
+    return () => {
+      window.document.body.style.overflow = previousOverflow;
+    };
+  }, [expanded]);
 
   const annotation = useMemo<Annotation | null>(() => {
     if (!row) return null;
@@ -341,10 +351,10 @@ export function ChecksheetDrawingPreview({
   );
 
   if (expanded) {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/80 p-4 sm:p-7">
+    return createPortal(
+      <div className="fixed inset-0 z-[100] flex flex-col bg-slate-950/80 p-3 sm:p-6">
         <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+          <div className="relative z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-slate-900">
                 {document.file_name}
@@ -384,7 +394,10 @@ export function ChecksheetDrawingPreview({
               </button>
               <button
                 type="button"
-                onClick={() => setExpanded(false)}
+                onClick={() => {
+                  setMode("fit");
+                  setExpanded(false);
+                }}
                 className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
               >
                 Close
@@ -393,7 +406,8 @@ export function ChecksheetDrawingPreview({
           </div>
           {content}
         </div>
-      </div>
+      </div>,
+      window.document.body
     );
   }
 
@@ -401,14 +415,17 @@ export function ChecksheetDrawingPreview({
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
         <div>
-          <p className="text-sm font-semibold text-slate-800">Drawing focus</p>
+          <p className="text-sm font-semibold text-slate-800">Drawing preview</p>
           <p className="text-xs text-slate-400">
             {row ? `Balloon ${row.balloon_number} · Page ${row.page}` : "Select a row"}
           </p>
         </div>
         <button
           type="button"
-          onClick={() => setExpanded(true)}
+          onClick={() => {
+            setMode("fit");
+            setExpanded(true);
+          }}
           disabled={!row}
           className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
         >
