@@ -26,10 +26,6 @@ PM_THRESHOLD = 0.34
 class DetectedSymbols:
     diameter: bool = False
     diameter_score: float = 0.0
-    diameter_visual_score: float = 0.0
-    diameter_visual_candidate: bool = False
-    diameter_ocr_explicit: bool = False
-    diameter_ocr_ambiguous: bool = False
     plus_minus: bool = False
     degree: bool = False
     radius: bool = False
@@ -111,36 +107,12 @@ def _detect_degree(image: Image.Image) -> bool:
     return False
 
 
-def detect_diameter_symbol(
-    image: Image.Image,
-) -> tuple[DetectedSymbols, dict]:
-    """Run only diameter vision, for both single and batched recognition."""
-
+def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
+    merged = DetectedSymbols()
     vertical = is_vertical_dimension(image)
     has_phi, phi_score, phi_strips = detect_phi_multi_strip(image, vertical)
-    visual_candidate = any(
-        bool(detail.get("detected"))
-        or bool(detail.get("support", {}).get("component"))
-        for detail in phi_strips
-    )
-    symbols = DetectedSymbols(
-        diameter=has_phi,
-        diameter_score=phi_score,
-        diameter_visual_score=phi_score,
-        diameter_visual_candidate=visual_candidate,
-    )
-    return symbols, {
-        "vertical": vertical,
-        "phi_strips": phi_strips,
-        "phi_score": phi_score,
-        "phi_detected": has_phi,
-        "phi_candidate": visual_candidate,
-    }
-
-
-def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
-    merged, diameter_debug = detect_diameter_symbol(image)
-    vertical = bool(diameter_debug["vertical"])
+    merged.diameter = has_phi
+    merged.diameter_score = phi_score
 
     oriented = primary_oriented(image)
     merged.degree = _detect_degree(oriented)
@@ -159,7 +131,10 @@ def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
             merged.plus_minus = True
 
     debug = {
-        **diameter_debug,
+        "vertical": vertical,
+        "phi_strips": phi_strips,
+        "phi_score": phi_score,
+        "phi_detected": has_phi,
         "degree_detected": merged.degree,
         "pm_scores": pm_scores,
         "pm_threshold": PM_THRESHOLD,
@@ -169,19 +144,15 @@ def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
 
 def detect_prefix_from_ocr_text(prefix_ocr: str) -> DetectedSymbols:
     t = (prefix_ocr or "").strip()
-    compact = "".join(t.split())
     out = DetectedSymbols()
-    if re.match(r"^[ØøφΦ⌀∅]", compact):
+    if re.match(r"^[ØøφΦ⌀]", t):
         out.diameter = True
         out.diameter_score = 1.0
-        out.diameter_ocr_explicit = True
     elif re.match(r"^[Rr](?=\d)", t):
         out.radius = True
-    elif re.match(r"^[O0Q©¢C](?:$|(?=\d{2}))", compact):
-        # Useful for deciding to re-read the prefix, but never sufficient to
-        # create Ø: these are also legitimate CAD characters and digits.
-        out.diameter_ocr_ambiguous = True
-        out.diameter_score = 0.20
+    elif re.match(r"^[O0Q©¢C]$", t):
+        # Single-char prefix OCR of Ø
+        out.diameter_score = 0.55
     if "±" in t or "+/-" in t:
         out.plus_minus = True
     if re.search(r"°|˚|⁰", t):
@@ -195,22 +166,11 @@ def symbols_to_dict(s: DetectedSymbols) -> dict:
 
 def merge_symbol_scores(a: DetectedSymbols, b: DetectedSymbols) -> DetectedSymbols:
     score = max(a.diameter_score, b.diameter_score)
-    visual_score = max(a.diameter_visual_score, b.diameter_visual_score)
-    explicit = a.diameter_ocr_explicit or b.diameter_ocr_explicit
     return DetectedSymbols(
-        # A numeric score or O-like OCR character is not a decision. Preserve
-        # only a confirmed visual result or an explicit diameter glyph.
-        diameter=a.diameter or b.diameter or explicit,
-        diameter_score=1.0 if explicit else score,
-        diameter_visual_score=visual_score,
-        diameter_visual_candidate=(
-            a.diameter_visual_candidate or b.diameter_visual_candidate
-        ),
-        diameter_ocr_explicit=explicit,
-        diameter_ocr_ambiguous=(
-            a.diameter_ocr_ambiguous or b.diameter_ocr_ambiguous
-        ),
+        diameter=score >= 0.32,
+        diameter_score=score,
         plus_minus=a.plus_minus or b.plus_minus,
         degree=a.degree or b.degree,
         radius=a.radius or b.radius,
     )
+

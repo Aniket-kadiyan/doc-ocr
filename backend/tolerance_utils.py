@@ -39,8 +39,9 @@ def ocr_has_explicit_plus_minus(text: str) -> bool:
 
 
 def ocr_has_diameter_marker(text: str) -> bool:
-    return bool(re.match(r"^[\s]*[ØøφΦ⌀∅]", text))
+    return bool(re.match(r"^[\s]*[ØøφΦ⌀]", text))
 
 
 def ocr_has_radius_marker(text: str) -> bool:
     return bool(re.match(r"^[\s]*[Rr](?=\d)", text))
+

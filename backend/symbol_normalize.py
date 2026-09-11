@@ -28,8 +28,7 @@ def fix_engineering_symbols_light(text: str) -> str:
     t = normalize_primes(text.strip())
     t = t.replace("+/−", "±").replace("+/-", "±").replace("＋", "+")
     # Leading diameter / radius markers only (not φ inside numbers)
-    # ⊕ is a GD&T position/target-style mark, not a diameter glyph.
-    t = re.sub(r"^[\s]*(?:∅|⌀|[φΦø])", "Ø", t)
+    t = re.sub(r"^[\s]*(?:⊕|∅|⌀|[φΦø])", "Ø", t)
     t = re.sub(r"^[\s]*([Rr])(?=\d)", r"R", t)
     t = re.sub(r"\s*([±°Ø'\"])\s*", r"\1", t)
     t = re.sub(r"\s+", " ", t).strip()
@@ -53,3 +52,4 @@ def merge_ocr_candidates(candidates: list[tuple[str, float]]) -> tuple[str, floa
         key=lambda x: engineering_quality_score(x[0], x[1]),
     )
     return best_text, best_conf
+

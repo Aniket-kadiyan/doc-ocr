@@ -42,7 +42,6 @@ from paddle_parse import (
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_regions import enlarge_zone, split_symbol_zones
 from symbol_vision import (
-    detect_diameter_symbol,
     detect_prefix_from_ocr_text,
     detect_symbols,
     merge_symbol_scores,
@@ -53,7 +52,10 @@ LINE_THRESHOLD = 15
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
-OCR_CHANGESET_ID = "m1-p02r1-field-gated-phi"
+
+# If visual Ø detection is close to its 0.32 acceptance threshold, use the
+# dedicated prefix OCR as a second opinion.
+PREFIX_RECHECK_PHI_SCORE = 0.20
 
 # Oversized-cluster refinement is a best-effort accuracy improvement. It must
 # never expand into unbounded OCR work during a whole-page scan.
@@ -284,7 +286,6 @@ class OcrPipeline:
     @property
     def status(self) -> dict[str, Any]:
         return {
-            "ocr_changeset": OCR_CHANGESET_ID,
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
@@ -486,16 +487,12 @@ class OcrPipeline:
             recognized,
             orientations,
         ):
-            visual_diameter, _diameter_debug = detect_diameter_symbol(crop)
-            raw_text_hints = detect_prefix_from_ocr_text(raw_text)
-            symbols = merge_symbol_scores(visual_diameter, raw_text_hints)
             fixed, corrected = correct_numeric_confusables(raw_text)
-            fixed_text_hints = detect_prefix_from_ocr_text(fixed)
-            symbols = merge_symbol_scores(symbols, fixed_text_hints)
+            text_hints = detect_prefix_from_ocr_text(fixed)
             composed = compose_engineering_dimension(
                 fixed,
                 crop,
-                symbols,
+                text_hints,
             )
             text = fix_engineering_symbols_light(composed.text).strip()
             results.append(
@@ -516,7 +513,7 @@ class OcrPipeline:
                         "vertical" if is_vertical_dimension(crop) else "horizontal"
                     ),
                     "rotation": 0,
-                    "symbols_detected": symbols_to_dict(symbols),
+                    "symbols_detected": symbols_to_dict(text_hints),
                     "orientation_correction": degrees,
                     "orientation_confidence": float(orientation_score),
                     "ocr_profile": profile,
@@ -3534,8 +3531,9 @@ class OcrPipeline:
             and compact_raw[0] in {"O", "0", "Q", "©", "¢", "C"}
         )
         borderline_phi = bool(
-            not bool(symbols_before_merge["diameter"])
-            and bool(symbols_before_merge["diameter_visual_candidate"])
+            PREFIX_RECHECK_PHI_SCORE
+            <= float(symbols_before_merge["diameter_score"])
+            < 0.32
         )
         reusable_symbol_hints = any(
             (
@@ -3770,3 +3768,4 @@ def get_pipeline() -> OcrPipeline:
         _pipeline = OcrPipeline()
         _pipeline.load()
     return _pipeline
+
