@@ -23,6 +23,15 @@ from image_preprocess import (
     upscale_min_edge,
     clahe_rgb,
 )
+from ocr_runtime import (
+    PaddleRuntimeInfo,
+    configured_device_label,
+    configured_ocr_device,
+    effective_device,
+    is_gpu_device,
+    probe_paddle_runtime,
+    validate_configured_device,
+)
 from paddle_parse import (
     extract_paddle_detection_boxes,
     extract_paddle_detection_regions,
@@ -96,6 +105,8 @@ def assemble_paddle_lines(
 
 class OcrPipeline:
     def __init__(self) -> None:
+        self._configured_device = configured_ocr_device()
+        self._paddle_runtime = PaddleRuntimeInfo()
         self._paddle = None
         self._paddle_available = False
         self._paddle_api = 0  # 3 = PaddleOCR 3.x (.predict), 2 = 2.x (.ocr)
@@ -112,20 +123,38 @@ class OcrPipeline:
     def load(self) -> None:
         self._load_paddle()
 
+    def _device_kwargs(self) -> dict[str, str]:
+        """Pass a device only when the operator explicitly selected one."""
+
+        if self._configured_device is None:
+            return {}
+        return {"device": self._configured_device}
+
     def _load_paddle(self) -> None:
         try:
+            import paddle  # type: ignore
             import paddleocr  # type: ignore
             from paddleocr import PaddleOCR  # type: ignore
         except Exception as exc:  # noqa: BLE001
             self._init_errors.append(f"PaddleOCR import: {exc}")
             return
 
+        ver = str(getattr(paddleocr, "__version__", "0"))
+        self._paddle_version = ver
+
+        self._paddle_runtime = probe_paddle_runtime(paddle)
+        device_error = validate_configured_device(
+            self._configured_device,
+            self._paddle_runtime,
+        )
+        if device_error:
+            self._init_errors.append(device_error)
+            return
+
         # Detect the API by VERSION, not by probing the constructor: PaddleOCR
         # 2.7.x silently swallows unknown 3.x kwargs, so a try/except on the
         # constructor would mis-detect 2.x as 3.x and then call .predict()
         # (which doesn't exist on 2.x) — yielding empty results.
-        ver = str(getattr(paddleocr, "__version__", "0"))
-        self._paddle_version = ver
         major_part = ver.split(".", 1)[0]
         major = int(major_part) if major_part.isdigit() else 0
         is_3x = major >= 3 and hasattr(PaddleOCR, "predict")
@@ -135,6 +164,7 @@ class OcrPipeline:
                 
                 self._paddle = PaddleOCR(
                     lang="en",
+                    **self._device_kwargs(),
 
                     # The UI sends tightly cropped CAD dimensions, not full documents.
                     # Running these document-level models adds latency without helping OCR.
@@ -154,9 +184,14 @@ class OcrPipeline:
                 self._paddle_available = True
                 self._load_text_detector(paddleocr)
                 self._load_page_recognition_models(paddleocr)
+                self._paddle_runtime = probe_paddle_runtime(paddle)
                 return
             except Exception as exc:  # noqa: BLE001
                 self._init_errors.append(f"PaddleOCR 3.x: {exc}")
+                # Version detection already established that this is 3.x.
+                # Never hide a bad GPU/device configuration by retrying the
+                # same package with legacy 2.x constructor arguments.
+                return
 
         # PaddleOCR 2.x.
         try:
@@ -165,6 +200,12 @@ class OcrPipeline:
                 "lang": "en",
                 "show_log": False,
             }
+            if self._configured_device is not None:
+                kwargs["use_gpu"] = is_gpu_device(self._configured_device)
+                if is_gpu_device(self._configured_device):
+                    device_parts = self._configured_device.split(":", 1)
+                    if len(device_parts) == 2 and device_parts[1].isdigit():
+                        kwargs["gpu_id"] = int(device_parts[1])
             try:
                 self._paddle = PaddleOCR(
                     **kwargs,
@@ -195,6 +236,7 @@ class OcrPipeline:
                 model_name="PP-OCRv5_mobile_det",
                 thresh=0.2,
                 box_thresh=0.4,
+                **self._device_kwargs(),
             )
             self._text_detector_available = True
         except Exception as exc:  # noqa: BLE001
@@ -219,6 +261,7 @@ class OcrPipeline:
         try:
             self._text_recognizer = recognizer_class(
                 model_name="PP-OCRv6_medium_rec",
+                **self._device_kwargs(),
             )
             self._text_recognizer_available = True
         except Exception as exc:  # noqa: BLE001
@@ -227,6 +270,7 @@ class OcrPipeline:
         try:
             self._text_orientation = orientation_class(
                 model_name="PP-LCNet_x1_0_textline_ori",
+                **self._device_kwargs(),
             )
             self._text_orientation_available = True
         except Exception as exc:  # noqa: BLE001
@@ -245,6 +289,21 @@ class OcrPipeline:
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
+            "ocr_device_requested": configured_device_label(
+                self._configured_device
+            ),
+            "ocr_device_effective": effective_device(
+                self._configured_device,
+                self._paddle_runtime,
+            ),
+            "paddle_global_device": self._paddle_runtime.global_device,
+            "paddle_cuda_compiled": self._paddle_runtime.cuda_compiled,
+            "paddle_available_devices": list(
+                self._paddle_runtime.available_devices
+            ),
+            "paddle_device_probe_error": self._paddle_runtime.probe_error,
+            "document_orientation_classify": False,
+            "document_unwarping": False,
             "text_detector": self._text_detector_available,
             "text_recognizer": self._text_recognizer_available,
             "text_line_orientation": self._text_orientation_available,
