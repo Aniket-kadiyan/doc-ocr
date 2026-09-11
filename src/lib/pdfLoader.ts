@@ -1,5 +1,8 @@
 import * as pdfjs from "pdfjs-dist";
 
+/** Base PDF raster scale used by stored annotation coordinates and previews. */
+export const PDF_RENDER_SCALE = 1.5;
+
 if (typeof window !== "undefined") {
   pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
 }

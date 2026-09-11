@@ -64,8 +64,8 @@ export interface Annotation {
   /** Editable tolerance; numeric values default to "0" and embedded ± values
    * are normalized to "+x, -x". */
   range?: string;
-  /** Inspector-filled readings keyed by extra-column name (e.g. {part1: "32.01"}).
-   * Populated from the checksheet web view; flows into CSV/JSON exports. */
+  /** Legacy browser-based inspector readings retained for older projects and
+   * values-only CSV/JSON exports. Internal checksheet runs use backend storage. */
   extras?: Record<string, string>;
 }
 

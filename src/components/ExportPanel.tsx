@@ -2,25 +2,25 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  buildInspectionJSON,
   exportInspectionCSV,
   exportInspectionJSON,
   exportXML,
   downloadFile,
   findMalformedToleranceAnnotations,
 } from "@/lib/export";
-import { saveChecksheetTemplate } from "@/lib/checksheetClient";
+import { createChecksheet } from "@/lib/checksheetClient";
+import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
+import { getProject } from "@/lib/db";
 import {
   buildVerificationPayload,
   sendForVerification,
   verificationEndpoint,
 } from "@/lib/project";
 import { useAnnotationStore } from "@/store/annotationStore";
-import { saveAnnotations } from "@/lib/db";
-
-// Keep the original IndexedDB /checksheet Web View available for later use,
-// but skip it while the Digital Checksheet integration is active.
-const USE_LEGACY_CHECKSHEET_WEBVIEW = false;
+import {
+  CreateChecksheetDialog,
+  type CreateChecksheetValues,
+} from "@/components/CreateChecksheetDialog";
 
 interface ExportPanelProps {
   disabled?: boolean;
@@ -35,6 +35,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     message: string;
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
@@ -102,69 +103,70 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     return Array.from({ length: n }, (_, i) => names[i] || `col${i + 1}`);
   };
 
-  // Open the editable checksheet in a new browser tab. Persist the latest
-  // annotations to IndexedDB first so the tab loads current data, then pass the
-  // project id and the inspector's extra columns through the URL.
-  const handleLegacyWebView = async () => {
+  const handleWebView = () => {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
-    const extraColumns = askExtraColumns();
-    if (extraColumns === null) return;
-    if (projectId && annotations.length > 0) {
-      try {
-        await saveAnnotations(projectId, annotations);
-      } catch {
-        // Fall through — the tab will load whatever is already persisted.
-      }
-    }
-    const params = new URLSearchParams({ project: projectId });
-    if (extraColumns.length) params.set("cols", extraColumns.join(","));
-    window.open(`/checksheet?${params.toString()}`, "_blank", "noopener");
+    setActionStatus({ kind: "idle", message: "" });
+    setCreateDialogOpen(true);
   };
 
-  // Current POC flow: generate the same values-only JSON used by Export JSON,
-  // convert it in Python, and save the resulting template on the backend.
-  // index.json registration and Digital Checksheet navigation are intentionally
-  // deferred to their own milestones.
-  const handleTemplateWebView = async () => {
-    if (!validateToleranceExpressions()) return;
-    setMenuOpen(false);
-    const extraColumns = askExtraColumns(1);
-    if (extraColumns === null) return;
-
+  const handleCreateChecksheet = async ({
+    name,
+    readingColumns,
+  }: CreateChecksheetValues) => {
+    const newTab = window.open("about:blank", "_blank");
+    if (newTab) {
+      newTab.opener = null;
+      newTab.document.title = "Creating checksheet…";
+      newTab.document.body.textContent = "Creating checksheet…";
+    }
     setActionStatus({
       kind: "saving",
-      message: "Generating Digital Checksheet template…",
+      message: "Saving checksheet snapshot…",
     });
-
     try {
-      const result = await saveChecksheetTemplate({
-        sourceJson: buildInspectionJSON(annotations, extraColumns),
-        sourceFileName: `${base}_inspection.json`,
+      if (!projectId) {
+        throw new Error("The current drawing has no project identity.");
+      }
+      const project = await getProject(projectId);
+      if (!project) {
+        throw new Error(
+          "The original drawing is unavailable. Reopen it before creating a checksheet."
+        );
+      }
+      const creation = buildChecksheetCreationSnapshot({
+        checksheetName: name,
+        readingColumns,
+        annotations,
+        projectId,
+        projectName,
+        project,
       });
+      const result = await createChecksheet(creation.payload, creation.document);
+      const runPath = `/checksheets/${encodeURIComponent(
+        result.checksheet.id
+      )}/runs/${encodeURIComponent(result.run.id)}`;
+      const runUrl = new URL(runPath, window.location.origin).toString();
+      if (newTab) {
+        newTab.location.replace(runUrl);
+      } else {
+        window.open(runUrl, "_blank", "noopener");
+      }
       setActionStatus({
         kind: "ok",
-        message: `${result.replaced ? "Replaced" : "Saved"} ${
-          result.file_name
-        } (${result.row_count} rows).`,
+        message: `Created ${result.checksheet.name} with ${result.rows.length} rows.`,
       });
     } catch (error) {
+      newTab?.close();
       setActionStatus({
         kind: "error",
         message:
           error instanceof Error
             ? error.message
-            : "Failed to save the checksheet template.",
+            : "Failed to create the checksheet.",
       });
+      throw error;
     }
-  };
-
-  const handleWebView = async () => {
-    if (USE_LEGACY_CHECKSHEET_WEBVIEW) {
-      await handleLegacyWebView();
-      return;
-    }
-    await handleTemplateWebView();
   };
 
   const handleJSON = () => {
@@ -253,12 +255,12 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           <button
             type="button"
-            onClick={() => void handleWebView()}
+            onClick={handleWebView}
             className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
           >
-            <span className="font-medium">Web View</span>
+            <span className="font-medium">Checksheet / Web</span>
             <span className="block text-[11px] text-slate-400">
-              Generate and save the Digital Checksheet template
+              Save a durable snapshot and start an inspection
             </span>
           </button>
           <button
@@ -315,6 +317,13 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           {actionStatus.message}
         </p>
       )}
+
+      <CreateChecksheetDialog
+        open={createDialogOpen}
+        defaultName={`${projectName || "Drawing"} Checksheet`}
+        onClose={() => setCreateDialogOpen(false)}
+        onCreate={handleCreateChecksheet}
+      />
     </div>
   );
 }
