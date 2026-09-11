@@ -53,7 +53,6 @@ LINE_THRESHOLD = 15
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
-OCR_CHANGESET_ID = "m1-p02r1-field-gated-phi"
 
 # Oversized-cluster refinement is a best-effort accuracy improvement. It must
 # never expand into unbounded OCR work during a whole-page scan.
@@ -284,7 +283,6 @@ class OcrPipeline:
     @property
     def status(self) -> dict[str, Any]:
         return {
-            "ocr_changeset": OCR_CHANGESET_ID,
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,

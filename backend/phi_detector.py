@@ -27,140 +27,6 @@ PHI_HOUGH_SUPPORT = 0.70
 PHI_CONTOUR_SUPPORT = 0.62
 PHI_RING_SUPPORT = 0.68
 PHI_DIAGONAL_SUPPORT = 0.62
-PHI_COMPONENT_SUPPORT = 0.82
-
-
-def _component_phi_score(image: Image.Image) -> tuple[float, dict[str, Any]]:
-    """Find the two diagonally separated counters of a diameter glyph.
-
-    In the CAD fonts used by the application, the slash divides the inside of
-    ``Ø`` into two enclosed counters.  Their centres are separated both
-    horizontally and vertically.  ``0``/``O`` have one counter, while ``8``
-    has two counters whose centres are almost vertically aligned.  This gives
-    us a glyph-local test that is much less likely to mistake nearby dimension
-    lines or tolerance digits for a diameter symbol.
-
-    Coloured CAD construction/dimension lines are ignored when neutral black
-    text is available.  Monochrome scans use an Otsu mask instead.
-    """
-
-    if cv2 is None or image.width < 4 or image.height < 4:
-        return 0.0, {"reason": "opencv_or_image_unavailable", "candidates": []}
-
-    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-    channel_max = rgb.max(axis=2)
-    channel_min = rgb.min(axis=2)
-    chroma = channel_max.astype(np.int16) - channel_min.astype(np.int16)
-    colourful_ink = bool(np.any((chroma >= 70) & (channel_min < 210)))
-
-    if colourful_ink:
-        # PDF/CAD exports commonly use saturated blue for dimension lines and
-        # neutral black for glyphs.  Do not let the long blue line become part
-        # of a synthetic circle/slash candidate.
-        binary = ((channel_max < 235) & (chroma < 70)).astype(np.uint8)
-        mask_kind = "neutral_ink"
-    else:
-        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-        _, thresholded = cv2.threshold(
-            gray,
-            0,
-            1,
-            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
-        )
-        binary = thresholded.astype(np.uint8)
-        mask_kind = "monochrome_otsu"
-
-    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
-        binary,
-        8,
-    )
-    image_area = max(1, image.width * image.height)
-    best = 0.0
-    candidates: list[dict[str, Any]] = []
-
-    for component_index in range(1, component_count):
-        x, y, width, height, area = (
-            int(value) for value in stats[component_index]
-        )
-        if area < max(8, image_area * 0.0002):
-            continue
-        if height < max(6, image.height * 0.12) or width < 4:
-            continue
-        aspect = width / max(height, 1)
-        if not 0.42 <= aspect <= 1.25:
-            continue
-
-        component = (
-            labels[y : y + height, x : x + width] == component_index
-        ).astype(np.uint8) * 255
-        contours, hierarchy = cv2.findContours(
-            component,
-            cv2.RETR_CCOMP,
-            cv2.CHAIN_APPROX_SIMPLE,
-        )
-        if hierarchy is None:
-            continue
-
-        holes: list[tuple[float, float, float]] = []
-        for contour_index, relation in enumerate(hierarchy[0]):
-            if int(relation[3]) < 0:
-                continue
-            contour = contours[contour_index]
-            hole_area = float(cv2.contourArea(contour))
-            moments = cv2.moments(contour)
-            if hole_area <= 0.0 or abs(float(moments["m00"])) < 1e-6:
-                continue
-            holes.append(
-                (
-                    float(moments["m10"] / moments["m00"]),
-                    float(moments["m01"] / moments["m00"]),
-                    hole_area,
-                )
-            )
-        if len(holes) < 2:
-            continue
-
-        two_largest = sorted(holes, key=lambda item: item[2], reverse=True)[:2]
-        first, second = two_largest
-        horizontal_separation = abs(first[0] - second[0]) / max(width, 1)
-        vertical_separation = abs(first[1] - second[1]) / max(height, 1)
-        hole_balance = min(first[2], second[2]) / max(first[2], second[2])
-
-        # An 8/B has vertically stacked counters.  Requiring meaningful
-        # horizontal displacement is the decisive distinction from Ø.
-        diagonal_layout = bool(
-            horizontal_separation >= 0.12
-            and vertical_separation >= 0.055
-            and hole_balance >= 0.32
-        )
-        score = 0.0
-        if diagonal_layout:
-            score = min(
-                1.0,
-                0.55
-                + 0.20 * min(1.0, horizontal_separation / 0.25)
-                + 0.15 * min(1.0, vertical_separation / 0.18)
-                + 0.10 * hole_balance,
-            )
-            best = max(best, score)
-
-        candidates.append(
-            {
-                "bbox": [x, y, width, height],
-                "hole_count": len(holes),
-                "horizontal_separation": round(horizontal_separation, 3),
-                "vertical_separation": round(vertical_separation, 3),
-                "hole_balance": round(hole_balance, 3),
-                "diagonal_layout": diagonal_layout,
-                "score": round(score, 3),
-            }
-        )
-
-    return round(best, 3), {
-        "mask": mask_kind,
-        "colourful_ink_suppressed": colourful_ink,
-        "candidates": candidates,
-    }
 
 
 def _make_phi_template(size: int) -> np.ndarray:
@@ -399,7 +265,6 @@ def _fuse_phi_scores(
     contour_score: float,
     ring_score: float,
     diagonal_score: float,
-    component_score: float = 0.0,
 ) -> dict[str, Any]:
     """Require both a round glyph and an independently measured slash."""
 
@@ -409,7 +274,6 @@ def _fuse_phi_scores(
         "contour": max(0.0, min(1.0, float(contour_score))),
         "ring": max(0.0, min(1.0, float(ring_score))),
         "diagonal": max(0.0, min(1.0, float(diagonal_score))),
-        "component": max(0.0, min(1.0, float(component_score))),
     }
     support = {
         "template": scores["template"] >= PHI_TEMPLATE_SUPPORT,
@@ -417,26 +281,22 @@ def _fuse_phi_scores(
         "contour": scores["contour"] >= PHI_CONTOUR_SUPPORT,
         "ring": scores["ring"] >= PHI_RING_SUPPORT,
         "diagonal": scores["diagonal"] >= PHI_DIAGONAL_SUPPORT,
-        "component": scores["component"] >= PHI_COMPONENT_SUPPORT,
     }
     support_count = sum(1 for value in support.values() if value)
 
-    legacy_unanimous = all(
-        support[key]
-        for key in ("template", "hough", "contour", "ring", "diagonal")
+    confidence = scores["diagonal"] * 0.55 + scores["ring"] * 0.45
+    detected = (
+        support["diagonal"]
+        and support["ring"]
+        and (support["template"] or support["contour"])
     )
-    confidence = max(
-        scores["component"],
-        scores["diagonal"] * 0.55 + scores["ring"] * 0.45,
-    )
-    detected = bool(support["component"] or legacy_unanimous)
     return {
         "detected": detected,
         "confidence": round(confidence, 3),
         "scores": {key: round(value, 3) for key, value in scores.items()},
         "support": support,
         "support_count": support_count,
-        "decision_rule": "diagonal_two_counter_glyph_or_unanimous_shape",
+        "decision_rule": "diagonal_and_closed_ring_and_shape",
     }
 
 
@@ -444,17 +304,13 @@ def _analyze_phi_prefix(prefix_zone: Image.Image) -> dict[str, Any]:
     gray = _prepare_phi_gray(prefix_zone)
     if gray.shape[0] < 8 or gray.shape[1] < 8:
         return _fuse_phi_scores(0.0, 0.0, 0.0, 0.0, 0.0)
-    component_score, component_debug = _component_phi_score(prefix_zone)
-    evidence = _fuse_phi_scores(
+    return _fuse_phi_scores(
         _template_score(gray),
         _hough_circle_score(gray),
         _contour_score(gray),
         _ring_score(gray),
         _diagonal_slash_score(gray),
-        component_score,
     )
-    evidence["component_analysis"] = component_debug
-    return evidence
 
 
 def detect_phi_in_prefix(prefix_zone: Image.Image) -> tuple[bool, float]:
@@ -467,7 +323,7 @@ def detect_phi_multi_strip(
 ) -> tuple[bool, float, list[dict[str, Any]]]:
     """Scan oriented prefix edges and retain every method's evidence."""
     from image_preprocess import orientations_for_ocr, upscale_min_edge
-    from symbol_regions import enlarge_zone
+    from symbol_regions import enlarge_zone, split_symbol_zones
 
     # Split relative to the actual crop contents.  Padding before this step
     # shifted/cut the leading glyph because the prefix fraction included the
@@ -484,25 +340,11 @@ def detect_phi_multi_strip(
         # the prefix or scanning raw vertical slices that cut digits in half.
         prefix_edges = ("left", "right") if src_vertical else ("left",)
         for edge in prefix_edges:
-            # A detector crop can contain several pixels of source padding or
-            # a dimension line that begins before the text.  The old fixed
-            # 28% strip cut the right side off the real Ø in field drawings.
-            # Scan a bounded leading half; the glyph-local topology check
-            # prevents neighbouring digits from becoming diameter evidence.
-            strip_width = max(14, int(oriented.width * 0.48))
-            prefix = (
-                oriented.crop((0, 0, strip_width, oriented.height))
-                if edge == "left"
-                else oriented.crop(
-                    (
-                        max(0, oriented.width - strip_width),
-                        0,
-                        oriented.width,
-                        oriented.height,
-                    )
-                )
+            zones = split_symbol_zones(
+                oriented,
+                from_vertical_rotated=edge == "right",
             )
-            evidence = _analyze_phi_prefix(enlarge_zone(prefix, 3.0))
+            evidence = _analyze_phi_prefix(enlarge_zone(zones["prefix"], 5.0))
             sc = float(evidence["confidence"])
             details.append(
                 {
