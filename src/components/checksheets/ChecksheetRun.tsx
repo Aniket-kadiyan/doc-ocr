@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChecksheetPreviewLoader } from "@/components/checksheets/ChecksheetPreviewLoader";
+import { ChecksheetRowCharts } from "@/components/checksheets/ChecksheetRowCharts";
 import { ChecksheetTable } from "@/components/checksheets/ChecksheetTable";
 import { useChecksheetAutosave } from "@/hooks/useChecksheetAutosave";
 import {
@@ -296,12 +297,15 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
           />
         </section>
 
-        <aside className="min-w-0 xl:sticky xl:top-24 xl:self-start">
+        <aside className="min-w-0 xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)] xl:self-start xl:overflow-y-auto xl:pr-1">
           <ChecksheetPreviewLoader
             document={data.document}
             pdfRenderScale={data.revision.pdf_render_scale}
             row={previewRow}
           />
+          {activeRow && (
+            <ChecksheetRowCharts columns={data.columns} row={activeRow} />
+          )}
         </aside>
       </div>
     </main>

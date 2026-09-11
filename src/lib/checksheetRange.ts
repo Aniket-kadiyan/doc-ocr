@@ -48,7 +48,7 @@ function parseAngleNominal(text: string): number | null {
   return degrees < 0 ? degrees - fraction : degrees + fraction;
 }
 
-function nominalValue(specification: string): number | null {
+export function checksheetNominalValue(specification: string): number | null {
   const text = normalizeEngineeringText(specification);
   if (!text) return null;
 
@@ -152,7 +152,7 @@ export function checksheetNumericRange(
   specification: string,
   tolerance: string
 ): ChecksheetNumericRange | null {
-  const nominal = nominalValue(specification);
+  const nominal = checksheetNominalValue(specification);
   const parsedTolerance = parseTolerance(tolerance);
   if (nominal != null && parsedTolerance) {
     return {
@@ -170,6 +170,13 @@ export function checksheetNumericRange(
 
   // A numeric specification without an explicit tolerance is exact.
   return nominal == null ? null : { min: nominal, max: nominal };
+}
+
+export function parseChecksheetReading(reading: string): number | null {
+  const normalized = normalizeEngineeringText(reading);
+  if (!new RegExp(`^${SIGNED_NUMBER}$`).test(normalized)) return null;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
 }
 
 function formatLimit(value: number): string {
@@ -196,7 +203,8 @@ export function validateChecksheetReading(
   const range = checksheetNumericRange(specification, tolerance);
   if (!trimmed) return { state: "empty", range, message: "" };
 
-  if (!new RegExp(`^${SIGNED_NUMBER}$`).test(trimmed)) {
+  const numericValue = parseChecksheetReading(trimmed);
+  if (numericValue == null) {
     return {
       state: "invalid",
       range,
@@ -206,7 +214,7 @@ export function validateChecksheetReading(
 
   if (!range) return { state: "unrestricted", range: null, message: "" };
 
-  const value = Number(trimmed);
+  const value = numericValue;
   const magnitude = Math.max(
     1,
     Math.abs(value),
