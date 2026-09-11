@@ -11,16 +11,13 @@ from PIL import Image
 
 from angle_utils import has_angle_marks, normalize_primes, parse_dms
 from dimension_digits import normalize_cad_number_string
-from image_preprocess import is_vertical_dimension
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_vision import DetectedSymbols
 from tolerance_utils import (
-    is_tolerance_pair,
     ocr_has_diameter_marker,
     ocr_has_explicit_plus_minus,
 )
 
-_PHI_SCORE_MIN = 0.32
 # Leading O *or* 0 misread for the Ø glyph (e.g. OCR "0174.07" for "Ø174.07").
 # Requires 2+ following digits so a genuine "0.5" is never absorbed.
 _LEADING_O_PHI_RE = re.compile(r"^[O0](\d{2,})")
@@ -35,7 +32,7 @@ class ComposedDimension:
 
 
 def _extract_leading_symbol(t: str) -> tuple[str, str]:
-    m = re.match(r"^([\s]*[ØøφΦ⌀Rr])\s*(.*)$", t)
+    m = re.match(r"^([\s]*[ØøφΦ⌀∅Rr])\s*(.*)$", t)
     if m:
         sym = m.group(1).strip()
         if sym.upper().startswith("R"):
@@ -53,27 +50,7 @@ def _has_phi_evidence(
         return True
     if re.match(r"^[ØøφΦ⌀]", (prefix_ocr or "").strip()):
         return True
-    return symbols.diameter_score >= _PHI_SCORE_MIN
-
-
-def _is_vertical_diameter_tolerance(body: str, vertical: bool) -> bool:
-    """
-    Vertical CAD dims like image 2: Ø215.37±0.05 — vision often misses Ø
-    but ± + two-decimal tolerance is a strong diameter signal.
-    """
-    if not vertical:
-        return False
-    m = _DIA_TOL_RE.match(body)
-    if not m:
-        return False
-    if not is_tolerance_pair(m.group(1), m.group(2)):
-        return False
-    try:
-        nominal = float(m.group(1))
-        tol = float(m.group(2))
-    except ValueError:
-        return False
-    return nominal >= 1.0 and tol <= 1.0
+    return bool(symbols.diameter or symbols.diameter_ocr_explicit)
 
 
 def compose_engineering_dimension(
@@ -87,11 +64,9 @@ def compose_engineering_dimension(
     if not raw and not prefix_ocr.strip():
         return ComposedDimension("", "unknown", applied)
 
-    vertical = image is not None and is_vertical_dimension(image)
-
     combined = raw
     p = prefix_ocr.strip()
-    if p and len(p) <= 3 and re.match(r"^[ØøφΦ⌀Rr]", p):
+    if p and len(p) <= 3 and re.match(r"^[ØøφΦ⌀∅Rr]", p):
         if not raw.startswith(p[0]):
             combined = p + raw
 
@@ -139,10 +114,7 @@ def compose_engineering_dimension(
     m_tol = _DIA_TOL_RE.match(body)
 
     if not t.startswith("Ø") and not t.startswith("R") and m_tol:
-        if _is_vertical_diameter_tolerance(body, vertical):
-            t = "Ø" + body
-            applied.append("vertical_dia_tol")
-        elif phi_ok:
+        if phi_ok:
             t = "Ø" + body
             applied.append("phi_prefix")
     elif phi_ok and re.match(r"^\d", t) and not t.startswith("Ø"):

@@ -86,13 +86,21 @@ STEP_CATALOG: dict[str, dict[str, Any]] = {
             "with prefix_ocr hints. Drives whether compose adds Ø/±."
         ),
         "values": {
-            "phi_detected": "true when diameter_score ≥ 0.32",
-            "phi_score": "0..1 confidence from circle+slash template/Hough (best strip)",
-            "phi_strips": "per-strip scores (vertical_bottom/top, oriented_*_prefix)",
+            "phi_detected": (
+                "true only when diagonal-slash evidence and an independent "
+                "circle detector agree"
+            ),
+            "phi_score": "0..1 fused slash+circle confidence (not a decision alone)",
+            "phi_candidate": "partial visual evidence that may justify prefix OCR",
+            "phi_strips": (
+                "per-strip template/Hough/contour/ring/diagonal scores and support"
+            ),
             "pm_scores": "± template match scores on prefix vs body (threshold 0.34)",
             "degree_detected": "small ring in upper band without slash (° not Ø)",
             "prefix_ocr": "Paddle read of prefix_clahe only (often 'O', '0', or empty)",
-            "prefix_hints": "symbols inferred from prefix_ocr text",
+            "prefix_hints": (
+                "explicit Ø is decisive; O/0/Q/C is recorded as ambiguous only"
+            ),
             "symbols_before_merge": "vision-only result",
             "symbols_merged": "final symbols passed to dimension_compose",
         },
@@ -127,7 +135,7 @@ STEP_CATALOG: dict[str, dict[str, Any]] = {
             "raw_ocr": "paddle_winner.text",
             "prefix_ocr": "symbol_vision.prefix_ocr",
             "symbols": "symbol_vision.symbols_merged",
-            "vertical": "enables vertical_dia_tol rule (Ø + NN.NN±0.0N)",
+            "vertical": "diagnostic only; orientation never implies Ø",
         },
     },
     "compose_output": {
@@ -136,7 +144,7 @@ STEP_CATALOG: dict[str, dict[str, Any]] = {
         "values": {
             "text": "value shown in UI",
             "kind": "diameter | tolerance | linear | angle | radius",
-            "applied": "e.g. cad_digit_fix, vertical_dia_tol, phi_prefix, explicit_pm",
+            "applied": "e.g. cad_digit_fix, leading_o_phi, phi_prefix, explicit_pm",
         },
     },
     "text_bbox": {
