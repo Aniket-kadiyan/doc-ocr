@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import phi_detector
 from dimension_compose import compose_engineering_dimension
-from ocr_pipeline import OcrPipeline
+from ocr_pipeline import OCR_CHANGESET_ID, OcrPipeline
 from phi_detector import (
     _fuse_phi_scores,
     _prepare_phi_gray,
@@ -15,12 +15,16 @@ from phi_detector import (
 )
 from symbol_vision import (
     DetectedSymbols,
+    detect_diameter_symbol,
     detect_prefix_from_ocr_text,
     merge_symbol_scores,
 )
 
 
 class PhiEvidenceRulesTests(unittest.TestCase):
+    def test_runtime_changeset_identifies_this_package(self) -> None:
+        self.assertEqual(OCR_CHANGESET_ID, "m1-p02r1-field-gated-phi")
+
     def test_explicit_diameter_glyphs_are_decisive(self) -> None:
         for text in ("Ø20", "ø20", "φ20", "Φ20", "⌀20", "∅20"):
             with self.subTest(text=text):
@@ -84,8 +88,19 @@ class PhiEvidenceRulesTests(unittest.TestCase):
         self.assertFalse(evidence["detected"])
 
     def test_closed_ring_diagonal_and_shape_confirm_phi(self) -> None:
-        evidence = _fuse_phi_scores(0.40, 0.85, 0.80, 0.95, 0.90)
+        evidence = _fuse_phi_scores(
+            0.40,
+            0.85,
+            0.80,
+            0.95,
+            0.90,
+            component_score=0.94,
+        )
         self.assertTrue(evidence["detected"])
+
+    def test_partial_legacy_agreement_without_glyph_topology_is_rejected(self) -> None:
+        evidence = _fuse_phi_scores(0.40, 0.85, 0.80, 0.95, 0.90)
+        self.assertFalse(evidence["detected"])
 
     def test_phi_gray_has_dark_ink_on_white_paper(self) -> None:
         image = Image.new("RGB", (24, 24), "white")
@@ -251,6 +266,92 @@ class RenderedPhiVisionTests(unittest.TestCase):
                 with self.subTest(text=text, vertical=vertical, size=image.size):
                     detected, _, _ = detect_phi_multi_strip(image, vertical)
                     self.assertFalse(detected)
+
+
+class FieldLikePhiVisionTests(unittest.TestCase):
+    """Small CAD-style glyphs and linework matching the field failure shape."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if phi_detector.cv2 is None:
+            raise unittest.SkipTest("OpenCV is not installed")
+        candidates = (
+            "DejaVuSans.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        )
+        for candidate in candidates:
+            try:
+                cls.font = ImageFont.truetype(candidate, 16)
+                break
+            except OSError:
+                continue
+        else:
+            raise unittest.SkipTest("No suitable test font is installed")
+
+    @classmethod
+    def _render(
+        cls,
+        text: str,
+        *,
+        dimension_line: bool = False,
+        vertical: bool = False,
+    ) -> Image.Image:
+        image = Image.new("RGB", (150, 50), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((20, 12), text, font=cls.font, fill="black")
+        if dimension_line:
+            draw.line((0, 42, 149, 42), fill=(0, 0, 255), width=1)
+        if vertical:
+            return image.rotate(90, expand=True, fillcolor="white")
+        return image
+
+    def _detect(self, image: Image.Image) -> tuple[bool, float]:
+        detected, score, _details = detect_phi_multi_strip(
+            image,
+            image.height > image.width * 1.35,
+        )
+        return detected, score
+
+    def test_four_field_dimension_shapes_keep_phi(self) -> None:
+        for text in ("Ø33", "Ø30±0.2", "Ø23.5-0.05", "Ø30-0.2"):
+            with self.subTest(text=text):
+                detected, score = self._detect(self._render(text))
+                self.assertTrue(detected)
+                self.assertGreaterEqual(score, 0.82)
+
+    def test_dimension_line_does_not_hide_small_phi(self) -> None:
+        detected, _score = self._detect(
+            self._render("Ø33-0.05", dimension_line=True)
+        )
+        self.assertTrue(detected)
+
+    def test_field_shaped_non_diameters_do_not_gain_phi(self) -> None:
+        cases = (
+            ("R2±0.2", False),
+            ("R10±2", False),
+            ("70±0.2", True),
+            ("114.5±0.05", True),
+        )
+        for text, vertical in cases:
+            with self.subTest(text=text, vertical=vertical):
+                detected, _score = self._detect(
+                    self._render(text, vertical=vertical)
+                )
+                self.assertFalse(detected)
+
+    def test_field_shaped_bottom_values_compose_with_phi(self) -> None:
+        cases = (
+            ("Ø23.5-0.05", "23.5-0.05", "Ø23.5-0.05"),
+            ("Ø30-0.2", "30-0.2", "Ø30-0.2"),
+        )
+        for rendered, raw_text, expected in cases:
+            with self.subTest(rendered=rendered):
+                image = self._render(rendered)
+                symbols, _debug = detect_diameter_symbol(image)
+                result = compose_engineering_dimension(raw_text, image, symbols)
+                self.assertEqual(result.text, expected)
+                self.assertEqual(result.kind, "diameter")
 
 
 if __name__ == "__main__":

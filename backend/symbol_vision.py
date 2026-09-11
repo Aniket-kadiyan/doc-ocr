@@ -119,11 +119,8 @@ def detect_diameter_symbol(
     vertical = is_vertical_dimension(image)
     has_phi, phi_score, phi_strips = detect_phi_multi_strip(image, vertical)
     visual_candidate = any(
-        bool(detail.get("support", {}).get("ring"))
-        and (
-            bool(detail.get("support", {}).get("template"))
-            or bool(detail.get("support", {}).get("contour"))
-        )
+        bool(detail.get("detected"))
+        or bool(detail.get("support", {}).get("component"))
         for detail in phi_strips
     )
     symbols = DetectedSymbols(
