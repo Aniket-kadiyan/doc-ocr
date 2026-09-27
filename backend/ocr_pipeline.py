@@ -2314,7 +2314,10 @@ class OcrPipeline:
         from segment_quality import (
             count_dimension_values,
             dedupe_regions,
+            has_dimension_value,
+            is_segment_worthy,
         )
+        from stroke_filter import is_stray_line
         from page_scan import overlaps_existing_value
         from page_value_filters import (
             PageValueCandidate,
@@ -2675,6 +2678,17 @@ class OcrPipeline:
             )
             text = (res.get("text") or "").strip()
             if not text:
+                continue
+
+            # A balloon is for something a person measures. These three gates
+            # drop what merely looks numeric: zone letters and balloon numbers
+            # ("4", "33"), revision dates ("DATE3/17/2011..."), and leader or
+            # extension lines that OCR'd as a phantom digit.
+            if not is_segment_worthy(text):
+                continue
+            if not has_dimension_value(text):
+                continue
+            if is_stray_line(sub, text):
                 continue
 
             # Content-aware split: close-proximity callouts that fused into one
