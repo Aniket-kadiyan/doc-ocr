@@ -78,6 +78,21 @@ import type {
 } from "@/types/scanJob";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
+/**
+ * Scale the page is re-rendered at for scanning, independent of the viewer's
+ * display scale. The display scale is chosen for a screen; OCR wants pixels.
+ * Measured on the benchmark drawings, reading the displayed canvas rather than
+ * a 250dpi render costs a match or two per sheet (47630 16/19 -> 15/19,
+ * BS1801006.020 11/12 -> 10/12) and loses slanted callouts outright: "0.5x45°"
+ * came back as "6". Coordinates map back through displayScale, which exists
+ * for exactly this, so annotations still land in viewer space.
+ *
+ * 250dpi specifically: it is what the accuracy fixtures render at and it
+ * measured best of the scales tried. 216dpi was uneven — better on two
+ * drawings, worse on 56103-0182B (14/24 -> 12/24).
+ */
+const OCR_RENDER_SCALE = 250 / 72;
+
 const MIN_BOX = 8;
 const DRAWING_BACKGROUND_NAME = "drawing-background";
 
@@ -603,6 +618,25 @@ export function DrawingViewer() {
         return { status: "failed" };
       }
 
+      // Scan a higher-resolution render than the one on screen. Falls back to
+      // the displayed canvas for an image file, or if the re-render fails.
+      let scanCanvas = source;
+      let scanScale = 1;
+      if (pdfDoc) {
+        try {
+          const { canvas: hi } = await renderPdfPage(
+            pdfDoc,
+            scanPage,
+            OCR_RENDER_SCALE
+          );
+          scanCanvas = hi;
+          scanScale = OCR_RENDER_SCALE / PDF_RENDER_SCALE;
+        } catch {
+          scanCanvas = source;
+          scanScale = 1;
+        }
+      }
+
       const projectAtStart = projectIdRef.current;
       const scanRunId = uuidv4();
       const manageProcessing = options.manageProcessing ?? true;
@@ -646,11 +680,11 @@ export function DrawingViewer() {
       });
       try {
         const scanResult = await runAutoBalloonScan({
-          sourceCanvas: source,
+          sourceCanvas: scanCanvas,
           bbox,
           page: scanPage,
           scopeKind,
-          displayScale: 1,
+          displayScale: scanScale,
           existingValueBoxes: useAnnotationStore
             .getState()
             .annotations.filter(
@@ -863,7 +897,7 @@ export function DrawingViewer() {
       replaceScanReviewCandidates,
       setIsProcessing,
       setIsSegmenting,
-    ]
+      pdfDoc,]
   );
 
   const stopActiveScan = useCallback(async () => {

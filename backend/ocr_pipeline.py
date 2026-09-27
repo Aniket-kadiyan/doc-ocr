@@ -55,6 +55,8 @@ LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
 # spot a fused read whose text collapsed to one value and hid the second.
 _PAGE_SPLIT_LINE_RATIO = 0.35
+# Long edge a slanted-callout neighbourhood is enlarged to before it is read.
+_ANGLED_MIN_EDGE = 700
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
@@ -2595,9 +2597,20 @@ class OcrPipeline:
         if not angles:
             return []
 
+        # Slanted callouts are thin and the client renders drawings for a
+        # viewer, not for OCR. At that size "0.5×45°" came back as "6" and
+        # "Ø20H10 +0.084" as "084H1000"; the same text read cleanly from a
+        # sheet rendered twice as large. Levelling is already a resample, so
+        # the enlargement is free here — it rides in the same affine.
+        roi_edge = max(image.size)
+        roi_scale = (
+            1.0 if roi_edge >= _ANGLED_MIN_EDGE
+            else min(3.0, _ANGLED_MIN_EDGE / max(roi_edge, 1))
+        )
+
         found: list[dict[str, Any]] = []
         for angle in angles:
-            rimg, inv = self._rotate_expand(image, angle)
+            rimg, inv = self._rotate_expand(image, angle, scale=roi_scale)
             rw, rh = rimg.size
             # Detect again on the *levelled* ink. The quads told us the angle,
             # but a detector box for steeply slanted text is a poor fit — it
@@ -3144,7 +3157,11 @@ class OcrPipeline:
 
     @staticmethod
     def _rotate_expand(
-        image: Image.Image, angle: float, *, with_forward: bool = False
+        image: Image.Image,
+        angle: float,
+        *,
+        scale: float = 1.0,
+        with_forward: bool = False,
     ) -> tuple[Image.Image, Any] | tuple[Image.Image, Any, Any]:
         """
         Rotate ``image`` CCW by ``angle`` degrees onto an expanded white canvas.
@@ -3160,7 +3177,10 @@ class OcrPipeline:
         arr = np.asarray(image.convert("RGB"))
         h, w = arr.shape[:2]
         cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
-        M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        # The scale rides in the same affine, so the inverse returned below
+        # maps an enlarged, levelled detection straight back to source pixels
+        # with no extra bookkeeping at the call sites.
+        M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
         cos, sin = abs(M[0, 0]), abs(M[0, 1])
         nw = int(h * sin + w * cos)
         nh = int(h * cos + w * sin)
