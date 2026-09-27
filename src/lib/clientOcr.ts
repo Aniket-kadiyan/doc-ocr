@@ -4,6 +4,16 @@
  */
 
 import type { BBox, OCRResult } from "@/types/annotation";
+import type {
+  RunScanJobOptions,
+  ScanJobResult,
+} from "@/lib/scanJobClient";
+import {
+  cancelScanJob,
+  isScanJobCancelledError,
+  runScanJob,
+} from "@/lib/scanJobClient";
+import type { ScanProgress } from "@/types/scanJob";
 import {
   checkOcrApiHealth,
   runPaddleOcr,
@@ -15,6 +25,7 @@ import {
 } from "@/lib/paddleOcrClient";
 
 export type { OcrEngine, OcrApiHealth, SegmentRegion };
+export { isScanJobCancelledError };
 
 export type OCRResultWithEngine = OCRResult & { engine?: OcrEngine };
 
@@ -96,6 +107,27 @@ export async function runPageTitleFields(pageCanvas: HTMLCanvasElement) {
     );
   }
   return runTitleFields(pageCanvas);
+}
+
+export async function runAutoBalloonScan(
+  options: RunScanJobOptions
+): Promise<ScanJobResult> {
+  apiHealth = await checkOcrApiHealth();
+
+  if (!apiHealth.available) {
+    throw new Error(
+      "PaddleOCR API is not running. Start it with: uvicorn main:app --reload --port 8000"
+    );
+  }
+
+  activeEngine = "paddleocr";
+  return runScanJob(options);
+}
+
+export async function stopAutoBalloonScan(
+  jobId: string
+): Promise<ScanProgress> {
+  return cancelScanJob(jobId);
 }
 
 export async function terminateOCR(): Promise<void> {

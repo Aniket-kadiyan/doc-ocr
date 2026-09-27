@@ -4,30 +4,45 @@ PaddleOCR pipeline: best digit read + balanced symbol compose.
 
 from __future__ import annotations
 from time import perf_counter
-
-from typing import Any
+from typing import Any, Callable, Mapping, Sequence
 import re
+
 import numpy as np
 from PIL import Image
 
 from debug_dump import StepDumper, dump_force, dump_status, should_dump
 from dimension_compose import compose_engineering_dimension
-from feature_classifier import classify_feature
 from dimension_digits import normalize_cad_number_string
 from image_preprocess import (
     bbox_from_oriented_to_original,
     is_vertical_dimension,
     pad_image,
+    prepare_primary_ocr_variant,
     prepare_ocr_variants,
     primary_oriented,
+    sharpen_rgb,
     upscale_min_edge,
     clahe_rgb,
 )
-from paddle_parse import extract_paddle_records
+from ocr_runtime import (
+    PaddleRuntimeInfo,
+    configured_device_label,
+    configured_ocr_device,
+    effective_device,
+    is_gpu_device,
+    probe_paddle_runtime,
+    validate_configured_device,
+)
+from paddle_parse import (
+    extract_paddle_detection_boxes,
+    extract_paddle_detection_regions,
+    extract_paddle_lines,
+    extract_text_orientation_result,
+    extract_text_recognition_result,
+)
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_regions import enlarge_zone, split_symbol_zones
 from symbol_vision import (
-    DetectedSymbols,
     detect_prefix_from_ocr_text,
     detect_symbols,
     merge_symbol_scores,
@@ -43,31 +58,20 @@ EARLY_ACCEPT_CONFIDENCE = 0.95
 # dedicated prefix OCR as a second opinion.
 PREFIX_RECHECK_PHI_SCORE = 0.20
 
-
-def _covers_digits(whole: str, part: str) -> bool:
-    """
-    True when ``part``'s digits all appear in ``whole``, in order.
-
-    A subsequence rather than a substring: the upright pass may read a
-    deviation pair in a different order from the levelled pass (``Ø33-0.05``
-    against ``Ø33-0.1-0.05``), and that is still the same callout.
-    """
-    if not part:
-        return False
-    it = iter(whole)
-    return all(c in it for c in part)
+# Oversized-cluster refinement is a best-effort accuracy improvement. It must
+# never expand into unbounded OCR work during a whole-page scan.
+GROUPING_MAX_REFINEMENTS = 8
 
 
 def sort_reading_order(
-    items: list[dict[str, Any]],
+    items: list[tuple[str, float, float, float, float, float]],
     vertical: bool,
-) -> list[dict[str, Any]]:
-    """Order recognized lines top-to-bottom (vertical) or by row then column."""
+) -> list[tuple[str, float, float, float, float, float]]:
     if vertical:
-        return sorted(items, key=lambda r: r["y"])
+        return sorted(items, key=lambda x: x[2])
     return sorted(
         items,
-        key=lambda r: (round(r["y"] / LINE_THRESHOLD), r["x"]),
+        key=lambda x: (round(x[2] / LINE_THRESHOLD), x[1]),
     )
 
 
@@ -75,17 +79,20 @@ def assemble_paddle_lines(
     result: Any,
     force_vertical: bool = False,
 ) -> tuple[str, float, list[dict[str, Any]]]:
-    parsed = extract_paddle_records(result)
+    parsed = extract_paddle_lines(result)
     if not parsed:
         return "", 0.0, []
 
-    confidences = [p["confidence"] for p in parsed]
-    avg_h = sum(p["height"] for p in parsed) / len(parsed)
-    avg_w = sum(p["width"] for p in parsed) / len(parsed)
+    confidences = [p[5] for p in parsed]
+    avg_h = sum(p[4] for p in parsed) / len(parsed)
+    avg_w = sum(p[3] for p in parsed) / len(parsed)
     vertical = force_vertical or (avg_h > avg_w * 2.5)
-    # Records already carry the word keys (plus the detector's ``quad``), so
-    # they are the word dicts.
-    words = sort_reading_order(parsed, vertical)
+    ordered = sort_reading_order(parsed, vertical)
+
+    words = [
+        {"text": t, "x": x, "y": y, "width": w, "height": h, "confidence": c}
+        for t, x, y, w, h, c in ordered
+    ]
 
     raw = (
         "".join(w["text"].strip() for w in words)
@@ -121,29 +128,56 @@ _TITLE_BLOCK_WORDS_RE = re.compile(
 
 class OcrPipeline:
     def __init__(self) -> None:
+        self._configured_device = configured_ocr_device()
+        self._paddle_runtime = PaddleRuntimeInfo()
         self._paddle = None
         self._paddle_available = False
         self._paddle_api = 0  # 3 = PaddleOCR 3.x (.predict), 2 = 2.x (.ocr)
+        self._text_detector = None
+        self._text_detector_available = False
+        self._text_recognizer = None
+        self._text_recognizer_available = False
+        self._text_orientation = None
+        self._text_orientation_available = False
+        self._page_batch_recognition_available = False
         self._paddle_version = "unknown"
         self._init_errors: list[str] = []
 
     def load(self) -> None:
         self._load_paddle()
 
+    def _device_kwargs(self) -> dict[str, str]:
+        """Pass a device only when the operator explicitly selected one."""
+
+        if self._configured_device is None:
+            return {}
+        return {"device": self._configured_device}
+
     def _load_paddle(self) -> None:
         try:
+            import paddle  # type: ignore
             import paddleocr  # type: ignore
             from paddleocr import PaddleOCR  # type: ignore
         except Exception as exc:  # noqa: BLE001
             self._init_errors.append(f"PaddleOCR import: {exc}")
             return
 
+        ver = str(getattr(paddleocr, "__version__", "0"))
+        self._paddle_version = ver
+
+        self._paddle_runtime = probe_paddle_runtime(paddle)
+        device_error = validate_configured_device(
+            self._configured_device,
+            self._paddle_runtime,
+        )
+        if device_error:
+            self._init_errors.append(device_error)
+            return
+
         # Detect the API by VERSION, not by probing the constructor: PaddleOCR
         # 2.7.x silently swallows unknown 3.x kwargs, so a try/except on the
         # constructor would mis-detect 2.x as 3.x and then call .predict()
         # (which doesn't exist on 2.x) — yielding empty results.
-        ver = str(getattr(paddleocr, "__version__", "0"))
-        self._paddle_version = ver
         major_part = ver.split(".", 1)[0]
         major = int(major_part) if major_part.isdigit() else 0
         is_3x = major >= 3 and hasattr(PaddleOCR, "predict")
@@ -153,6 +187,7 @@ class OcrPipeline:
                 
                 self._paddle = PaddleOCR(
                     lang="en",
+                    **self._device_kwargs(),
 
                     # The UI sends tightly cropped CAD dimensions, not full documents.
                     # Running these document-level models adds latency without helping OCR.
@@ -170,9 +205,16 @@ class OcrPipeline:
                 )
                 self._paddle_api = 3
                 self._paddle_available = True
+                self._load_text_detector(paddleocr)
+                self._load_page_recognition_models(paddleocr)
+                self._paddle_runtime = probe_paddle_runtime(paddle)
                 return
             except Exception as exc:  # noqa: BLE001
                 self._init_errors.append(f"PaddleOCR 3.x: {exc}")
+                # Version detection already established that this is 3.x.
+                # Never hide a bad GPU/device configuration by retrying the
+                # same package with legacy 2.x constructor arguments.
+                return
 
         # PaddleOCR 2.x.
         try:
@@ -181,6 +223,12 @@ class OcrPipeline:
                 "lang": "en",
                 "show_log": False,
             }
+            if self._configured_device is not None:
+                kwargs["use_gpu"] = is_gpu_device(self._configured_device)
+                if is_gpu_device(self._configured_device):
+                    device_parts = self._configured_device.split(":", 1)
+                    if len(device_parts) == 2 and device_parts[1].isdigit():
+                        kwargs["gpu_id"] = int(device_parts[1])
             try:
                 self._paddle = PaddleOCR(
                     **kwargs,
@@ -195,12 +243,99 @@ class OcrPipeline:
         except Exception as exc:  # noqa: BLE001
             self._init_errors.append(f"PaddleOCR 2.x: {exc}")
 
+    def _load_text_detector(self, paddleocr_module: Any) -> None:
+        """Load PaddleOCR 3.x's standalone detector for auto-balloon scans."""
+
+        detector_class = getattr(paddleocr_module, "TextDetection", None)
+        if detector_class is None:
+            self._init_errors.append(
+                "PaddleOCR TextDetection module is unavailable; "
+                "auto-ballooning will use the reduced compatibility path"
+            )
+            return
+
+        try:
+            self._text_detector = detector_class(
+                model_name="PP-OCRv5_mobile_det",
+                thresh=0.2,
+                box_thresh=0.4,
+                **self._device_kwargs(),
+            )
+            self._text_detector_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(f"PaddleOCR TextDetection: {exc}")
+
+    def _load_page_recognition_models(self, paddleocr_module: Any) -> None:
+        """Load reusable recognition-only modules for whole-page batches."""
+
+        recognizer_class = getattr(paddleocr_module, "TextRecognition", None)
+        orientation_class = getattr(
+            paddleocr_module,
+            "TextLineOrientationClassification",
+            None,
+        )
+        if recognizer_class is None or orientation_class is None:
+            self._init_errors.append(
+                "PaddleOCR standalone TextRecognition/TextLineOrientationClassification "
+                "modules are unavailable"
+            )
+            return
+
+        try:
+            self._text_recognizer = recognizer_class(
+                model_name="PP-OCRv6_medium_rec",
+                **self._device_kwargs(),
+            )
+            self._text_recognizer_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(f"PaddleOCR TextRecognition: {exc}")
+
+        try:
+            self._text_orientation = orientation_class(
+                model_name="PP-LCNet_x1_0_textline_ori",
+                **self._device_kwargs(),
+            )
+            self._text_orientation_available = True
+        except Exception as exc:  # noqa: BLE001
+            self._init_errors.append(
+                f"PaddleOCR TextLineOrientationClassification: {exc}"
+            )
+
+        self._page_batch_recognition_available = bool(
+            self._text_recognizer_available
+            and self._text_orientation_available
+        )
+
     @property
     def status(self) -> dict[str, Any]:
         return {
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
+            "ocr_device_requested": configured_device_label(
+                self._configured_device
+            ),
+            "ocr_device_effective": effective_device(
+                self._configured_device,
+                self._paddle_runtime,
+            ),
+            "paddle_global_device": self._paddle_runtime.global_device,
+            "paddle_cuda_compiled": self._paddle_runtime.cuda_compiled,
+            "paddle_available_devices": list(
+                self._paddle_runtime.available_devices
+            ),
+            "paddle_device_probe_error": self._paddle_runtime.probe_error,
+            "document_orientation_classify": False,
+            "document_unwarping": False,
+            "text_detector": self._text_detector_available,
+            "text_recognizer": self._text_recognizer_available,
+            "text_line_orientation": self._text_orientation_available,
+            "page_batch_recognition": self._page_batch_recognition_available,
+            "auto_balloon_detection_mode": (
+                "detector_only"
+                if self._text_detector_available
+                else "reduced_ocr_compatibility"
+            ),
             "trocr": False,
             "symbol_vision": True,
             "errors": self._init_errors,
@@ -209,6 +344,205 @@ class OcrPipeline:
     def _predict_3x(self, arr: np.ndarray) -> Any:
         """Run PaddleOCR 3.x; paddle_parse normalizes its Result objects."""
         return self._paddle.predict(arr)
+
+    def _predict_text_detector(self, arr: np.ndarray) -> Any:
+        """Run the standalone PaddleOCR detector without recognition."""
+
+        # The image has already been deliberately bounded/upscaled by the
+        # adaptive caller. Override the model's generic document limit so it
+        # does not silently downscale a 2400px engineering drawing again.
+        return self._text_detector.predict(
+            arr,
+            batch_size=1,
+            limit_side_len=max(arr.shape[:2]),
+            limit_type="max",
+        )
+
+    def _run_text_detector(
+        self,
+        image: Image.Image,
+    ) -> list[tuple[float, float, float, float, float]]:
+        """Return detector-only boxes in the supplied image coordinates."""
+
+        if not self._text_detector_available or self._text_detector is None:
+            raise RuntimeError("The standalone PaddleOCR text detector is unavailable")
+        try:
+            result = self._predict_text_detector(np.asarray(image.convert("RGB")))
+        except Exception as exc:
+            raise RuntimeError(
+                f"PaddleOCR {self._paddle_version} detector-only inference failed: {exc}"
+            ) from exc
+        return extract_paddle_detection_boxes(result)
+
+    def _run_text_detector_regions(
+        self,
+        image: Image.Image,
+    ) -> list[dict[str, Any]]:
+        """Return standalone detector boxes with their source polygons."""
+
+        if not self._text_detector_available or self._text_detector is None:
+            raise RuntimeError("The standalone PaddleOCR text detector is unavailable")
+        try:
+            result = self._predict_text_detector(np.asarray(image.convert("RGB")))
+        except Exception as exc:
+            raise RuntimeError(
+                f"PaddleOCR {self._paddle_version} detector-only inference failed: {exc}"
+            ) from exc
+        return extract_paddle_detection_regions(result)
+
+    @staticmethod
+    def _module_inputs(images: list[Image.Image]) -> list[np.ndarray]:
+        return [np.asarray(image.convert("RGB")) for image in images]
+
+    def _predict_text_orientations(
+        self,
+        images: list[Image.Image],
+        *,
+        batch_size: int,
+    ) -> list[tuple[int, float]]:
+        if (
+            not getattr(self, "_text_orientation_available", False)
+            or self._text_orientation is None
+        ):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires PaddleOCR's standalone "
+                "text-line orientation model"
+            )
+        try:
+            output = list(
+                self._text_orientation.predict(
+                    input=self._module_inputs(images),
+                    batch_size=batch_size,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "PaddleOCR standalone text-line orientation inference failed: "
+                f"{exc}"
+            ) from exc
+        if len(output) != len(images):
+            raise RuntimeError(
+                "PaddleOCR text-line orientation returned "
+                f"{len(output)} results for {len(images)} crops"
+            )
+        return [extract_text_orientation_result(item) for item in output]
+
+    def _predict_text_recognition(
+        self,
+        images: list[Image.Image],
+        *,
+        batch_size: int,
+    ) -> list[tuple[str, float]]:
+        if (
+            not getattr(self, "_text_recognizer_available", False)
+            or self._text_recognizer is None
+        ):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires PaddleOCR's standalone "
+                "text recognition model"
+            )
+        try:
+            output = list(
+                self._text_recognizer.predict(
+                    input=self._module_inputs(images),
+                    batch_size=batch_size,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "PaddleOCR standalone text recognition inference failed: "
+                f"{exc}"
+            ) from exc
+        if len(output) != len(images):
+            raise RuntimeError(
+                "PaddleOCR text recognition returned "
+                f"{len(output)} results for {len(images)} crops"
+            )
+        return [extract_text_recognition_result(item) for item in output]
+
+    def _recognize_page_batch(
+        self,
+        crops: list[Image.Image],
+        *,
+        batch_size: int,
+        profile: str = "batch_recognition",
+    ) -> list[dict[str, Any]]:
+        """Orient and recognize a crop batch without running text detection."""
+
+        if not getattr(self, "_page_batch_recognition_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires standalone PaddleOCR "
+                "orientation and recognition models; the slow full-pipeline "
+                "fallback is intentionally disabled"
+            )
+        if not crops:
+            return []
+
+        from dimension_digits import correct_numeric_confusables
+
+        if profile == "recovery_expanded_sharp":
+            prepared = [
+                sharpen_rgb(
+                    primary_oriented(upscale_min_edge(pad_image(crop)))
+                )
+                for crop in crops
+            ]
+        else:
+            prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
+        orientations = self._predict_text_orientations(
+            prepared,
+            batch_size=batch_size,
+        )
+        oriented_images = [
+            image.rotate(180, expand=False, fillcolor=(255, 255, 255))
+            if degrees == 180
+            else image
+            for image, (degrees, _score) in zip(prepared, orientations)
+        ]
+        recognized = self._predict_text_recognition(
+            oriented_images,
+            batch_size=batch_size,
+        )
+
+        results: list[dict[str, Any]] = []
+        for crop, (raw_text, confidence), (degrees, orientation_score) in zip(
+            crops,
+            recognized,
+            orientations,
+        ):
+            fixed, corrected = correct_numeric_confusables(raw_text)
+            text_hints = detect_prefix_from_ocr_text(fixed)
+            composed = compose_engineering_dimension(
+                fixed,
+                crop,
+                text_hints,
+            )
+            text = fix_engineering_symbols_light(composed.text).strip()
+            results.append(
+                {
+                    "text": text,
+                    "raw_ocr": raw_text,
+                    "confidence": float(confidence),
+                    "confusable_corrected": bool(corrected),
+                    "agreement": 1.0 if text else 0.0,
+                    # Confidence and orientation quality help rank alternative
+                    # reads; they are not approval gates for a usable value.
+                    "needs_review": False,
+                    "type": composed.kind,
+                    "engine": "paddleocr+compose"
+                    if composed.applied
+                    else "paddleocr",
+                    "orientation": (
+                        "vertical" if is_vertical_dimension(crop) else "horizontal"
+                    ),
+                    "rotation": 0,
+                    "symbols_detected": symbols_to_dict(text_hints),
+                    "orientation_correction": degrees,
+                    "orientation_confidence": float(orientation_score),
+                    "ocr_profile": profile,
+                }
+            )
+        return results
 
     def _run_paddle(
         self,
@@ -289,9 +623,14 @@ class OcrPipeline:
         image: Image.Image,
         dumper: StepDumper | None = None,
         timings: list[dict[str, Any]] | None = None,
+        *,
+        max_predictions: int | None = None,
     ) -> tuple[str, float, list, float, bool]:
         """
-        Run every preprocessing variant and vote across the candidates.
+        Run preprocessing variants and vote across the candidates.
+
+        ``max_predictions=1`` selects the fast primary variant and does not
+        construct retry variants. The default preserves the accuracy profile.
 
         Returns (text, confidence, words, agreement, corrected) where
         `agreement` is the fraction of candidates that agree with the winning
@@ -302,6 +641,9 @@ class OcrPipeline:
         from dimension_digits import correct_numeric_confusables
         from ocr_select import digit_quality_score
 
+        if max_predictions is not None and max_predictions < 1:
+            raise ValueError("max_predictions must be at least one")
+
         # 3.x .predict() always detects, so det=False is redundant there.
         det_modes = (True,) if self._paddle_api == 3 else (True, False)
 
@@ -311,14 +653,26 @@ class OcrPipeline:
                      "words": [], "corrected": False}
         )
         total = 0
+        predictions_run = 0
 
         # A candidate above the strict confidence threshold wins immediately.
         # Variants still execute sequentially; no parallel model calls are introduced.
         early_winner: dict[str, Any] | None = None
         candidates_log: list[dict[str, Any]] = []
 
-        for _name, variant in prepare_ocr_variants(image):
+        variants = (
+            [prepare_primary_ocr_variant(image)]
+            if max_predictions == 1
+            else prepare_ocr_variants(image)
+        )
+        for _name, variant in variants:
             for det in det_modes:
+                if (
+                    max_predictions is not None
+                    and predictions_run >= max_predictions
+                ):
+                    break
+                predictions_run += 1
                 text, conf, words = self._run_paddle(
                     variant,
                     det=det,
@@ -351,14 +705,9 @@ class OcrPipeline:
                 g["count"] += 1
                 g["corrected"] = g["corrected"] or corrected
 
-                # Deskew variants read text in a rotated frame, so their word
-                # boxes must not become the group's boxes (they'd misplace the
-                # balloon). They still vote on the text value; bbox falls back.
-                is_deskew = _name.startswith("dsk")
                 if conf > g["conf"]:
                     g["conf"] = conf
-                    if not is_deskew:
-                        g["words"] = words
+                    g["words"] = words
 
                 candidates_log.append(
                     {
@@ -386,7 +735,13 @@ class OcrPipeline:
                     break
 
             # Stop before constructing or running the next preprocessing variant.
-            if early_winner is not None:
+            if (
+                early_winner is not None
+                or (
+                    max_predictions is not None
+                    and predictions_run >= max_predictions
+                )
+            ):
                 break
 
         if dumper and dumper.active:
@@ -406,6 +761,8 @@ class OcrPipeline:
                         else None
                     ),
                     "total_passes": total,
+                    "predictions_run": predictions_run,
+                    "prediction_limit": max_predictions,
                     "candidates": candidates_log,
                     "groups": {
                         k: {
@@ -642,18 +999,238 @@ class OcrPipeline:
             return False
         return True
 
-    def detect_regions(self, image: Image.Image) -> list[dict[str, Any]]:
-        """
-        Propose every text-region box inside ``image`` (received-image pixels).
+    def detect_regions(
+        self,
+        image: Image.Image,
+        *,
+        progress_callback: Callable[..., None] | None = None,
+        thorough: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Propose text boxes in the received image's original coordinates.
 
-        Primary path is PaddleOCR's learned text detector run on the
-        blue-ink-emphasized image (``cad_ink_to_gray`` + upscale): on CAD sheets
-        this reliably returns one tight box per dimension line — including faint
-        angles and values wedged against geometry that the morphology proposer
-        drops. Falls back to the morphology + OCR-supplement proposer only when
-        the detector finds nothing (e.g. a blank or non-text crop). Returns
-        dicts: {x, y, w, h, text, conf}.
+        A top-level auto-balloon scan uses the bounded Milestone 2B adaptive
+        cascade. Oversized-cluster refinement can request the earlier quick
+        path so one refinement does not recursively launch another page scan.
         """
+
+        if not thorough:
+            return self._detect_regions_quick(image)
+
+        from detection_passes import (
+            DETECTION_FALLBACK_MAX_REFINEMENT_REGIONS,
+            DETECTION_MAX_REFINEMENT_REGIONS,
+            DETECTION_REFINEMENT_TARGET_EDGE,
+            build_detection_pass_plan,
+            build_primary_detection_image,
+            build_refinement_regions,
+            map_deskewed_box_to_original,
+            map_quarter_turn_box_to_source,
+            prepare_detection_source,
+            refinement_rotation,
+            rotate_for_detection,
+        )
+        from region_detect import propose_text_regions
+
+        prepared = prepare_detection_source(image)
+        pass_plan = build_detection_pass_plan(prepared.image)
+        primary_total = len(pass_plan)
+        morphology_candidates: list[dict[str, Any]] = []
+        primary_candidates: list[dict[str, Any]] = []
+
+        def emit(
+            *,
+            phase: str,
+            completed: int,
+            total: int,
+            state: str,
+            label: str,
+            pass_current: int,
+            proposals: int,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    phase=phase,
+                    completed=completed,
+                    total=total,
+                    state=state,
+                    label=label,
+                    proposals=proposals,
+                    deskew_angle=prepared.correction_angle,
+                    pass_current=pass_current,
+                    pass_total=total,
+                    tile_current=1,
+                    tile_total=1,
+                )
+
+        # Morphology runs once at source resolution.  It is inexpensive enough
+        # to preserve faint/small proposals that the bounded page detector may
+        # miss, and it defines where local detector retries are useful.
+        emit(
+            phase="proposing",
+            completed=0,
+            total=1,
+            state="running",
+            label="source-resolution morphology proposals",
+            pass_current=1,
+            proposals=0,
+        )
+        for box in propose_text_regions(prepared.image):
+            morphology_candidates.append(
+                {
+                    **box,
+                    "text": "",
+                    "conf": 0.0,
+                    "_detection_pass": "morphology",
+                }
+            )
+        emit(
+            phase="proposing",
+            completed=1,
+            total=1,
+            state="completed",
+            label="source-resolution morphology proposals",
+            pass_current=1,
+            proposals=len(morphology_candidates),
+        )
+
+        primary_image = build_primary_detection_image(prepared.image)
+        detector_mode = (
+            "detector only"
+            if getattr(self, "_text_detector_available", False)
+            else "reduced OCR compatibility"
+        )
+        for plan_index, spec in enumerate(pass_plan, start=1):
+            pass_current = plan_index
+            label = f"{spec.label}, {detector_mode}"
+            emit(
+                phase="detecting",
+                completed=plan_index - 1,
+                total=primary_total,
+                state="running",
+                label=label,
+                pass_current=pass_current,
+                proposals=len(morphology_candidates) + len(primary_candidates),
+            )
+            rotated = rotate_for_detection(primary_image, spec.rotation_cw)
+            for box in self._detector_only_boxes(
+                rotated,
+                target_long_edge=spec.target_long_edge,
+            ):
+                mapped = map_quarter_turn_box_to_source(
+                    box,
+                    spec.rotation_cw,
+                    prepared.image.size,
+                )
+                if mapped is None:
+                    continue
+                mapped["_detection_pass"] = spec.label
+                primary_candidates.append(mapped)
+            emit(
+                phase="detecting",
+                completed=plan_index,
+                total=primary_total,
+                state="completed",
+                label=label,
+                pass_current=pass_current,
+                proposals=len(morphology_candidates) + len(primary_candidates),
+            )
+
+        max_refinements = (
+            DETECTION_MAX_REFINEMENT_REGIONS
+            if getattr(self, "_text_detector_available", False)
+            else DETECTION_FALLBACK_MAX_REFINEMENT_REGIONS
+        )
+        refinement_regions = build_refinement_regions(
+            morphology_candidates,
+            primary_candidates,
+            source_size=prepared.image.size,
+            max_regions=max_refinements,
+        )
+        refinement_candidates: list[dict[str, Any]] = []
+        source_width, source_height = prepared.image.size
+        for region_index, region in enumerate(refinement_regions, start=1):
+            rotation = refinement_rotation(region)
+            label = (
+                f"local coverage gap {region_index}, {rotation} deg, "
+                f"{DETECTION_REFINEMENT_TARGET_EDGE}px"
+            )
+            emit(
+                phase="refining",
+                completed=region_index - 1,
+                total=len(refinement_regions),
+                state="running",
+                label=label,
+                pass_current=region_index,
+                proposals=(
+                    len(morphology_candidates)
+                    + len(primary_candidates)
+                    + len(refinement_candidates)
+                ),
+            )
+
+            x0 = max(0, int(region["x"]))
+            y0 = max(0, int(region["y"]))
+            x1 = min(
+                source_width,
+                max(x0 + 1, int(region["x"] + region["w"] + 0.999)),
+            )
+            y1 = min(
+                source_height,
+                max(y0 + 1, int(region["y"] + region["h"] + 0.999)),
+            )
+            crop = build_primary_detection_image(
+                prepared.image.crop((x0, y0, x1, y1))
+            )
+            rotated = rotate_for_detection(crop, rotation)
+            for box in self._detector_only_boxes(
+                rotated,
+                target_long_edge=DETECTION_REFINEMENT_TARGET_EDGE,
+            ):
+                local = map_quarter_turn_box_to_source(
+                    box,
+                    rotation,
+                    crop.size,
+                )
+                if local is None:
+                    continue
+                local["x"] = float(local["x"]) + x0
+                local["y"] = float(local["y"]) + y0
+                local["_detection_pass"] = label
+                refinement_candidates.append(local)
+
+            emit(
+                phase="refining",
+                completed=region_index,
+                total=len(refinement_regions),
+                state="completed",
+                label=label,
+                pass_current=region_index,
+                proposals=(
+                    len(morphology_candidates)
+                    + len(primary_candidates)
+                    + len(refinement_candidates)
+                ),
+            )
+
+        # All three proposal sources currently use deskewed coordinates. Restore
+        # them once, after the adaptive plan is complete, then apply only coarse
+        # same-position suppression. Logical-object deduplication is Milestone 3.
+        restored: list[dict[str, Any]] = []
+        for candidate in (
+            morphology_candidates + primary_candidates + refinement_candidates
+        ):
+            mapped = map_deskewed_box_to_original(
+                candidate,
+                prepared.image.size,
+                prepared.correction_angle,
+            )
+            if mapped is not None:
+                restored.append(mapped)
+        return self._dedupe_det_boxes(restored, overlap_thresh=0.62)
+
+    def _detect_regions_quick(self, image: Image.Image) -> list[dict[str, Any]]:
+        """Earlier two-orientation proposer used only for local refinement."""
+
         from region_detect import opencv_available, propose_text_regions
 
         paddle_boxes = self._detect_regions_paddle_ink(image)
@@ -673,24 +1250,118 @@ class OcrPipeline:
         # Add substantial Paddle det boxes only when morphology missed a value.
         return self._merge_region_proposals(boxes, ocr_boxes)
 
-    def _paddle_det_boxes(self, pil_img: Image.Image) -> list[dict[str, Any]]:
-        """PaddleOCR detection on one image; boxes in that image's own pixels."""
+    def _detector_only_boxes(
+        self,
+        pil_img: Image.Image,
+        *,
+        target_long_edge: int,
+    ) -> list[dict[str, Any]]:
+        """Run bounded localization and restore boxes to ``pil_img`` pixels.
+
+        PaddleOCR 3.x uses its standalone ``TextDetection`` model here, so no
+        text recognition is performed.  Older compatible installations use
+        the same bounded image with the general OCR pipeline, but the adaptive
+        caller reduces their local retry cap separately.
+        """
+
         pad = 24
         padded = pad_image(pil_img, px=pad)
         pw, ph = padded.size
         edge = max(pw, ph)
-        # Target ~1100 px on the long edge — enough for det on thin strokes.
-        factor = min(12.0, max(1.0, 1100.0 / max(edge, 1)))
+        factor = min(6.0, target_long_edge / max(edge, 1))
+        if abs(factor - 1.0) > 0.01:
+            detector_input = padded.resize(
+                (
+                    max(1, int(round(pw * factor))),
+                    max(1, int(round(ph * factor))),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        else:
+            factor = 1.0
+            detector_input = padded
+
+        detections: list[dict[str, Any]] = []
+        if getattr(self, "_text_detector_available", False):
+            detections = [
+                {**region, "text": ""}
+                for region in self._run_text_detector_regions(detector_input)
+            ]
+        else:
+            _, _, words = self._run_paddle(detector_input, det=True)
+            detections = [
+                {
+                    "x": float(word["x"]),
+                    "y": float(word["y"]),
+                    "width": float(word["width"]),
+                    "height": float(word["height"]),
+                    "confidence": float(word.get("confidence", 0.0)),
+                    "text": str(word.get("text", "")),
+                    "polygon": [
+                        [float(word["x"]), float(word["y"])],
+                        [
+                            float(word["x"]) + float(word["width"]),
+                            float(word["y"]),
+                        ],
+                        [
+                            float(word["x"]) + float(word["width"]),
+                            float(word["y"]) + float(word["height"]),
+                        ],
+                        [
+                            float(word["x"]),
+                            float(word["y"]) + float(word["height"]),
+                        ],
+                    ],
+                }
+                for word in words
+            ]
+
+        return [
+            {
+                "x": float(region["x"]) / factor - pad,
+                "y": float(region["y"]) / factor - pad,
+                "w": float(region["width"]) / factor,
+                "h": float(region["height"]) / factor,
+                "text": str(region.get("text", "")),
+                "conf": float(region.get("confidence", 0.0)),
+                "polygon": [
+                    [
+                        float(point[0]) / factor - pad,
+                        float(point[1]) / factor - pad,
+                    ]
+                    for point in region.get("polygon", [])
+                    if isinstance(point, (list, tuple)) and len(point) >= 2
+                ],
+            }
+            for region in detections
+        ]
+
+    def _paddle_det_boxes(
+        self,
+        pil_img: Image.Image,
+        *,
+        target_long_edge: int = 1100,
+        preprocess: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Paddle detection with boxes restored to the supplied image pixels."""
+
+        pad = 24
+        padded = pad_image(pil_img, px=pad)
+        pw, ph = padded.size
+        edge = max(pw, ph)
+        factor = min(12.0, max(1.0, target_long_edge / max(edge, 1)))
         det_img = (
             padded.resize((int(pw * factor), int(ph * factor)),
                           Image.Resampling.LANCZOS)
             if factor > 1.0
             else padded
         )
-        _, _, words = self._run_paddle(clahe_rgb(det_img), det=True)
+        # Legacy callers pass an ink image and expect this final CLAHE step.
+        # Accuracy-first callers supply an already prepared pass variant.
+        paddle_input = clahe_rgb(det_img) if preprocess else det_img
+        _, _, words = self._run_paddle(paddle_input, det=True)
         out: list[dict[str, Any]] = []
         for w in words:
-            quad = w.get("quad")
             out.append(
                 {
                     "x": w["x"] / factor - pad,
@@ -699,13 +1370,6 @@ class OcrPipeline:
                     "h": w["height"] / factor,
                     "text": w.get("text", ""),
                     "conf": float(w.get("confidence", 0.0)),
-                    # The detector's own corners, back in this image's pixels.
-                    # They carry the text's angle; the box above does not.
-                    "quad": (
-                        [(px / factor - pad, py / factor - pad) for px, py in quad]
-                        if quad
-                        else None
-                    ),
                 }
             )
         return out
@@ -734,7 +1398,6 @@ class OcrPipeline:
         # back to the upright frame as: x = yr, y = ih - (xr + wr), w = hr, h = wr.
         rotated = ink.transpose(Image.ROTATE_270)
         for b in self._paddle_det_boxes(rotated):
-            quad = b.get("quad")
             cand.append(
                 {
                     "x": b["y"],
@@ -743,10 +1406,6 @@ class OcrPipeline:
                     "h": b["w"],
                     "text": b["text"],
                     "conf": b["conf"],
-                    # Same mapping, point by point: (xr, yr) -> (yr, ih - xr).
-                    "quad": (
-                        [(py, ih - px) for px, py in quad] if quad else None
-                    ),
                 }
             )
 
@@ -786,8 +1445,6 @@ class OcrPipeline:
                     "h": round(y1 - y0, 1),
                     "text": b["text"],
                     "conf": b["conf"],
-                    # Unclamped on purpose: clipping corners would skew the angle.
-                    "quad": b.get("quad"),
                     "_fill": fill,
                 }
             )
@@ -923,61 +1580,143 @@ class OcrPipeline:
         clusters: list[list[dict[str, Any]]],
         *,
         cluster_margin: float,
+        max_refinements: int = GROUPING_MAX_REFINEMENTS,
+        progress_callback: Callable[..., None] | None = None,
     ) -> list[list[dict[str, Any]]]:
         """
-        Re-detect inside oversized clusters and replace them with finer groups.
+        Refine a bounded number of oversized clusters with detector-only calls.
+
+        Clusters beyond the cap, and all clusters when the standalone detector
+        is unavailable, remain in the result unchanged. Grouping therefore
+        cannot silently launch the complete OCR pipeline or discard candidates.
         """
-        from region_cluster import cluster_boxes, order_clusters, split_mixed_clusters, union_bbox
-        from segment_quality import is_segment_worthy
+        from detection_passes import (
+            DETECTION_REFINEMENT_TARGET_EDGE,
+            map_quarter_turn_box_to_source,
+            refinement_rotation,
+            rotate_for_detection,
+        )
+        from region_cluster import (
+            cluster_boxes,
+            order_clusters,
+            split_mixed_clusters,
+            union_bbox,
+        )
 
         iw, ih = image.size
         median_h = 0.0
         if clusters:
             heights = [union_bbox(c)["height"] for c in clusters]
             median_h = sorted(heights)[len(heights) // 2]
-        # Text scale = median short side of the member detection boxes (≈ one
-        # line height). The image-fraction tests below scale with the CROP, so
-        # on a small selection a single ordinary callout (136 px wide in a
-        # 340 px crop) tripped them and was shredded into unworthy fragments.
-        # Floor every test by a text-relative size so only clusters that are
-        # genuinely many lines across can be re-split.
-        # Only line-shaped boxes (aspect ≥ 1.5) vote: diagonal text and symbol
-        # frames detect as near-square boxes whose short side is nothing like a
-        # line height and would inflate the floor until nothing re-splits.
-        shorts = sorted(
-            min(b["w"], b["h"])
-            for c in clusters
-            for b in c
-            if max(b["w"], b["h"]) >= 1.5 * max(min(b["w"], b["h"]), 1.0)
+
+        height_limit = max(median_h * 2.8, ih * 0.28)
+        width_limit = iw * 0.38
+        area_limit = max(float(iw * ih) * 0.07, 1.0)
+        oversized: list[tuple[float, int]] = []
+        for index, cluster in enumerate(clusters):
+            ub = union_bbox(cluster)
+            score = max(
+                ub["height"] / max(height_limit, 1.0),
+                ub["width"] / max(width_limit, 1.0),
+                (ub["width"] * ub["height"]) / area_limit,
+            )
+            if score > 1.0:
+                oversized.append((score, index))
+
+        detector_available = bool(
+            getattr(self, "_text_detector_available", False)
         )
-        text_scale = shorts[len(shorts) // 2] if shorts else 0.0
+        selected = (
+            {
+                index
+                for _score, index in sorted(
+                    oversized,
+                    key=lambda item: (-item[0], item[1]),
+                )[: max(0, max_refinements)]
+            }
+            if detector_available
+            else set()
+        )
+        refinement_total = len(selected)
+
+        def emit(
+            *,
+            completed: int,
+            state: str,
+            label: str,
+            candidate_count: int,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    completed=completed,
+                    total=refinement_total,
+                    state=state,
+                    label=label,
+                    candidate_count=candidate_count,
+                )
+
+        if not detector_available:
+            emit(
+                completed=0,
+                state="skipped",
+                label="Standalone detector unavailable; retaining oversized candidates",
+                candidate_count=len(clusters),
+            )
+        elif refinement_total == 0:
+            emit(
+                completed=0,
+                state="skipped",
+                label="No oversized candidates require local refinement",
+                candidate_count=len(clusters),
+            )
 
         out: list[list[dict[str, Any]]] = []
-        for cluster in clusters:
+        refined = 0
+        for cluster_index, cluster in enumerate(clusters):
             ub = union_bbox(cluster)
-            oversized = (
-                ub["height"] > max(median_h * 2.8, ih * 0.28, text_scale * 6.0)
-                or ub["width"] > max(iw * 0.38, text_scale * 12.0)
-                or ub["width"] * ub["height"]
-                > max(iw * ih * 0.07, text_scale * text_scale * 40.0)
-            )
-            if not oversized:
+            if cluster_index not in selected:
                 out.append(cluster)
                 continue
 
+            refined += 1
+            label = f"oversized candidate {refined} of {refinement_total}"
+            emit(
+                completed=refined - 1,
+                state="running",
+                label=label,
+                candidate_count=len(out) + len(clusters) - cluster_index,
+            )
             margin = 4
             cx0 = max(0, int(ub["x"] - margin))
             cy0 = max(0, int(ub["y"] - margin))
             cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
             cy1 = min(ih, int(ub["y"] + ub["height"] + margin))
             sub = image.crop((cx0, cy0, cx1, cy1))
-            sub_boxes = self.detect_regions(sub)
+            rotation = refinement_rotation(
+                {"w": float(sub.width), "h": float(sub.height)}
+            )
+            detector_input = rotate_for_detection(sub, rotation)
+            sub_boxes: list[dict[str, Any]] = []
+            for detected in self._detector_only_boxes(
+                detector_input,
+                target_long_edge=DETECTION_REFINEMENT_TARGET_EDGE,
+            ):
+                mapped = map_quarter_turn_box_to_source(
+                    detected,
+                    rotation,
+                    sub.size,
+                )
+                if mapped is not None:
+                    sub_boxes.append(mapped)
             if not sub_boxes:
                 out.append(cluster)
+                emit(
+                    completed=refined,
+                    state="completed",
+                    label=label,
+                    candidate_count=len(out) + len(clusters) - cluster_index - 1,
+                )
                 continue
-            for b in sub_boxes:
-                b["x"] = round(b["x"] + cx0, 1)
-                b["y"] = round(b["y"] + cy0, 1)
             sub_clusters = split_mixed_clusters(
                 cluster_boxes(
                     sub_boxes,
@@ -986,932 +1725,22 @@ class OcrPipeline:
                     img_h=cy1 - cy0,
                 )
             )
-            # Accept the finer split only when it actually separates 2+ real
-            # values (by their detection text). A re-detect that shatters one
-            # callout into "45" / "±3°" / "7" would otherwise replace a clean
-            # region with fragments that fail the worthiness filter.
-            worthy = sum(
-                1
-                for sc in sub_clusters
-                if any(is_segment_worthy(b.get("text", "")) for b in sc)
-            )
-            if len(sub_clusters) <= 1 or worthy < 2:
+            if len(sub_clusters) <= 1:
                 out.append(cluster)
             else:
+                for sub_cluster in sub_clusters:
+                    for box in sub_cluster:
+                        box["x"] = round(float(box["x"]) + cx0, 1)
+                        box["y"] = round(float(box["y"]) + cy0, 1)
                 out.extend(sub_clusters)
+            emit(
+                completed=refined,
+                state="completed",
+                label=label,
+                candidate_count=len(out) + len(clusters) - cluster_index - 1,
+            )
         return order_clusters(out)
 
-    @staticmethod
-    def _rotate_expand(
-        image: Image.Image, angle: float, *, with_forward: bool = False
-    ) -> tuple[Image.Image, Any] | tuple[Image.Image, Any, Any]:
-        """
-        Rotate ``image`` CCW by ``angle`` degrees onto an expanded white canvas.
-
-        Returns the rotated PIL image plus the inverse 2×3 affine that maps a
-        point in the *rotated* frame back to the original (used to place a
-        rotated-frame detection's balloon in received-image coordinates).
-        With ``with_forward`` the forward matrix comes too, so source-frame
-        detections can be projected into the rotated frame without re-detecting.
-        """
-        import cv2
-
-        arr = np.asarray(image.convert("RGB"))
-        h, w = arr.shape[:2]
-        cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
-        M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-        cos, sin = abs(M[0, 0]), abs(M[0, 1])
-        nw = int(h * sin + w * cos)
-        nh = int(h * cos + w * sin)
-        M[0, 2] += (nw - w) / 2.0
-        M[1, 2] += (nh - h) / 2.0
-        rot = cv2.warpAffine(
-            arr, M, (nw, nh),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
-        )
-        inv = cv2.invertAffineTransform(M)
-        if with_forward:
-            return Image.fromarray(rot), inv, M
-        return Image.fromarray(rot), inv
-
-    @staticmethod
-    def _ink_extent(image: Image.Image) -> tuple[int, int, int, int] | None:
-        """
-        Tight bounds of the *text* ink in a levelled crop, or ``None``.
-
-        A cluster's union box is the hull of its detection boxes plus a margin,
-        which on a diagonal callout leaves a box noticeably larger than the
-        writing — that is what makes a balloon look like it is drawn over empty
-        drawing rather than along the text. Long straight strokes are removed
-        first so the leader the text sits on does not stretch the bounds back
-        out to the whole crop.
-        """
-        try:
-            import cv2
-        except ImportError:
-            return None
-        import numpy as np
-
-        from image_preprocess import _suppress_long_lines, cad_ink_to_gray
-
-        gray = np.asarray(cad_ink_to_gray(image).convert("L"))
-        if gray.size == 0:
-            return None
-        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        mask = _suppress_long_lines(mask)
-        ys, xs = np.nonzero(mask)
-        if xs.size == 0:
-            return None
-        return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
-
-    @staticmethod
-    def _bbox_rot_to_source(
-        bx: float, by: float, bw: float, bh: float, inv: Any, iw: int, ih: int
-    ) -> dict[str, float] | None:
-        """Map a rotated-frame AABB to a clamped upright AABB via ``inv``."""
-        corners = [
-            (bx, by), (bx + bw, by), (bx, by + bh), (bx + bw, by + bh),
-        ]
-        xs, ys = [], []
-        for px, py in corners:
-            sx = inv[0, 0] * px + inv[0, 1] * py + inv[0, 2]
-            sy = inv[1, 0] * px + inv[1, 1] * py + inv[1, 2]
-            xs.append(sx)
-            ys.append(sy)
-        x0 = max(0.0, min(xs))
-        y0 = max(0.0, min(ys))
-        x1 = min(float(iw), max(xs))
-        y1 = min(float(ih), max(ys))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        return {
-            "x": round(x0, 1),
-            "y": round(y0, 1),
-            "width": round(x1 - x0, 1),
-            "height": round(y1 - y0, 1),
-        }
-
-    @staticmethod
-    def _oriented_box_from_rot(
-        bx: float, by: float, bw: float, bh: float, inv: Any
-    ) -> dict[str, float]:
-        """
-        Map a rotated-frame axis box to a source-frame *oriented* rectangle.
-
-        Unlike ``_bbox_rot_to_source`` (which loses orientation by taking the
-        AABB of the 4 mapped corners — loose for diagonal text), this returns the
-        tight rotated rectangle the frontend can draw with a Konva ``rotation``:
-        the top-left corner mapped to source, the (rotation-preserved) width and
-        height, and the clockwise screen-angle of the box's own x-axis.
-        """
-        import math
-
-        ox = inv[0, 0] * bx + inv[0, 1] * by + inv[0, 2]
-        oy = inv[1, 0] * bx + inv[1, 1] * by + inv[1, 2]
-        # The box's local +x (its reading direction) maps to (inv[0,0], inv[1,0]);
-        # atan2(dy, dx) with y-down is Konva's clockwise rotation.
-        angle = math.degrees(math.atan2(inv[1, 0], inv[0, 0]))
-        return {
-            "x": round(ox, 1),
-            "y": round(oy, 1),
-            "width": round(bw, 1),
-            "height": round(bh, 1),
-            "rotation": round(angle, 1),
-        }
-
-    @staticmethod
-    def _quad_angle(quad: Any) -> float | None:
-        """
-        Screen angle of a detection quad's reading direction, in degrees.
-
-        The detector returns the four corners of a text line, so its longer edge
-        *is* the direction the text runs — no estimation needed. Returns degrees
-        in (-90, 90], clockwise positive (y axis down), or ``None`` when the quad
-        is missing or degenerate.
-        """
-        import math
-
-        if not quad or len(quad) < 4:
-            return None
-        (x0, y0), (x1, y1), _, (x3, y3) = quad[:4]
-        top = (x1 - x0, y1 - y0)
-        side = (x3 - x0, y3 - y0)
-        len_top = math.hypot(*top)
-        len_side = math.hypot(*side)
-        if max(len_top, len_side) < 2.0:
-            return None
-        dx, dy = top if len_top >= len_side else side
-        angle = math.degrees(math.atan2(dy, dx))
-        while angle <= -90.0:
-            angle += 180.0
-        while angle > 90.0:
-            angle -= 180.0
-        return angle
-
-    @classmethod
-    def _slant_angle_groups(
-        cls,
-        boxes: list[dict[str, Any]],
-        *,
-        min_slant: float = 8.0,
-        tolerance: float = 12.0,
-        max_groups: int = 2,
-    ) -> list[float]:
-        """
-        Angles at which this crop's text actually runs, from the detector.
-
-        Each detection carries its own angle, so the result is local to the text
-        rather than a sheet-wide vote whose outcome depended on how much of the
-        drawing the user selected. Boxes are gathered into groups within
-        ``tolerance`` degrees, heaviest box seeding each group, and each group
-        reports its size-weighted mean, heaviest first.
-
-        Near-horizontal and near-vertical text is skipped: the upright and 90°
-        detection passes already read those, and on a CAD sheet the vertical
-        dimensions would otherwise outvote the diagonal callouts entirely.
-        """
-        upright_guard = max(min_slant, 1.0)
-        candidates: list[tuple[float, float]] = []
-        for box in boxes:
-            angle = cls._quad_angle(box.get("quad"))
-            if angle is None:
-                continue
-            if abs(angle) < upright_guard or abs(angle) > 90.0 - upright_guard:
-                continue
-            weight = max(float(box.get("w", 0.0)), float(box.get("h", 0.0)))
-            if weight > 0:
-                candidates.append((angle, weight))
-
-        # Heaviest first, so a group is seeded by its most substantial box and
-        # smaller neighbouring reads merge into it rather than the reverse.
-        candidates.sort(key=lambda t: t[1], reverse=True)
-        groups: list[dict[str, float]] = []
-        for angle, weight in candidates:
-            for group in groups:
-                if abs(group["angle"] - angle) <= tolerance:
-                    total = group["weight"] + weight
-                    group["angle"] = (
-                        group["angle"] * group["weight"] + angle * weight
-                    ) / total
-                    group["weight"] = total
-                    break
-            else:
-                groups.append({"angle": angle, "weight": weight})
-        groups.sort(key=lambda g: g["weight"], reverse=True)
-        return [round(g["angle"], 1) for g in groups[:max_groups]]
-
-    def _slant_neighbourhoods(
-        self,
-        image: Image.Image,
-        det_boxes: list[dict[str, Any]],
-        *,
-        margin_frac: float = 1.0,
-        expand_frac: float = 0.2,
-        max_rois: int = 3,
-    ) -> list[tuple[int, int, int, int]]:
-        """
-        Regions of the crop that contain diagonal text, from the detector's quads.
-
-        Diagonal callouts sit in a few small neighbourhoods, and working on those
-        rather than the whole selection matters for accuracy, not just speed:
-        detection upscales a small image and not a large one, so the quad (and
-        therefore the measured angle) is markedly more accurate on a local region
-        than on a full sheet. Boxes are grouped when their inflated extents
-        touch, and each group returns a padded, clamped bounding region.
-
-        The padding is generous on purpose: a callout's detection box covers the
-        value but not always its stacked deviation or its leader, and a region
-        cropped tight to the boxes detects differently from one with room around
-        it.
-        """
-        iw, ih = image.size
-        slanted: list[dict[str, Any]] = []
-        for box in det_boxes or []:
-            angle = self._quad_angle(box.get("quad"))
-            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
-                continue
-            if box.get("w", 0) <= 1 or box.get("h", 0) <= 1:
-                continue
-            slanted.append(box)
-        if not slanted:
-            return []
-
-        def extent(b: dict[str, Any]) -> tuple[float, float, float, float]:
-            pad = max(b["w"], b["h"]) * margin_frac
-            return (b["x"] - pad, b["y"] - pad,
-                    b["x"] + b["w"] + pad, b["y"] + b["h"] + pad)
-
-        parent = list(range(len(slanted)))
-
-        def find(i: int) -> int:
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return i
-
-        rects = [extent(b) for b in slanted]
-        for i in range(len(slanted)):
-            for j in range(i + 1, len(slanted)):
-                a, b = rects[i], rects[j]
-                if not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1]):
-                    ri, rj = find(i), find(j)
-                    if ri != rj:
-                        parent[ri] = rj
-
-        groups: dict[int, list[int]] = {}
-        for i in range(len(slanted)):
-            groups.setdefault(find(i), []).append(i)
-
-        rois: list[tuple[float, tuple[int, int, int, int]]] = []
-        for members in groups.values():
-            xs0 = min(rects[i][0] for i in members)
-            ys0 = min(rects[i][1] for i in members)
-            xs1 = max(rects[i][2] for i in members)
-            ys1 = max(rects[i][3] for i in members)
-            # Widen by a fraction of the region's own size. The slant vote and
-            # the detector both behave better with surrounding context than on a
-            # region cropped to the ink, and a callout's leader and stacked
-            # deviation often reach past the boxes that located it.
-            grow_x = (xs1 - xs0) * expand_frac
-            grow_y = (ys1 - ys0) * expand_frac
-            x0 = max(0, int(xs0 - grow_x))
-            y0 = max(0, int(ys0 - grow_y))
-            x1 = min(iw, int(xs1 + grow_x))
-            y1 = min(ih, int(ys1 + grow_y))
-            if x1 - x0 < 8 or y1 - y0 < 8:
-                continue
-            weight = sum(max(slanted[i]["w"], slanted[i]["h"]) for i in members)
-            rois.append((weight, (x0, y0, x1, y1)))
-        rois.sort(key=lambda r: r[0], reverse=True)
-        return [r[1] for r in rois[:max_rois]]
-
-    @staticmethod
-    def _leader_angles_for_roi(
-        lines: list[dict[str, float]],
-        roi: tuple[int, int, int, int],
-        *,
-        max_angles: int = 2,
-    ) -> list[float]:
-        """
-        Angles of the leader lines that run through ``roi``, longest first.
-
-        A callout lettered along a leader shares that leader's direction, so
-        this is the angle to level by — measured from a long straight stroke
-        rather than voted from the text's own strokes. Unlike that vote it does
-        not weaken as the selection grows, which is what made the two fit
-        callouts unreadable on a full sheet.
-        """
-        x0, y0, x1, y1 = roi
-        angles: list[float] = []
-        for line in lines:
-            lx0, lx1 = sorted((line["x1"], line["x2"]))
-            ly0, ly1 = sorted((line["y1"], line["y2"]))
-            # The leader must actually pass through this region.
-            if lx1 < x0 or lx0 > x1 or ly1 < y0 or ly0 > y1:
-                continue
-            angle = float(line["angle"])
-            if all(abs(angle - kept) > 6.0 for kept in angles):
-                angles.append(angle)
-            if len(angles) >= max_angles:
-                break
-        return angles
-
-    def _neighbourhood_sign(
-        self,
-        det_boxes: list[dict[str, Any]],
-        roi: tuple[int, int, int, int],
-    ) -> float | None:
-        """
-        Which way the diagonal text in ``roi`` leans, from the detector's quads.
-
-        A quad's magnitude drifts for steeply slanted text, but its sign does
-        not, and knowing the sign halves the passes the caller has to make.
-        """
-        x0, y0, x1, y1 = roi
-        total = 0.0
-        for box in det_boxes:
-            angle = self._quad_angle(box.get("quad"))
-            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
-                continue
-            cx = box["x"] + box["w"] / 2.0
-            cy = box["y"] + box["h"] / 2.0
-            if not (x0 <= cx <= x1 and y0 <= cy <= y1):
-                continue
-            total += max(box["w"], box["h"]) * (1.0 if angle >= 0 else -1.0)
-        if total == 0.0:
-            return None
-        return 1.0 if total > 0 else -1.0
-
-    def _detect_angled_regions(
-        self,
-        image: Image.Image,
-        base_regions: list[dict[str, Any]],
-        det_boxes: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
-        upright/90° detector misses.
-
-        Runs per diagonal *neighbourhood* rather than over the whole selection,
-        so the result no longer depends on how much of the drawing was selected —
-        the failure that left the two ``H10`` fit callouts unread on a full
-        sheet while they read correctly on a zoomed crop. Each neighbourhood is
-        levelled by its own measured angle, re-detected, read, and mapped back.
-        Results are deduped against ``base_regions`` so a value already read
-        upright is not reported twice.
-        """
-        # First the whole selection, which is what a zoomed-in crop needs.
-        found = self._angled_in_roi(image)
-        # Then each diagonal neighbourhood, always — not only when the pass
-        # above came back empty. On a large selection the slant vote is diluted
-        # by the rest of the drawing and names one angle, so it recovers one
-        # leader's callout and misses its neighbour on the next leader. Working
-        # neighbourhood by neighbourhood picks up the rest; anything found
-        # twice is reconciled by the dedupe below.
-        from region_detect import detect_leader_lines
-
-        leaders = detect_leader_lines(image)
-        for x0, y0, x1, y1 in self._slant_neighbourhoods(image, det_boxes or []):
-            sign = self._neighbourhood_sign(det_boxes or [], (x0, y0, x1, y1))
-            roi = image.crop((x0, y0, x1, y1))
-            leader_angles = self._leader_angles_for_roi(leaders, (x0, y0, x1, y1))
-            # Two zoom levels. Detection resolves a callout's parts at one
-            # zoom and its neighbour's at another — on the two fit callouts
-            # each is read cleanly at a different one — so gather both and
-            # let the quality ranking in ``_dedupe_angled`` choose.
-            for zoom in (1.0, 1.5):
-                if zoom == 1.0:
-                    view = roi
-                else:
-                    view = roi.resize(
-                        (int(roi.width * zoom), int(roi.height * zoom)),
-                        Image.Resampling.LANCZOS,
-                    )
-                for region in self._angled_in_roi(
-                    view,
-                    sign=sign,
-                    max_magnitudes=3,
-                    # Only consulted when no leader runs through the region:
-                    # this region is known to hold diagonal text, so a
-                    # magnitude needs less of the vote to be worth a try. At
-                    # sheet scale the correct angle is rarely the top bucket.
-                    weight_floor=0.08,
-                    fallback_angles=leader_angles,
-                ):
-                    for box in (region["bbox"], region.get("oriented_box")):
-                        if not box:
-                            continue
-                        box["x"] = round(box["x"] / zoom + x0, 1)
-                        box["y"] = round(box["y"] / zoom + y0, 1)
-                        box["width"] = round(box["width"] / zoom, 1)
-                        box["height"] = round(box["height"] / zoom, 1)
-                    found.append(region)
-
-        superseded = self._supersede_fused_base(found, base_regions)
-        return self._dedupe_angled(
-            found, [b for b in base_regions if id(b) not in superseded]
-        )
-
-    def _angled_in_roi(
-        self,
-        image: Image.Image,
-        *,
-        sign: float | None = None,
-        max_magnitudes: int = 1,
-        weight_floor: float | None = None,
-        fallback_angles: list[float] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Read the diagonal callouts in one image, levelling it by its own slant.
-
-        The slant magnitude comes from the Hough vote over this image, so a
-        tighter image gives a sharper answer. ``sign`` resolves the vote's
-        sign ambiguity when the caller already knows which way the text leans
-        (from the detector's quads), halving the number of passes and leaving
-        room to try more magnitudes instead. ``weight_floor`` lowers the bar a
-        magnitude must clear to be worth trying, which is safe once the caller
-        has established that this region really does hold diagonal text.
-
-        ``fallback_angles`` is used only when the vote finds nothing at all —
-        the angles of the leader lines running through this region. Measuring a
-        long straight stroke works at any scale, so it covers regions where the
-        vote over text strokes is too weak to name an angle. It does not
-        override the vote, which measured better wherever both had an opinion.
-        """
-        import re
-
-        from image_preprocess import cad_ink_to_gray
-        from region_cluster import cluster_boxes, union_bbox
-        from region_detect import dominant_slant_angles
-        from segment_quality import (
-            contains_annotation_note,
-            count_dimension_values,
-            has_dimension_value,
-            is_annotation_note,
-            is_segment_worthy,
-            strip_foreign_glyphs,
-        )
-        from stroke_filter import is_stray_line
-
-        iw, ih = image.size
-        # Preferred source: the angle each detection reports for itself. It is
-        # exact, per callout, and free — the detector already computed it.
-        vote_args: dict[str, Any] = {"max_magnitudes": max_magnitudes}
-        if weight_floor is not None:
-            vote_args["min_weight_frac"] = weight_floor
-        magnitudes = dominant_slant_angles(image, **vote_args)
-
-        angles: list[float] = []
-        for m in magnitudes:
-            if sign is None:
-                # A slant bucket is sign-ambiguous (a line at +a and -a land in
-                # the same bucket), so try both and let worthiness and dedupe
-                # drop the wrong one.
-                angles.extend((-m, m))
-            else:
-                angles.append(round(sign * m, 1))
-        # Knowing the sign buys a third magnitude for the same pass count.
-        voted = angles[: 3 if sign is not None else 2]
-        # A leader's angle is measured from the line the text is written on, so
-        # it is exact; the vote's is a 1°-bucket estimate over ink. That
-        # difference decides whether a deviation stack reads as ``+0.070/0`` or
-        # runs together as ``+0.0700``, so leaders are tried first and the vote
-        # fills the remaining slots.
-        angles = []
-        for candidate in list(fallback_angles or []) + voted:
-            if all(abs(candidate - kept) > 6.0 for kept in angles):
-                angles.append(candidate)
-        angles = angles[:4]
-        if not angles:
-            return []
-
-        found: list[dict[str, Any]] = []
-        for angle in angles:
-            rimg, inv = self._rotate_expand(image, angle)
-            rw, rh = rimg.size
-            # Detect again on the *levelled* ink. The quads told us the angle,
-            # but a detector box for steeply slanted text is a poor fit — it
-            # misses a stacked deviation and merges neighbours. Once the text is
-            # horizontal the detector is accurate, which is what makes the
-            # value-plus-deviation grouping below work. (Do NOT reuse the full
-            # detect_regions/cluster pipeline here — its 90° pass and aggressive
-            # merge fuse the now-diagonal axis text into giant blobs.)
-            raw = self._paddle_det_boxes(cad_ink_to_gray(rimg).convert("RGB"))
-            if not raw:
-                continue
-            boxes = [
-                {"x": b["x"], "y": b["y"], "w": b["w"], "h": b["h"]}
-                for b in raw
-                if b["w"] > 1 and b["h"] > 1
-                and not is_annotation_note(b.get("text", ""))
-            ]
-            if not boxes:
-                continue
-            scale = self._text_scale(boxes)
-            if scale:
-                # Keep only what reads as a single line at THIS angle. Text
-                # belonging to a different leader is still slanted here, so the
-                # detector returns it as a tall blob — and that blob bridges the
-                # two callouts into one cluster, which is how a levelled pass
-                # ruins the very callout it was meant to read.
-                upright_here = [b for b in boxes if b["h"] <= scale * 2.2]
-                if upright_here:
-                    boxes = upright_here
-            # Tight merge only: join split fragments of one callout, never span
-            # separate callouts. Cap the union so nothing balloons.
-            clusters = cluster_boxes(boxes, margin_ratio=0.3, img_w=rw, img_h=rh)
-
-            margin = 6
-            for cluster in clusters:
-                ub = union_bbox(cluster)
-                cx0 = max(0, int(ub["x"] - margin))
-                cy0 = max(0, int(ub["y"] - margin))
-                cx1 = min(rw, int(ub["x"] + ub["width"] + margin))
-                cy1 = min(rh, int(ub["y"] + ub["height"] + margin))
-                if cx1 - cx0 < 1 or cy1 - cy0 < 1:
-                    continue
-                # A callout is at most a few lines across (value + tolerance
-                # stack) and a dozen or so long. Judge that against the text
-                # size in this frame, not the crop: a crop-fraction cap threw
-                # away clean reads on a zoomed-in selection, and rejected the
-                # larger of two fit callouts purely because it sat in a small
-                # rotated canvas.
-                if scale and (
-                    min(ub["width"], ub["height"]) > scale * 4.0
-                    or max(ub["width"], ub["height"]) > scale * 12.0
-                ):
-                    continue
-                sub = rimg.crop((cx0, cy0, cx1, cy1))
-                res = self.recognize(sub, compute_text_bbox=False)
-                text = strip_foreign_glyphs((res.get("text") or "").strip())
-                # A value with stacked deviations reads back interleaved. Only
-                # worth a finer pass when the text is long enough to hold one.
-                if sum(c.isdigit() for c in text) >= 5:
-                    text = self._stacked_deviation_read(sub, res) or text
-                # "0.2-0.3×45°R1": a radius callout drawn right after the
-                # chamfer is a second value; keep the chamfer.
-                m_tail = re.match(r"^(.*\d°)\s*[Rr]\d[\d.]*$", text)
-                if m_tail:
-                    text = m_tail.group(1)
-                if not text or not is_segment_worthy(text):
-                    continue
-                if not has_dimension_value(text):
-                    continue
-                # A rotated re-read is speculative: the upright passes already
-                # had their turn at this ink. An unconfident one is noise, and
-                # on a wide selection that noise is what puts a tilted box over
-                # a feature-control frame.
-                if float(res.get("confidence") or 0.0) < 0.80:
-                    continue
-                # The box has to fit what it reports. A levelled cluster covering
-                # far more area than its own characters occupy is a box drawn
-                # around mostly empty drawing, which is what a stray balloon over
-                # a watermark or a title block looks like on screen.
-                if scale:
-                    content = 0.6 * len(text) * scale * scale
-                    if ub["width"] * ub["height"] > max(2.5 * content, 3.0 * scale * scale):
-                        continue
-                # Note wording mixed into digits means this rotated crop fused a
-                # callout with an annotation; the upright pass already has the
-                # values, so drop it rather than emit the blob.
-                if contains_annotation_note(text):
-                    continue
-                if is_stray_line(sub, text):
-                    continue
-                # A single slanted callout is ONE line of text, optionally with
-                # its tolerance stacked above/below it. Judge fusion by that
-                # structure — rows in the levelled frame — rather than by a raw
-                # digit count, which a legitimate fit callout
-                # (``Ø20H10 +0.084/0``, 9 digits) trips.
-                if count_dimension_values(text) >= 2:
-                    continue
-                if self._cluster_row_count(cluster) > 3:
-                    continue
-                if sum(c.isdigit() for c in text) > 14:
-                    continue
-                # Shrink the cluster box onto the ink it actually contains, so
-                # the balloon hugs the writing instead of the hull plus margin.
-                box_x, box_y = ub["x"], ub["y"]
-                box_w, box_h = ub["width"], ub["height"]
-                ink = self._ink_extent(sub)
-                if ink is not None:
-                    ix0, iy0, ix1, iy1 = ink
-                    if ix1 - ix0 >= 4 and iy1 - iy0 >= 4:
-                        box_x, box_y = cx0 + ix0, cy0 + iy0
-                        box_w, box_h = ix1 - ix0, iy1 - iy0
-                        # Writing along a leader is elongated once the box is on
-                        # the ink. A square patch is not a line of text, it is a
-                        # piece of the part caught at this angle.
-                        if max(box_w, box_h) < min(box_w, box_h) * 1.8:
-                            continue
-                bbox = self._bbox_rot_to_source(
-                    box_x, box_y, box_w, box_h, inv, iw, ih
-                )
-                if bbox is None:
-                    continue
-                region = self._region_from_result(res, bbox, text)
-                region["rotation"] = round(float(angle), 1)
-                # Tight rotated rectangle for the frontend to draw; bbox stays the
-                # loose AABB so dedupe/anchor logic remains axis-aligned.
-                region["oriented_box"] = self._oriented_box_from_rot(
-                    box_x, box_y, box_w, box_h, inv
-                )
-                found.append(region)
-
-        return found
-
-    def _stacked_deviation_read(
-        self, crop: Image.Image, res: dict[str, Any]
-    ) -> str | None:
-        """
-        Re-read a levelled callout as ``value upper/lower``, or ``None``.
-
-        A fit callout carries its two deviations stacked beside the value, and
-        flat reading order interleaves them (``Ø18H10 +0.070/0`` comes back as
-        ``1+0.07018H100``). One finer detection pass inside the crop separates
-        the parts, and their geometry says which is which. Only the narrow
-        stacked pattern with confidently-read parts is accepted, and the result
-        is composed and classified like any other read, so ``None`` simply
-        leaves the recogniser's own text in place.
-        """
-        from image_preprocess import cad_ink_to_gray
-        from segment_quality import is_segment_worthy
-        from stacked_tolerance import stacked_deviation_text
-
-        parts = self._paddle_det_boxes(cad_ink_to_gray(crop).convert("RGB"))
-        raw = stacked_deviation_text(parts)
-        if not raw:
-            return None
-        symbols = DetectedSymbols(**(res.get("symbols_detected") or {}))
-        composed = compose_engineering_dimension(raw, crop, symbols)
-        text = (composed.text or "").strip()
-        if not text or not is_segment_worthy(text):
-            return None
-        res["text"] = text
-        res["type"] = composed.kind
-        feature = classify_feature(text, symbols=res.get("symbols_detected") or {})
-        res["category"], res["subtype"], res["label"] = (
-            feature.category, feature.subtype, feature.label,
-        )
-        return text
-
-    @staticmethod
-    def _supersede_fused_base(
-        angled: list[dict[str, Any]], base_regions: list[dict[str, Any]]
-    ) -> set[int]:
-        """
-        Retire an upright region that fused several along-the-line callouts.
-
-        When two or more *distinct* slanted reads sit inside one base region,
-        that region is the axis-aligned hull of both leaders and its text is the
-        garbled concatenation of them (``118H10+0.070-20H10``). The levelled
-        view resolved what the upright view could not, so the base region is
-        marked ``superseded`` — excluded from the redundancy check below, and
-        dropped by ``segment`` — and the per-leader reads stand in its place.
-
-        Returns the ids of the superseded base regions. Conservative: a base
-        region holding a single slanted value keeps its authority, so an
-        ordinary upright read is never displaced by a rotated re-read.
-        """
-        import re
-
-        from geom_utils import contains_point, overlap_frac, region_center
-
-        superseded: set[int] = set()
-        for base in base_regions:
-            inside = [a for a in angled if contains_point(base, region_center(a))]
-            if len(inside) < 2:
-                continue
-            digit_sets = {re.sub(r"\D", "", a.get("text", "")) for a in inside}
-            digit_sets.discard("")
-            if len(digit_sets) < 2:
-                continue  # the same value read twice, not a fusion
-            # The two reads must occupy separate ink: overlapping rotated boxes
-            # are one callout read twice, not two callouts fused.
-            separate = any(
-                overlap_frac(inside[i], inside[j]) < 0.3
-                for i in range(len(inside))
-                for j in range(i + 1, len(inside))
-            )
-            if not separate:
-                continue
-            base["superseded"] = True
-            superseded.add(id(base))
-        return superseded
-
-    @staticmethod
-    def _dedupe_angled(
-        angled: list[dict[str, Any]], base_regions: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """
-        Keep angled reads that add something new.
-
-        A diagonal callout's upright AABB is loose, so area-overlap dedupe would
-        wrongly clobber neighbouring upright regions. Instead we drop an angled
-        region only when its own centre sits inside a base region whose text
-        already contains the same digit string (i.e. the value is genuinely a
-        re-read), and drop angled-vs-angled duplicates the same way — never
-        removing a base region.
-        """
-        import re
-
-        import math
-
-        from geom_utils import overlap_frac as geom_overlap_frac
-        from geom_utils import polygon_area, region_polygon
-
-        def digits(t: str) -> str:
-            return re.sub(r"\D", "", t or "")
-
-        def center(r: dict[str, Any]) -> tuple[float, float]:
-            # The tight oriented box centre is exact; the AABB of a diagonal
-            # box is loose and its centre can fall outside a neighbour it
-            # actually re-read.
-            ob = r.get("oriented_box")
-            if ob:
-                a = math.radians(ob["rotation"])
-                hx, hy = ob["width"] / 2.0, ob["height"] / 2.0
-                return (
-                    ob["x"] + hx * math.cos(a) - hy * math.sin(a),
-                    ob["y"] + hx * math.sin(a) + hy * math.cos(a),
-                )
-            b = r["bbox"]
-            return (b["x"] + b["width"] / 2.0, b["y"] + b["height"] / 2.0)
-
-        def inside(pt: tuple[float, float], r: dict[str, Any]) -> bool:
-            b = r["bbox"]
-            return (
-                b["x"] <= pt[0] <= b["x"] + b["width"]
-                and b["y"] <= pt[1] <= b["y"] + b["height"]
-            )
-
-        def same_value(d: str, other: str) -> bool:
-            """Digit strings of one value read twice (one may carry junk)."""
-            if not d or not other:
-                return False
-            if d in other or other in d:
-                return True
-            # Same length, at most one digit differs: "753" vs "153" is the
-            # same callout with one stroke-confused glyph.
-            if len(d) == len(other) and len(d) >= 3:
-                return sum(a != b for a, b in zip(d, other)) <= 1
-            return False
-
-        def overlaps(r: dict[str, Any], other: dict[str, Any]) -> bool:
-            # Tight-rectangle overlap first: two callouts on parallel leaders
-            # share almost no ink even where their axis-aligned hulls do.
-            if geom_overlap_frac(r, other) >= 0.4:
-                return True
-            return inside(center(r), other) or inside(center(other), r)
-
-        def symbol_count(t: str) -> int:
-            return sum(t.count(ch) for ch in "Ø°±×/")
-
-        def junk_letters(t: str) -> int:
-            # Letters that belong on a dimension: the H of a fit class, R for a
-            # radius, X as a multiplier. Anything else in a numeric callout is a
-            # stray stroke the recogniser turned into a letter.
-            return sum(1 for c in t or "" if c.isalpha() and c not in "HRXhrx")
-
-        def quality(r: dict[str, Any]) -> float:
-            """
-            How well a candidate read came out.
-
-            The same callout levelled well reads ``Ø18H10+0.070/0`` and levelled
-            poorly reads ``Ø118H10V+0.070M0`` — the poor one is *longer*, so
-            ranking by length alone keeps the wrong one. Resolved symbols count
-            for more than length, and stray letters count against.
-            """
-            text = r.get("text", "")
-            # A tie on text and confidence is broken by how the box sits on the
-            # writing: the same callout levelled at the right angle comes back
-            # in a tighter, longer box than one levelled a dozen degrees off,
-            # and the off-angle box is what ends up crossing its neighbour.
-            oriented = r.get("oriented_box")
-            aspect = 0.0
-            if oriented:
-                side_a = float(oriented["width"])
-                side_b = float(oriented["height"])
-                aspect = max(side_a, side_b) / max(min(side_a, side_b), 1.0)
-            return (
-                symbol_count(text) * 2.0
-                - junk_letters(text) * 2.0
-                + len(digits(text)) * 0.5
-                + float(r.get("confidence") or 0.0)
-                + min(aspect, 8.0) * 0.15
-            )
-
-        kept: list[dict[str, Any]] = []
-        # Best reads first, so a duplicate keeps the better one.
-        order = sorted(angled, key=quality, reverse=True)
-        for r in order:
-            d = digits(r.get("text", ""))
-            if len(d) < 2:
-                continue
-            # Two angled reads whose tight rectangles coincide are the same ink
-            # read at two candidate angles, whatever their digits say. Only the
-            # better-levelled one is worth keeping, and separate callouts never
-            # coincide — that is what the oriented rectangle buys us.
-            if any(geom_overlap_frac(r, k) >= 0.5 for k in kept):
-                continue
-            # An angled read lying across a region the upright pass already
-            # produced is a second box over the same ink. Only one may be drawn.
-            # It is a straight swap of one read for a better one, so it applies
-            # to a single region of comparable size: overlap is measured against
-            # the smaller of the two, so a long angled box contains a small
-            # upright one completely, and letting that count as a swap once
-            # deleted eight good callouts on one sheet. Anything broader is
-            # dropped, and replacing several regions at once stays the job of
-            # _supersede_fused_base.
-            # Sitting on top of a region the upright pass already produced has to
-            # be earned. The angled read is kept only if it is the better read;
-            # otherwise it is a second box over ink that is already accounted
-            # for. Quality decides this rather than size, because a long chamfer
-            # box legitimately passes over a small neighbouring callout, while a
-            # bloated re-read of one value does not.
-            # A third of a callout covered is already a visible double box, and
-            # a bloated re-read covers only part of the region it duplicates.
-            overlapped = [b for b in base_regions if geom_overlap_frac(r, b) >= 0.3]
-            swap_for: list[dict[str, Any]] = []
-            if overlapped:
-                # The upright read wins unless this one is plainly better.
-                if quality(r) <= max(quality(b) for b in overlapped):
-                    continue
-                # Better, and now: does it account for what it covers? The
-                # upright pass often splits a leader callout into its value and
-                # its deviation stack, and the levelled read is those fragments
-                # put back together — its digits contain each of theirs, in
-                # order. Then it stands in for them. Covering a value it cannot
-                # account for means it ran into a neighbour, and drawing it
-                # would stack a second box over that neighbour, so it is
-                # dropped instead. Fragments of one or no digits are ignored:
-                # an R1 that a chamfer box merely passes over is not something
-                # the chamfer has to explain.
-                area_r = polygon_area(region_polygon(r))
-                accounted: list[dict[str, Any]] = []
-                blocked = False
-                for b in overlapped:
-                    bd = digits(b.get("text", ""))
-                    if len(bd) < 2:
-                        continue  # nothing to account for
-                    if _covers_digits(d, bd):
-                        accounted.append(b)
-                        continue
-                    # Not accounted for. It may still be a garbled fragment of
-                    # this same callout, which the levelled read got right — but
-                    # only if it is a decisively worse read of a box this size.
-                    # Without the size test a long box overrules every small
-                    # region it happens to lie across, which once deleted eight
-                    # good callouts on one sheet.
-                    area_b = polygon_area(region_polygon(b))
-                    comparable = max(area_r, area_b) <= min(area_r, area_b) * 2.5
-                    if comparable and quality(r) >= quality(b) + 2.0:
-                        accounted.append(b)
-                    else:
-                        blocked = True
-                        break
-                if blocked:
-                    continue
-                swap_for = accounted
-            dup = [
-                b for b in base_regions
-                if overlaps(r, b) and same_value(d, digits(b.get("text", "")))
-            ]
-            if dup:
-                # The upright read of a slanted callout keeps its digits but
-                # drops the symbols only the levelled view resolves (the ° of
-                # ``0.5×45°``). Same digits + more symbols → enrich the base
-                # region's text in place; its box is kept.
-                for b in dup:
-                    bt = b.get("text", "")
-                    # Same value, better read: hand the upright region the
-                    # levelled text AND its box, so the balloon ends up along
-                    # the line. Judged on overall quality — comparing symbol
-                    # counts alone left ``V V0.5×45°`` in place, because the
-                    # stray V's do not change how many symbols it has.
-                    if digits(bt) == d and quality(r) > quality(b):
-                        for key in ("text", "type", "category", "subtype", "label"):
-                            b[key] = r.get(key)
-                        b["bbox"] = r["bbox"]
-                        b["oriented_box"] = r.get("oriented_box")
-                        b["rotation"] = r.get("rotation", 0)
-                        b["confidence"] = r.get("confidence", b.get("confidence"))
-                        b["enriched_from"] = "angled"
-                continue
-            if any(
-                overlaps(r, k) and same_value(d, digits(k.get("text", "")))
-                for k in kept
-            ):
-                continue
-            # Only now that this read is definitely being kept does the region
-            # it replaces step aside; marking earlier could delete a region and
-            # then drop its replacement further down.
-            for replaced in swap_for:
-                replaced["superseded"] = True
-            kept.append(r)
-        return kept
 
     def title_fields(
         self,
@@ -1936,252 +1765,6 @@ class OcrPipeline:
         if not keywords:
             return []
         return extract_title_fields(self.detect_regions(image), keywords)
-
-    def segment(
-        self,
-        image: Image.Image,
-        *,
-        debug_dump: bool = False,
-        debug_dump_force: bool = False,
-        cluster_margin: float = 0.72,
-        title_keywords: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """
-        Auto-segment a multi-value selection into individual dimensions.
-
-        Detects all text regions, clusters fragments that belong to the same
-        dimension, then runs the full single-value `recognize` pipeline on each
-        cluster's crop. Boxes are returned in received-image pixel coordinates
-        (same space `recognize`'s `text_bbox` uses) so the client can reuse its
-        existing value-box mapping.
-        """
-        from region_cluster import (
-            cluster_boxes,
-            drop_bridge_boxes,
-            merge_fragment_clusters,
-            merge_overlapping_clusters,
-            order_clusters,
-            split_mixed_clusters,
-            union_bbox,
-        )
-        from segment_quality import (
-            count_dimension_values,
-            dedupe_regions,
-            has_dimension_value,
-            is_annotation_note,
-            is_segment_worthy,
-            strip_foreign_glyphs,
-        )
-        from stroke_filter import is_stray_line
-        from title_fields import extract_title_fields
-
-        boxes = self.detect_regions(image)
-        # The title-block pass needs every detected box, including the label
-        # cells the dimension filters strip out below.
-        det_boxes = list(boxes)
-        # The NOTES paragraph is lifted out BEFORE clustering: its lines are not
-        # dimensions (they would all be dropped downstream), and leaving them in
-        # lets a note line bridge into a neighbouring callout's cluster. The
-        # region is added back untouched just before returning.
-        notes_region, notes_idx = self._detect_notes_block(boxes)
-        if notes_idx:
-            consumed = set(notes_idx)
-            boxes = [b for i, b in enumerate(boxes) if i not in consumed]
-        # Drop free-text annotation notes ("(BOTH SIDES)", "TYP") while their
-        # detection text is still clean — before they cluster into a neighbour or
-        # the composer injects a bogus Ø. Guarded on digit count in the helper.
-        boxes = [b for b in boxes if not is_annotation_note(b.get("text", ""))]
-        boxes = self._drop_speck_boxes(boxes)
-        # Drop cross-column bridge boxes before clustering so separate
-        # dimensions (e.g. Ø174,07 and Ø175,32) don't fuse into one cluster.
-        boxes = drop_bridge_boxes(boxes)
-        iw, ih = image.size
-        clustered = cluster_boxes(
-            boxes,
-            margin_ratio=cluster_margin,
-            img_w=iw,
-            img_h=ih,
-        )
-        clustered = merge_fragment_clusters(clustered)
-        clusters = order_clusters(split_mixed_clusters(clustered))
-        clusters = self._expand_clusters(
-            image, clusters, cluster_margin=cluster_margin
-        )
-        # Re-join any fragments of one dimension that landed in overlapping
-        # boxes (e.g. a value split from its REF. tag onto a perpendicular axis).
-        clusters = order_clusters(merge_overlapping_clusters(clusters))
-
-        if should_dump(request_override=debug_dump):
-            from debug_dump import dump_segment
-
-            dump_segment(
-                image,
-                boxes,
-                [union_bbox(c) for c in clusters],
-                enabled=True,
-                force=dump_force() or debug_dump_force,
-            )
-
-        margin = 6  # a few px of context around each cluster crop
-        regions: list[dict[str, Any]] = []
-        for cluster in clusters:
-            ub = union_bbox(cluster)
-            cx0 = max(0, int(ub["x"] - margin))
-            cy0 = max(0, int(ub["y"] - margin))
-            cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
-            cy1 = min(ih, int(ub["y"] + ub["height"] + margin))
-            if cx1 - cx0 < 1 or cy1 - cy0 < 1:
-                continue
-
-            sub = image.crop((cx0, cy0, cx1, cy1))
-            res = self.recognize(
-                sub,
-                debug_dump=debug_dump,
-                debug_dump_force=debug_dump_force,
-                compute_text_bbox=False,  # balloon snaps to cluster union, not text_bbox
-            )
-            text = strip_foreign_glyphs((res.get("text") or "").strip())
-            text = self._prefer_detection_text(cluster, res, text)
-            if not text or not is_segment_worthy(text):
-                continue
-            # A balloon is for something a person measures. Table rows, dates
-            # and part numbers read like values but are not dimensions.
-            if not has_dimension_value(text):
-                continue
-            # Drop leader/extension/tick lines that OCR'd as a phantom "1".
-            if is_stray_line(sub, text):
-                continue
-
-            # Content-aware split: close-proximity callouts that fused into one
-            # cluster. Trigger when the fused read still shows 2+ complete values
-            # OR the cluster's boxes span 2+ horizontal rows (the fused single
-            # read often collapses to one value, hiding the multiplicity). The
-            # split only replaces this region when it actually yields 2+ worthy
-            # values, so a false trigger falls back to the single region.
-            multivalue = count_dimension_values(text) >= 2
-            multirow = (
-                self._cluster_row_count(cluster) >= 2
-                and ub["width"] >= ub["height"]
-            )
-            if multivalue or multirow:
-                split = self._split_stacked_cluster(
-                    image, (cx0, cy0, cx1, cy1),
-                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
-                )
-                if split:
-                    regions.extend(split)
-                    continue
-
-            # Snap balloon to the full detected cluster, not a tight OCR sliver.
-            bbox = {
-                "x": round(ub["x"], 1),
-                "y": round(ub["y"], 1),
-                "width": round(ub["width"], 1),
-                "height": round(ub["height"], 1),
-            }
-            regions.append(self._region_from_result(res, bbox, text))
-
-        regions = self._complete_angle_regions(image, regions)
-        regions = dedupe_regions(regions)
-
-        # Recover slanted callouts (chamfers, angled fits) the upright/90°
-        # detector misses. Gated on slant presence, so non-diagonal sheets are
-        # unaffected and pay only a single Hough call. Added AFTER the base set
-        # is deduped and treated as authoritative: angled reads only ADD values
-        # not already present, never displace a clean upright region.
-        regions.extend(self._detect_angled_regions(image, regions, det_boxes=boxes))
-        # A base region the angled pass resolved into its separate callouts is
-        # dropped here (it was flagged while those reads were being placed).
-        regions = [r for r in regions if not r.pop("superseded", False)]
-
-        # Appended last so the dimension-oriented dedupe and angled passes,
-        # which reason about values, never discard or reshape the notes block.
-        if notes_region is not None:
-            bounds = notes_region.pop("_bounds", None)
-            block_line_h = notes_region.pop("_line_h", 0.0)
-            if bounds is not None:
-                better = self._reread_notes_block(image, bounds, block_line_h)
-                if better:
-                    notes_region["text"] = "\n".join(better)
-            regions.append(notes_region)
-
-        # Title-block fields ("DWG NO.", "REV") the user asked for by keyword.
-        # Read from the ORIGINAL detection boxes: the label cells are stripped
-        # out of `boxes` above as non-dimensions, and a field only becomes a
-        # region when a value was actually read for it.
-        for field in extract_title_fields(det_boxes, title_keywords or []):
-            if not field["value"] or not field["bbox"]:
-                continue
-            fb = field["bbox"]
-            regions.append(
-                {
-                    "bbox": {
-                        "x": round(fb["x"], 1),
-                        "y": round(fb["y"], 1),
-                        "width": round(fb["w"], 1),
-                        "height": round(fb["h"], 1),
-                    },
-                    "text": field["value"],
-                    "confidence": round(float(field["confidence"]), 4),
-                    "type": "Title Block",
-                    "category": "Title Block",
-                    "subtype": None,
-                    "label": field["label"],
-                    "orientation": "horizontal",
-                    "rotation": 0,
-                    "needs_review": False,
-                    "agreement": 0.0,
-                    "engine": "paddleocr",
-                    "symbols_detected": None,
-                }
-            )
-
-        return {"count": len(regions), "regions": regions}
-
-    @staticmethod
-    def _text_scale(boxes: list[dict[str, Any]]) -> float:
-        """
-        Median short side of the line-shaped detection boxes (≈ one line height).
-
-        Near-square boxes (diagonal text, symbol frames) are excluded: their
-        short side says nothing about the line height. Returns 0.0 when fewer
-        than two line-shaped boxes exist, and callers then skip scale checks.
-        """
-        shorts = sorted(
-            min(b["w"], b["h"])
-            for b in boxes
-            if max(b["w"], b["h"]) >= 1.5 * max(min(b["w"], b["h"]), 1.0)
-        )
-        if len(shorts) < 2:
-            return 0.0
-        return float(shorts[len(shorts) // 2])
-
-    @staticmethod
-    def _drop_speck_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Drop low-confidence specks far below text size (arrowheads, line
-        crossings, hatch fragments the detector read as a lone "0"/"7"/"A").
-
-        Such a speck next to a real callout clusters into it and the union
-        crop then re-reads with the stroke as an extra digit (``R1`` → ``12R1``).
-        Text scale is the median short side of the line-shaped boxes, so a
-        legitimately small "°" or "." box that sits inside its own line is
-        unaffected (it is part of a larger box, not standalone).
-        """
-        scale = OcrPipeline._text_scale(boxes)
-        if not scale:
-            return boxes
-        limit = scale * 0.4
-        out: list[dict[str, Any]] = []
-        for b in boxes:
-            speck = (
-                max(b["w"], b["h"]) < limit
-                and float(b.get("conf") or 0.0) < 0.7
-                and sum(c.isdigit() for c in b.get("text", "")) <= 1
-            )
-            if not speck:
-                out.append(b)
-        return out
 
     @staticmethod
     def _lines_from_boxes(
@@ -2487,187 +2070,1707 @@ class OcrPipeline:
         region["_line_h"] = line_h
         return region, sorted(chosen)
 
-    @staticmethod
-    def _prefer_detection_text(
-        cluster: list[dict[str, Any]], res: dict[str, Any], text: str
-    ) -> str:
-        """
-        Fall back to the detector's own read when the crop re-read lost a tail.
-
-        The detection pass reads each box in full-crop context; the per-cluster
-        ``recognize`` re-reads a tight crop that may clip a small trailing part
-        (``45°±3°`` → ``45°``). When a single-box cluster's detection text is a
-        confident superset of the re-read (same leading digits, more content),
-        compose that instead. Never replaces a read with something that
-        disagrees on the digits already read.
-        """
-        import re
-
-        from segment_quality import is_segment_worthy, strip_foreign_glyphs
-
-        if len(cluster) != 1:
-            return text
-        det = (cluster[0].get("text") or "").strip()
-        conf = float(cluster[0].get("conf") or 0.0)
-        if not det or conf < 0.85 or det == text:
-            return text
-        d_text = re.sub(r"\D", "", text)
-        d_det = re.sub(r"\D", "", det)
-        if not d_det:
-            return text
-        # The tight re-read failed outright ("四1", "E") while the detector read
-        # a complete value ("R1") — take the detector's read.
-        rescue = not is_segment_worthy(text) and is_segment_worthy(det)
-        clipped_tail = bool(d_text) and d_det.startswith(d_text) and len(d_det) > len(d_text)
-        # "/10.03B" vs detector "// 0.03 B": the re-read turned a frame glyph's
-        # stroke into a leading "1". Same digits after that stroke, and the
-        # detector saw a GD&T symbol where the stroke is.
-        stroke_prefix = (
-            d_text.endswith(d_det)
-            and set(d_text[: len(d_text) - len(d_det)]) == {"1"}
-            and any(g in det for g in ("//", "∥", "⟂", "⊥", "∠", "◎", "⌖", "○", "↗"))
-        )
-        if not (rescue or clipped_tail or stroke_prefix):
-            return text
-        symbols = DetectedSymbols(**(res.get("symbols_detected") or {}))
-        composed = compose_engineering_dimension(det, None, symbols)
-        new = strip_foreign_glyphs((composed.text or "").strip())
-        if not new or re.sub(r"\D", "", new) != d_det or not is_segment_worthy(new):
-            return text
-        res["text"] = new
-        res["type"] = composed.kind
-        res["confidence"] = min(float(res.get("confidence") or 0.0), conf)
-        feature = classify_feature(new, symbols=res.get("symbols_detected") or {})
-        res["category"], res["subtype"], res["label"] = (
-            feature.category, feature.subtype, feature.label,
-        )
-        return new
-
-    @staticmethod
-    def _cluster_row_count(cluster: list[dict[str, Any]]) -> int:
-        """
-        Number of distinct horizontal text rows among a cluster's member boxes.
-
-        Boxes that don't overlap on the y-axis sit on separate rows. Two stacked
-        close-proximity callouts fuse into one cluster whose members span two y
-        bands; this reports that so `segment` can attempt a content split even
-        when the fused single-line read collapsed to one value.
-        """
-        spans = sorted((b["y"], b["y"] + b["h"]) for b in cluster)
-        rows: list[list[float]] = []
-        for y0, y1 in spans:
-            for r in rows:
-                if not (y1 <= r[0] or y0 >= r[1]):  # overlaps this band in y
-                    r[0], r[1] = min(r[0], y0), max(r[1], y1)
-                    break
-            else:
-                rows.append([y0, y1])
-        return len(rows)
-
-    @staticmethod
-    def _region_from_result(
-        res: dict[str, Any],
-        bbox: dict[str, float],
-        text: str,
-    ) -> dict[str, Any]:
-        """Assemble one segment region dict from a `recognize` result."""
-        return {
-            "bbox": bbox,
-            "text": text,
-            "confidence": res.get("confidence", 0.0),
-            "type": res.get("type"),
-            "category": res.get("category"),
-            "subtype": res.get("subtype"),
-            "label": res.get("label"),
-            "orientation": res.get("orientation", "horizontal"),
-            "rotation": res.get("rotation", 0),
-            "needs_review": res.get("needs_review", False),
-            "agreement": res.get("agreement", 0.0),
-            "engine": res.get("engine", "paddleocr"),
-            "symbols_detected": res.get("symbols_detected"),
-        }
-
-    def _split_stacked_cluster(
+    def segment(
         self,
         image: Image.Image,
-        coords: tuple[int, int, int, int],
         *,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
-    ) -> list[dict[str, Any]] | None:
+        cluster_margin: float = 0.72,
+        progress_callback: Callable[..., None] | None = None,
+        detection_only: bool = False,
+        existing_value_boxes: Sequence[Mapping[str, float]] = (),
+    ) -> dict[str, Any]:
         """
-        Re-segment one cluster that read back as multiple stacked values.
+        Auto-segment a multi-value selection into individual dimensions.
 
-        Detects text rows inside the cluster crop with a tighter merge margin so
-        the stacked callouts separate, then runs the full `recognize` pipeline
-        per row (so each gets its own dual-unit repair and balloon box). Returns
-        the per-row regions, or ``None`` when the crop doesn't actually split
-        into 2+ worthy values (leaving the original single region untouched).
+        Detects all text regions, clusters fragments that belong to the same
+        dimension, then runs the full single-value `recognize` pipeline on each
+        cluster's crop. ``detection_only`` is reserved for whole-page
+        orchestration: it returns those same final clusters without OCR so
+        overlapping tile duplicates can be removed before recognition.
+
+        Boxes are returned in received-image pixel coordinates (same space
+        `recognize`'s `text_bbox` uses) so the client can reuse its existing
+        value-box mapping.
         """
         from region_cluster import (
             cluster_boxes,
+            drop_bridge_boxes,
+            merge_fragment_clusters,
+            merge_overlapping_clusters,
             order_clusters,
             split_mixed_clusters,
             union_bbox,
         )
-        from segment_quality import (
-            has_dimension_value,
-            is_segment_worthy,
-            strip_foreign_glyphs,
+        from segment_quality import dedupe_regions
+        from page_scan import overlaps_existing_value
+        from page_value_filters import (
+            PageValueCandidate,
+            evaluate_scan_value,
+            normalize_page_value_text,
         )
-        from stroke_filter import is_stray_line
 
-        cx0, cy0, cx1, cy1 = coords
-        sub = image.crop((cx0, cy0, cx1, cy1))
-        sub_boxes = self.detect_regions(sub)
-        if len(sub_boxes) < 2:
-            return None
-
-        sub_clusters = order_clusters(
-            split_mixed_clusters(
-                cluster_boxes(
-                    sub_boxes,
-                    margin_ratio=0.45,  # tighter than the top level -> splits rows
-                    img_w=cx1 - cx0,
-                    img_h=cy1 - cy0,
+        def report(
+            *,
+            stage: str,
+            message: str,
+            percent: int,
+            completed: int = 0,
+            total: int = 0,
+            pass_current: int = 0,
+            pass_total: int = 0,
+            tile_current: int = 0,
+            tile_total: int = 0,
+            object_current: int = 0,
+            object_total: int = 0,
+            operation_label: str = "",
+            candidate_count: int = 0,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    stage=stage,
+                    message=message,
+                    percent=percent,
+                    completed=completed,
+                    total=total,
+                    pass_current=pass_current,
+                    pass_total=pass_total,
+                    tile_current=tile_current,
+                    tile_total=tile_total,
+                    object_current=object_current,
+                    object_total=object_total,
+                    operation_label=operation_label,
+                    candidate_count=candidate_count,
                 )
-            )
-        )
-        if len(sub_clusters) < 2:
-            return None
 
-        m = 4
-        out: list[dict[str, Any]] = []
-        for c in sub_clusters:
-            u = union_bbox(c)
-            rx0 = max(0, int(cx0 + u["x"] - m))
-            ry0 = max(0, int(cy0 + u["y"] - m))
-            rx1 = min(image.width, int(cx0 + u["x"] + u["width"] + m))
-            ry1 = min(image.height, int(cy0 + u["y"] + u["height"] + m))
-            if rx1 - rx0 < 1 or ry1 - ry0 < 1:
+        report(
+            stage="preparing",
+            message="Preparing source-resolution scan and deskew",
+            percent=4,
+        )
+        report(
+            stage="detecting",
+            message="Starting bounded detector-only localization",
+            percent=7,
+        )
+        detection_state = {"completed": 0, "total": 0}
+
+        def report_detection_pass(
+            *,
+            phase: str,
+            completed: int,
+            total: int,
+            state: str,
+            label: str,
+            proposals: int,
+            deskew_angle: float,
+            pass_current: int,
+            pass_total: int,
+            tile_current: int,
+            tile_total: int,
+        ) -> None:
+            detection_state["completed"] = completed
+            detection_state["total"] = total
+            deskew = (
+                f"; deskew {deskew_angle:+.2f} deg"
+                if deskew_angle != 0.0
+                else ""
+            )
+            tile_text = (
+                f"; tile {tile_current} of {tile_total}"
+                if tile_total > 1
+                else ""
+            )
+            action = "Running" if state == "running" else "Completed"
+            phase_progress = {
+                "proposing": (7, 3, "proposal"),
+                "detecting": (10, 12, "detection"),
+                "refining": (22, 8, "refinement"),
+            }
+            percent_start, percent_span, pass_name = phase_progress.get(
+                phase,
+                (7, 23, "detection"),
+            )
+            report(
+                stage=phase,
+                message=(
+                    f"{action} {pass_name} pass {pass_current} of {pass_total}"
+                    f"{tile_text}: {label} ({proposals} proposals{deskew})"
+                ),
+                percent=(
+                    percent_start
+                    + int(percent_span * completed / max(total, 1))
+                ),
+                completed=completed,
+                total=total,
+                pass_current=pass_current,
+                pass_total=pass_total,
+                tile_current=tile_current,
+                tile_total=tile_total,
+                operation_label=label,
+                candidate_count=proposals,
+            )
+
+        boxes = self.detect_regions(
+            image,
+            progress_callback=report_detection_pass,
+        )
+        # The NOTES paragraph is lifted out BEFORE clustering: its lines are not
+        # dimensions (they would all be dropped downstream), and leaving them in
+        # lets a note line bridge into a neighbouring callout's cluster. The
+        # region is added back untouched just before returning.
+        notes_region, notes_idx = self._detect_notes_block(boxes)
+        if notes_idx:
+            consumed = set(notes_idx)
+            boxes = [b for i, b in enumerate(boxes) if i not in consumed]
+        report(
+            stage="detecting",
+            message=f"Detected {len(boxes)} region proposals",
+            percent=30,
+            completed=detection_state["completed"],
+            total=detection_state["total"],
+            candidate_count=len(boxes),
+        )
+
+        grouping_units = 5
+        # Drop cross-column bridge boxes before clustering so separate
+        # dimensions (e.g. Ø174,07 and Ø175,32) don't fuse into one cluster.
+        report(
+            stage="grouping",
+            message=f"Filtering bridge boxes from {len(boxes)} proposals",
+            percent=30,
+            completed=0,
+            total=grouping_units,
+            operation_label="Bridge filtering",
+            candidate_count=len(boxes),
+        )
+        boxes = drop_bridge_boxes(boxes)
+        report(
+            stage="grouping",
+            message=f"Kept {len(boxes)} proposals after bridge filtering",
+            percent=32,
+            completed=1,
+            total=grouping_units,
+            operation_label="Bridge filtering",
+            candidate_count=len(boxes),
+        )
+        iw, ih = image.size
+        report(
+            stage="grouping",
+            message=f"Spatially grouping {len(boxes)} nearby proposals",
+            percent=32,
+            completed=1,
+            total=grouping_units,
+            operation_label="Spatial grouping",
+            candidate_count=len(boxes),
+        )
+        clustered = cluster_boxes(
+            boxes,
+            margin_ratio=cluster_margin,
+            img_w=iw,
+            img_h=ih,
+        )
+        report(
+            stage="grouping",
+            message=f"Built {len(clustered)} initial candidate objects",
+            percent=34,
+            completed=2,
+            total=grouping_units,
+            operation_label="Spatial grouping",
+            candidate_count=len(clustered),
+        )
+        report(
+            stage="grouping",
+            message=f"Merging small fragments into {len(clustered)} candidates",
+            percent=34,
+            completed=2,
+            total=grouping_units,
+            operation_label="Fragment merging",
+            candidate_count=len(clustered),
+        )
+        clustered = merge_fragment_clusters(clustered)
+        report(
+            stage="grouping",
+            message=f"Kept {len(clustered)} candidates after fragment merging",
+            percent=37,
+            completed=3,
+            total=grouping_units,
+            operation_label="Fragment merging",
+            candidate_count=len(clustered),
+        )
+        report(
+            stage="grouping",
+            message=f"Separating mixed orientations in {len(clustered)} candidates",
+            percent=37,
+            completed=3,
+            total=grouping_units,
+            operation_label="Orientation splitting",
+            candidate_count=len(clustered),
+        )
+        clusters = order_clusters(split_mixed_clusters(clustered))
+
+        report(
+            stage="grouping",
+            message=f"Prepared {len(clusters)} candidates for bounded refinement",
+            percent=39,
+            completed=4,
+            total=grouping_units,
+            operation_label="Orientation splitting",
+            candidate_count=len(clusters),
+        )
+
+        def report_cluster_refinement(
+            *,
+            completed: int,
+            total: int,
+            state: str,
+            label: str,
+            candidate_count: int,
+        ) -> None:
+            action = "Refining" if state == "running" else "Completed"
+            if state == "skipped":
+                action = "Skipped"
+            pass_current = (
+                completed + 1
+                if state == "running"
+                else completed
+            )
+            report(
+                stage="grouping",
+                message=f"{action} detector-only {label}",
+                percent=(
+                    39 + int(2 * completed / max(total, 1))
+                    if total > 0
+                    else 39
+                ),
+                completed=4,
+                total=grouping_units,
+                pass_current=(min(pass_current, total) if total > 0 else 0),
+                pass_total=total,
+                operation_label="Detector-only cluster refinement",
+                candidate_count=candidate_count,
+            )
+
+        clusters = self._expand_clusters(
+            image,
+            clusters,
+            cluster_margin=cluster_margin,
+            progress_callback=report_cluster_refinement,
+        )
+        # Re-join any fragments of one dimension that landed in overlapping
+        # boxes (e.g. a value split from its REF. tag onto a perpendicular axis).
+        report(
+            stage="grouping",
+            message=f"Merging overlaps among {len(clusters)} candidate objects",
+            percent=41,
+            completed=4,
+            total=grouping_units,
+            operation_label="Overlap merging",
+            candidate_count=len(clusters),
+        )
+        clusters = order_clusters(merge_overlapping_clusters(clusters))
+        clusters_before_existing = len(clusters)
+        if existing_value_boxes:
+            clusters = [
+                cluster
+                for cluster in clusters
+                if not overlaps_existing_value(
+                    union_bbox(cluster),
+                    existing_value_boxes,
+                )
+            ]
+        skipped_existing_count = clusters_before_existing - len(clusters)
+        report(
+            stage="grouping",
+            message=(
+                f"Prepared {len(clusters)} candidate objects; "
+                f"skipped {skipped_existing_count} existing balloons"
+            ),
+            percent=42,
+            completed=grouping_units,
+            total=grouping_units,
+            operation_label="Grouping complete",
+            candidate_count=len(clusters),
+        )
+
+        if should_dump(request_override=debug_dump):
+            from debug_dump import dump_segment
+
+            dump_segment(
+                image,
+                boxes,
+                [union_bbox(c) for c in clusters],
+                enabled=True,
+                force=dump_force() or debug_dump_force,
+            )
+
+        if detection_only:
+            detected_regions: list[dict[str, Any]] = []
+            for cluster in clusters:
+                ub = union_bbox(cluster)
+                detected_regions.append(
+                    {
+                        "bbox": {
+                            "x": round(ub["x"], 1),
+                            "y": round(ub["y"], 1),
+                            "width": round(ub["width"], 1),
+                            "height": round(ub["height"], 1),
+                        },
+                        "detection_confidence": max(
+                            (
+                                float(box.get("conf", 0.0))
+                                for box in cluster
+                            ),
+                            default=0.0,
+                        ),
+                    }
+                )
+            return {
+                "count": len(detected_regions),
+                "skipped_existing_count": skipped_existing_count,
+                "regions": detected_regions,
+            }
+
+        margin = 6  # a few px of context around each cluster crop
+        regions: list[dict[str, Any]] = []
+        cluster_total = len(clusters)
+        for cluster_index, cluster in enumerate(clusters, start=1):
+            report(
+                stage="recognizing",
+                message=f"Recognizing object {cluster_index} of {cluster_total}",
+                percent=42 + int(48 * (cluster_index - 1) / max(cluster_total, 1)),
+                completed=cluster_index - 1,
+                total=cluster_total,
+                object_current=cluster_index,
+                object_total=cluster_total,
+                operation_label=f"Object {cluster_index}",
+                candidate_count=cluster_total,
+            )
+            ub = union_bbox(cluster)
+            cx0 = max(0, int(ub["x"] - margin))
+            cy0 = max(0, int(ub["y"] - margin))
+            cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
+            cy1 = min(ih, int(ub["y"] + ub["height"] + margin))
+            if cx1 - cx0 < 1 or cy1 - cy0 < 1:
                 continue
-            crop = image.crop((rx0, ry0, rx1, ry1))
+
+            sub = image.crop((cx0, cy0, cx1, cy1))
             res = self.recognize(
-                crop,
+                sub,
                 debug_dump=debug_dump,
                 debug_dump_force=debug_dump_force,
-                compute_text_bbox=False,
+                compute_text_bbox=False,  # balloon snaps to cluster union, not text_bbox
             )
-            t = strip_foreign_glyphs((res.get("text") or "").strip())
-            t = self._prefer_detection_text(c, res, t)
-            if not t or not is_segment_worthy(t) or is_stray_line(crop, t):
+            text = (res.get("text") or "").strip()
+            if not text:
                 continue
-            if not has_dimension_value(t):
-                continue
-            bbox = {
-                "x": round(cx0 + u["x"], 1),
-                "y": round(cy0 + u["y"], 1),
-                "width": round(u["width"], 1),
-                "height": round(u["height"], 1),
-            }
-            out.append(self._region_from_result(res, bbox, t))
 
-        return out if len(out) >= 2 else None
+            # Snap balloon to the full detected cluster, not a tight OCR sliver.
+            bbox = {
+                "x": round(ub["x"], 1),
+                "y": round(ub["y"], 1),
+                "width": round(ub["width"], 1),
+                "height": round(ub["height"], 1),
+            }
+
+            regions.append(
+                {
+                    "bbox": bbox,
+                    "text": text,
+                    "confidence": res.get("confidence", 0.0),
+                    "type": res.get("type"),
+                    "orientation": res.get("orientation", "horizontal"),
+                    "rotation": res.get("rotation", 0),
+                    "needs_review": res.get("needs_review", False),
+                    "agreement": res.get("agreement", 0.0),
+                    "engine": res.get("engine", "paddleocr"),
+                    "symbols_detected": res.get("symbols_detected"),
+                }
+            )
+
+            report(
+                stage="recognizing",
+                message=f"Recognized object {cluster_index} of {cluster_total}",
+                percent=42 + int(48 * cluster_index / max(cluster_total, 1)),
+                completed=cluster_index,
+                total=cluster_total,
+                object_current=cluster_index,
+                object_total=cluster_total,
+                operation_label=f"Object {cluster_index}",
+                candidate_count=cluster_total,
+            )
+
+        report(
+            stage="finalizing",
+            message="Checking and merging scan results",
+            percent=94,
+            completed=cluster_total,
+            total=cluster_total,
+            candidate_count=cluster_total,
+        )
+        regions = self._complete_angle_regions(image, regions)
+        regions = dedupe_regions(regions)
+        recognized_count = len(regions)
+        filtered_regions: list[dict[str, Any]] = []
+        candidate_outcomes: list[dict[str, Any]] = []
+        filter_rule_counts: dict[str, int] = {}
+        for region in regions:
+            text = normalize_page_value_text(str(region.get("text") or ""))
+            decision = evaluate_scan_value(
+                PageValueCandidate(text=text, bbox=region["bbox"]),
+                scope_kind="section",
+                table_masks=(),
+            )
+            filter_rule_counts[decision.rule_name] = (
+                filter_rule_counts.get(decision.rule_name, 0) + 1
+            )
+            state = "eligible" if decision.accepted else "excluded"
+            candidate_outcomes.append(
+                {
+                    "bbox": dict(region["bbox"]),
+                    "state": state,
+                    "text": text,
+                    "recognized": True,
+                    "reason": decision.reason,
+                    "rule": decision.rule_name,
+                }
+            )
+            if decision.accepted:
+                filtered_regions.append(
+                    {
+                        **region,
+                        "text": text,
+                        "recognized": True,
+                        "page_filter_rule": decision.rule_name,
+                        "page_filter_reason": decision.reason,
+                    }
+                )
+        regions = filtered_regions
+        report(
+            stage="finalizing",
+            message=f"Prepared {len(regions)} balloon candidates",
+            percent=99,
+            completed=len(regions),
+            total=len(regions),
+            candidate_count=len(regions),
+        )
+        # Appended last so the dimension-oriented filters, which reason about
+        # values, never discard or reshape the notes block. Re-read from an
+        # enlarged crop when that resolves the paragraph more cleanly.
+        if notes_region is not None:
+            bounds = notes_region.pop("_bounds", None)
+            block_line_h = notes_region.pop("_line_h", 0.0)
+            if bounds is not None:
+                better = self._reread_notes_block(image, bounds, block_line_h)
+                if better:
+                    notes_region["text"] = "\n".join(better)
+            regions.append(notes_region)
+
+        excluded_count = recognized_count - len(regions)
+        return {
+            "count": len(regions),
+            "detected_count": cluster_total,
+            "recognized_count": recognized_count,
+            "eligible_count": len(regions),
+            "excluded_count": excluded_count,
+            "review_count": 0,
+            "unread_count": max(0, cluster_total - recognized_count),
+            "skipped_existing_count": skipped_existing_count,
+            "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
+            "regions": regions,
+            "review_candidates": [],
+            "candidate_outcomes": candidate_outcomes,
+        }
+
+    def segment_page(
+        self,
+        image: Image.Image,
+        *,
+        layout: Any | None = None,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+        cluster_margin: float = 0.72,
+        progress_callback: Callable[..., None] | None = None,
+        existing_value_boxes: Sequence[Mapping[str, float]] = (),
+    ) -> dict[str, Any]:
+        """Scan a whole page through the bounded technical-value route.
+
+        Section scanning intentionally remains in :meth:`segment`.  This page
+        path runs only standalone detection (0/90 degrees) on adaptive panels,
+        deduplicates atomic boxes without grouping neighbours, recognizes crops
+        in standalone model batches, performs bounded recognition-only recovery,
+        applies ``page_value_filters.py`` as a cost gate, then rereads every
+        eligible/review object through the complete Draw Value OCR pipeline
+        before final filtering and publication.
+        """
+
+        from collections import Counter
+
+        from detection_passes import (
+            DetectionTile,
+            build_primary_detection_image,
+            detection_primary_target_edge,
+            detection_tile_target_edge,
+            map_quarter_turn_box_to_source,
+            rotate_for_detection,
+        )
+        from page_layout import (
+            PageLayout,
+            analyze_page_layout,
+            mask_table_regions,
+        )
+        from page_scan import (
+            PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+            PAGE_SCAN_MAX_DETECTOR_CALLS,
+            PAGE_SCAN_MAX_TILES,
+            PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            PAGE_SCAN_ROTATIONS_CW,
+            assign_candidate_ids,
+            deduplicate_page_candidates,
+            map_tile_candidate,
+            overlaps_existing_value,
+        )
+        from page_candidate_recovery import (
+            CONTEXT_MAX_CANDIDATES,
+            RECOVERY_MAX_CANDIDATES,
+            assess_authoritative_result,
+            authoritative_result_needs_retry,
+            build_authoritative_crops,
+            build_context_crop,
+            build_recovery_crops,
+            reconstruct_line_context,
+            resolve_authoritative_hypotheses,
+            resolve_recovery_consensus,
+            result_needs_recovery,
+            result_needs_second_recovery,
+            select_recovery_record_indexes,
+        )
+        from page_value_filters import (
+            PageValueCandidate,
+            evaluate_page_value,
+            needs_expanded_filter_context,
+            normalize_page_value_text,
+        )
+
+        def report(
+            *,
+            stage: str,
+            message: str,
+            percent: int,
+            completed: int = 0,
+            total: int = 0,
+            pass_current: int = 0,
+            pass_total: int = 0,
+            tile_current: int = 0,
+            tile_total: int = 0,
+            object_current: int = 0,
+            object_total: int = 0,
+            batch_current: int = 0,
+            batch_total: int = 0,
+            operation_label: str = "",
+            candidate_count: int = 0,
+            overlay: dict[str, object] | None = None,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    stage=stage,
+                    message=message,
+                    percent=percent,
+                    completed=completed,
+                    total=total,
+                    pass_current=pass_current,
+                    pass_total=pass_total,
+                    tile_current=tile_current,
+                    tile_total=tile_total,
+                    object_current=object_current,
+                    object_total=object_total,
+                    batch_current=batch_current,
+                    batch_total=batch_total,
+                    operation_label=operation_label,
+                    candidate_count=candidate_count,
+                    overlay=overlay,
+                )
+
+        if not getattr(self, "_text_detector_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires the standalone "
+                "PaddleOCR text detector; section scanning remains available"
+            )
+        if not getattr(self, "_page_batch_recognition_available", False):
+            raise RuntimeError(
+                "Whole-page auto-ballooning requires standalone PaddleOCR "
+                "orientation and recognition models; the slow per-object "
+                "fallback is intentionally disabled"
+            )
+
+        # ``cluster_margin`` remains in the public signature for compatibility
+        # with existing callers. Page mode deliberately performs no grouping.
+        _ = (cluster_margin, debug_dump, debug_dump_force)
+        page_size = image.size
+        if layout is None:
+            layout = analyze_page_layout(image)
+        if not isinstance(layout, PageLayout):
+            raise TypeError("segment_page layout must be a PageLayout")
+        if (layout.width, layout.height) != page_size:
+            raise ValueError("Page layout dimensions do not match the scan image")
+
+        masked_page = mask_table_regions(image, layout.table_masks)
+        tiles = [
+            DetectionTile(
+                x=panel.bbox.x,
+                y=panel.bbox.y,
+                width=panel.bbox.width,
+                height=panel.bbox.height,
+            )
+            for panel in layout.panels
+        ]
+        tile_total = len(tiles)
+        if tile_total < 1 or tile_total > PAGE_SCAN_MAX_TILES:
+            raise AssertionError("Whole-page layout exceeded eight panels")
+        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
+        if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
+            raise AssertionError("Whole-page scan exceeded sixteen detector calls")
+        page_candidates = []
+        panel_states = {
+            panel.panel_id: "pending" for panel in layout.panels
+        }
+        report(
+            stage="preparing",
+            message=(
+                f"Preparing {tile_total} adaptive panel"
+                f"{'s' if tile_total != 1 else ''}, "
+                f"{len(layout.table_masks)} table masks, and "
+                f"{detector_pass_total} detector-only passes"
+            ),
+            percent=10,
+            completed=0,
+            total=detector_pass_total,
+            tile_total=tile_total,
+            pass_total=detector_pass_total,
+            operation_label="Adaptive page layout",
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+            ),
+        )
+
+        detector_pass_index = 0
+        for tile_index, tile in enumerate(tiles, start=1):
+            panel_id = layout.panels[tile_index - 1].panel_id
+            panel_states[panel_id] = "active"
+            tile_image = masked_page.crop(tile.box)
+            primary_image = build_primary_detection_image(tile_image)
+            full_target_edge = max(
+                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+                detection_primary_target_edge(masked_page),
+            )
+            target_long_edge = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+            )
+            for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                detector_pass_index += 1
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Running detector-only pass {detector_pass_index} of "
+                        f"{detector_pass_total}: panel {tile_index} of "
+                        f"{tile_total}, {rotation_cw} deg"
+                    ),
+                    percent=(
+                        12
+                        + int(
+                            40
+                            * (detector_pass_index - 1)
+                            / max(detector_pass_total, 1)
+                        )
+                    ),
+                    completed=detector_pass_index - 1,
+                    total=detector_pass_total,
+                    pass_current=detector_pass_index,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Panel {panel_id} · {rotation_cw} deg · "
+                        f"{target_long_edge}px"
+                    ),
+                    candidate_count=len(page_candidates),
+                    overlay=layout.overlay(
+                        scope_kind="page",
+                        panel_states=panel_states,
+                    ),
+                )
+                rotated = rotate_for_detection(primary_image, rotation_cw)
+                detected_boxes = self._detector_only_boxes(
+                    rotated,
+                    target_long_edge=target_long_edge,
+                )
+                for detected in detected_boxes:
+                    restored = map_quarter_turn_box_to_source(
+                        detected,
+                        rotation_cw,
+                        tile_image.size,
+                    )
+                    if restored is None:
+                        continue
+                    mapped = map_tile_candidate(
+                        {
+                            "x": restored["x"],
+                            "y": restored["y"],
+                            "width": restored["w"],
+                            "height": restored["h"],
+                        },
+                        tile,
+                        tile_index=tile_index,
+                        page_size=page_size,
+                        detection_confidence=float(
+                            restored.get("conf", 0.0)
+                        ),
+                        pass_index=detector_pass_index,
+                        rotation_cw=rotation_cw,
+                        polygon=restored.get("polygon"),
+                    )
+                    if mapped is not None:
+                        page_candidates.append(mapped)
+
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Completed detector-only pass {detector_pass_index} "
+                        f"of {detector_pass_total}; collected "
+                        f"{len(page_candidates)} raw candidates"
+                    ),
+                    percent=(
+                        12
+                        + int(
+                            40
+                            * detector_pass_index
+                            / max(detector_pass_total, 1)
+                        )
+                    ),
+                    completed=detector_pass_index,
+                    total=detector_pass_total,
+                    pass_current=detector_pass_index,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Panel {panel_id} · {rotation_cw} deg complete"
+                    ),
+                    candidate_count=len(page_candidates),
+                )
+
+            panel_states[panel_id] = "completed"
+            report(
+                stage="detecting",
+                message=f"Completed panel {tile_index} of {tile_total}",
+                percent=(
+                    12
+                    + int(40 * detector_pass_index / max(detector_pass_total, 1))
+                ),
+                completed=detector_pass_index,
+                total=detector_pass_total,
+                pass_current=detector_pass_index,
+                pass_total=detector_pass_total,
+                tile_current=tile_index,
+                tile_total=tile_total,
+                operation_label=f"Panel {panel_id} complete",
+                candidate_count=len(page_candidates),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                ),
+            )
+
+        report(
+            stage="grouping",
+            message=(
+                f"Strictly deduplicating {len(page_candidates)} atomic "
+                "detector candidates"
+            ),
+            percent=54,
+            completed=0,
+            total=1,
+            tile_current=tile_total,
+            tile_total=tile_total,
+            pass_current=detector_pass_total,
+            pass_total=detector_pass_total,
+            operation_label="Atomic candidate deduplication",
+            candidate_count=len(page_candidates),
+        )
+        deduplicated_candidates = deduplicate_page_candidates(page_candidates)
+        duplicates_removed = len(page_candidates) - len(deduplicated_candidates)
+        new_candidates = [
+            candidate
+            for candidate in deduplicated_candidates
+            if not overlaps_existing_value(
+                candidate.bbox,
+                existing_value_boxes,
+            )
+        ]
+        skipped_existing_count = (
+            len(deduplicated_candidates) - len(new_candidates)
+        )
+        final_candidates = assign_candidate_ids(new_candidates)
+        neutral_overlay_candidates = [
+            {
+                "id": candidate.candidate_id,
+                "bbox": dict(candidate.bbox),
+                "state": "detected",
+            }
+            for candidate in final_candidates
+        ]
+        report(
+            stage="grouping",
+            message=(
+                f"Prepared {len(final_candidates)} page objects; "
+                f"removed {duplicates_removed} same-object duplicates and "
+                f"skipped {skipped_existing_count} existing balloons"
+            ),
+            percent=57,
+            completed=1,
+            total=1,
+            tile_current=tile_total,
+            tile_total=tile_total,
+            pass_current=detector_pass_total,
+            pass_total=detector_pass_total,
+            operation_label="Atomic candidate deduplication complete",
+            candidate_count=len(final_candidates),
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+                candidates=neutral_overlay_candidates,
+            ),
+        )
+
+        margin = 6
+        page_width, page_height = page_size
+        detected_count = len(final_candidates)
+        primary_recognized_count = 0
+        ocr_records: list[dict[str, Any]] = []
+        candidate_crops: list[Image.Image] = []
+        for candidate in final_candidates:
+            bbox = candidate.bbox
+            x0 = max(0, int(bbox["x"] - margin))
+            y0 = max(0, int(bbox["y"] - margin))
+            x1 = min(
+                page_width,
+                int(bbox["x"] + bbox["width"] + margin + 0.999),
+            )
+            y1 = min(
+                page_height,
+                int(bbox["y"] + bbox["height"] + margin + 0.999),
+            )
+            candidate_crops.append(
+                image.crop((x0, y0, x1, y1))
+                if x1 > x0 and y1 > y0
+                else Image.new("RGB", (1, 1), (255, 255, 255))
+            )
+
+        primary_batch_total = (
+            (detected_count + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        for batch_index, batch_start in enumerate(
+            range(0, detected_count, PAGE_SCAN_RECOGNITION_BATCH_SIZE),
+            start=1,
+        ):
+            batch_end = min(
+                detected_count,
+                batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            )
+            report(
+                stage="recognizing",
+                message=(
+                    f"Primary recognition batch {batch_index} of "
+                    f"{primary_batch_total} ({batch_start + 1}–{batch_end} "
+                    f"of {detected_count} objects)"
+                ),
+                percent=(
+                    59
+                    + int(
+                        17
+                        * (batch_index - 1)
+                        / max(primary_batch_total, 1)
+                    )
+                ),
+                completed=batch_index - 1,
+                total=primary_batch_total,
+                batch_current=batch_index,
+                batch_total=primary_batch_total,
+                operation_label=(
+                    f"Primary recognition {batch_index}/{primary_batch_total}"
+                ),
+                candidate_count=detected_count,
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=neutral_overlay_candidates,
+                ),
+            )
+            batch_results = self._recognize_page_batch(
+                candidate_crops[batch_start:batch_end],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            )
+            if len(batch_results) != batch_end - batch_start:
+                raise RuntimeError(
+                    "Page recognition batch returned an unexpected result count"
+                )
+            for candidate, result in zip(
+                final_candidates[batch_start:batch_end],
+                batch_results,
+            ):
+                text = str(result.get("text") or "").strip()
+                if text:
+                    primary_recognized_count += 1
+                ocr_records.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_id": candidate.candidate_id,
+                        "bbox": candidate.bbox,
+                        "polygon": [list(point) for point in candidate.polygon],
+                        "text": text,
+                        "result": result,
+                        "recognized": bool(text),
+                        "context_text": "",
+                    }
+                )
+            report(
+                stage="recognizing",
+                message=(
+                    f"Completed primary batch {batch_index} of "
+                    f"{primary_batch_total}; read {primary_recognized_count}"
+                ),
+                percent=(
+                    59
+                    + int(
+                        17 * batch_index / max(primary_batch_total, 1)
+                    )
+                ),
+                completed=batch_index,
+                total=primary_batch_total,
+                batch_current=batch_index,
+                batch_total=primary_batch_total,
+                operation_label=(
+                    f"Primary recognition {batch_index}/{primary_batch_total}"
+                ),
+                candidate_count=detected_count,
+            )
+
+        selected_recovery_indexes = select_recovery_record_indexes(
+            ocr_records,
+            maximum=RECOVERY_MAX_CANDIDATES,
+        )
+        selected_recovery_set = set(selected_recovery_indexes)
+        all_doubtful_indexes = {
+            index
+            for index, record in enumerate(ocr_records)
+            if result_needs_recovery(record["result"])
+        }
+        budget_exhausted_indexes = (
+            all_doubtful_indexes - selected_recovery_set
+        )
+        recovery_attempts: dict[int, list[dict[str, Any]]] = {
+            index: [] for index in selected_recovery_indexes
+        }
+        recovery_crops = {
+            index: build_recovery_crops(
+                image,
+                ocr_records[index]["bbox"],
+                ocr_records[index]["polygon"],
+            )
+            for index in selected_recovery_indexes
+        }
+        recovery_overlay_candidates = [
+            {
+                "id": record["candidate_id"],
+                "bbox": dict(record["bbox"]),
+                "state": (
+                    "recovering"
+                    if index in selected_recovery_set
+                    else "detected"
+                ),
+                "text": record["text"],
+            }
+            for index, record in enumerate(ocr_records)
+        ]
+        first_recovery_batch_total = (
+            (
+                len(selected_recovery_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        for first_batch_index, batch_start in enumerate(
+            range(
+                0,
+                len(selected_recovery_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ),
+            start=1,
+        ):
+            batch_indexes = selected_recovery_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            batch_profile = recovery_crops[batch_indexes[0]][0].profile
+            report(
+                stage="recovering",
+                message=(
+                    f"Recovery pass 1 batch {first_batch_index} of "
+                    f"{first_recovery_batch_total}: "
+                    f"{batch_profile.replace('_', ' ')}"
+                ),
+                percent=(
+                    77
+                    + int(
+                        6
+                        * (first_batch_index - 1)
+                        / max(first_recovery_batch_total, 1)
+                    )
+                ),
+                completed=first_batch_index - 1,
+                total=first_recovery_batch_total,
+                batch_current=first_batch_index,
+                batch_total=first_recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 1 "
+                    f"{first_batch_index}/{first_recovery_batch_total}"
+                ),
+                candidate_count=len(selected_recovery_indexes),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+            )
+            results = self._recognize_page_batch(
+                [recovery_crops[index][0].image for index in batch_indexes],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile=batch_profile,
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page recovery batch returned an unexpected result count"
+                )
+            for record_index, result in zip(batch_indexes, results):
+                recovery_attempts[record_index].append(result)
+            report(
+                stage="recovering",
+                message=(
+                    f"Completed recovery pass 1 batch {first_batch_index} of "
+                    f"{first_recovery_batch_total}"
+                ),
+                percent=(
+                    77
+                    + int(
+                        6
+                        * first_batch_index
+                        / max(first_recovery_batch_total, 1)
+                    )
+                ),
+                completed=first_batch_index,
+                total=first_recovery_batch_total,
+                batch_current=first_batch_index,
+                batch_total=first_recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 1 "
+                    f"{first_batch_index}/{first_recovery_batch_total}"
+                ),
+                candidate_count=len(selected_recovery_indexes),
+            )
+
+        second_recovery_indexes = [
+            index
+            for index in selected_recovery_indexes
+            if recovery_attempts[index]
+            and result_needs_second_recovery(
+                ocr_records[index]["result"],
+                recovery_attempts[index][0],
+            )
+        ]
+        second_recovery_batch_total = (
+            (
+                len(second_recovery_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        recovery_batch_total = (
+            first_recovery_batch_total + second_recovery_batch_total
+        )
+        for second_batch_index, batch_start in enumerate(
+            range(
+                0,
+                len(second_recovery_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ),
+            start=1,
+        ):
+            recovery_batch_index = (
+                first_recovery_batch_total + second_batch_index
+            )
+            batch_indexes = second_recovery_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            batch_profile = recovery_crops[batch_indexes[0]][1].profile
+            report(
+                stage="recovering",
+                message=(
+                    f"Recovery pass 2 batch {second_batch_index} of "
+                    f"{second_recovery_batch_total}: "
+                    f"{batch_profile.replace('_', ' ')}"
+                ),
+                percent=(
+                    83
+                    + int(
+                        6
+                        * (second_batch_index - 1)
+                        / max(second_recovery_batch_total, 1)
+                    )
+                ),
+                completed=recovery_batch_index - 1,
+                total=recovery_batch_total,
+                batch_current=recovery_batch_index,
+                batch_total=recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 2 "
+                    f"{second_batch_index}/{second_recovery_batch_total}"
+                ),
+                candidate_count=len(second_recovery_indexes),
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+            )
+            results = self._recognize_page_batch(
+                [recovery_crops[index][1].image for index in batch_indexes],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile=batch_profile,
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page recovery batch returned an unexpected result count"
+                )
+            for record_index, result in zip(batch_indexes, results):
+                recovery_attempts[record_index].append(result)
+            report(
+                stage="recovering",
+                message=(
+                    f"Completed recovery pass 2 batch {second_batch_index} of "
+                    f"{second_recovery_batch_total}"
+                ),
+                percent=(
+                    83
+                    + int(
+                        6
+                        * second_batch_index
+                        / max(second_recovery_batch_total, 1)
+                    )
+                ),
+                completed=recovery_batch_index,
+                total=recovery_batch_total,
+                batch_current=recovery_batch_index,
+                batch_total=recovery_batch_total,
+                operation_label=(
+                    f"Recovery pass 2 "
+                    f"{second_batch_index}/{second_recovery_batch_total}"
+                ),
+                candidate_count=len(second_recovery_indexes),
+            )
+
+        for index, record in enumerate(ocr_records):
+            resolved = resolve_recovery_consensus(
+                record["result"],
+                recovery_attempts.get(index, ()),
+                attempted=index in selected_recovery_set,
+                budget_exhausted=index in budget_exhausted_indexes,
+            )
+            record["result"] = resolved
+            normalized_text = normalize_page_value_text(
+                str(resolved.get("text") or "")
+            )
+            resolved["text"] = normalized_text
+            record["text"] = normalized_text
+            record["recognized"] = bool(record["text"])
+
+        context_indexes = [
+            index
+            for index, record in enumerate(ocr_records)
+            if record["recognized"]
+            and needs_expanded_filter_context(
+                record["text"],
+                record["bbox"],
+            )
+        ]
+        for index in context_indexes:
+            ocr_records[index]["context_text"] = reconstruct_line_context(
+                ocr_records[index],
+                ocr_records,
+            )
+        context_ocr_indexes = context_indexes[:CONTEXT_MAX_CANDIDATES]
+        context_batch_total = (
+            (
+                len(context_ocr_indexes)
+                + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+                - 1
+            )
+            // PAGE_SCAN_RECOGNITION_BATCH_SIZE
+        )
+        for context_batch_index, batch_start in enumerate(
+            range(
+                0,
+                len(context_ocr_indexes),
+                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+            ),
+            start=1,
+        ):
+            batch_indexes = context_ocr_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            report(
+                stage="context",
+                message=(
+                    f"Context batch {context_batch_index} of "
+                    f"{context_batch_total} for exclusion-prone values"
+                ),
+                percent=(
+                    90
+                    + int(
+                        4
+                        * (context_batch_index - 1)
+                        / max(context_batch_total, 1)
+                    )
+                ),
+                completed=context_batch_index - 1,
+                total=context_batch_total,
+                batch_current=context_batch_index,
+                batch_total=context_batch_total,
+                operation_label=(
+                    f"Filter context {context_batch_index}/{context_batch_total}"
+                ),
+                candidate_count=len(context_ocr_indexes),
+            )
+            results = self._recognize_page_batch(
+                [
+                    build_context_crop(image, ocr_records[index]["bbox"])
+                    for index in batch_indexes
+                ],
+                batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                profile="context_recognition",
+            )
+            if len(results) != len(batch_indexes):
+                raise RuntimeError(
+                    "Page context batch returned an unexpected result count"
+                )
+            for record_index, context_result in zip(batch_indexes, results):
+                parts = [
+                    ocr_records[record_index]["context_text"],
+                    str(context_result.get("raw_ocr") or "").strip(),
+                    str(context_result.get("text") or "").strip(),
+                ]
+                ocr_records[record_index]["context_text"] = " ".join(
+                    dict.fromkeys(part for part in parts if part)
+                )
+            report(
+                stage="context",
+                message=(
+                    f"Completed context batch {context_batch_index} of "
+                    f"{context_batch_total}"
+                ),
+                percent=(
+                    90
+                    + int(
+                        4
+                        * context_batch_index
+                        / max(context_batch_total, 1)
+                    )
+                ),
+                completed=context_batch_index,
+                total=context_batch_total,
+                batch_current=context_batch_index,
+                batch_total=context_batch_total,
+                operation_label=(
+                    f"Filter context {context_batch_index}/{context_batch_total}"
+                ),
+                candidate_count=len(context_ocr_indexes),
+            )
+
+        table_masks = [mask.to_dict() for mask in layout.table_masks]
+        hard_exclusion_rules = {
+            "table_region",
+            "detail_view_section",
+            "scale_information",
+            "date",
+            "revision_history",
+            "note_information",
+            "document_metadata",
+        }
+
+        def build_filter_candidates() -> list[PageValueCandidate]:
+            return [
+                PageValueCandidate(
+                    text=record["text"],
+                    bbox=record["bbox"],
+                    context_text=record["context_text"],
+                )
+                for record in ocr_records
+            ]
+
+        def resolve_candidate_state(
+            record: dict[str, Any],
+            decision: Any,
+            *,
+            authoritative: bool,
+        ) -> tuple[str, str]:
+            result = record["result"]
+            review_reason = str(result.get("review_reason") or "").strip()
+            if decision.rule_name in hard_exclusion_rules:
+                return "excluded", decision.reason
+            if not record["recognized"]:
+                return (
+                    "review",
+                    review_reason or "Accurate recognition returned no text",
+                )
+            if result.get("authoritative_review_required"):
+                return (
+                    "review",
+                    review_reason
+                    or "Authoritative OCR requires manual confirmation",
+                )
+            if not decision.accepted:
+                if (
+                    decision.rule_name == "no_numeric_component"
+                    and (
+                        result.get("stable_alpha")
+                        or not result.get("needs_review", False)
+                    )
+                ):
+                    return "excluded", decision.reason
+                return (
+                    "review",
+                    review_reason
+                    or "The detected object could not be read as an engineering value",
+                )
+            # Full Draw Value OCR is authoritative. Its confidence/retry flag
+            # is diagnostic and must not demote a structurally valid value.
+            if not authoritative and result.get("needs_review", False):
+                return (
+                    "review",
+                    review_reason
+                    or "Recognition remains genuinely ambiguous after recovery",
+                )
+            return "eligible", decision.reason
+
+        # Keep the current fast page policy as the cost gate. Only objects that
+        # would be published or reviewed receive the expensive Draw Value OCR.
+        preliminary_filter_candidates = build_filter_candidates()
+        preliminary_decisions: list[Any] = []
+        authoritative_indexes: list[int] = []
+        for filter_index, (record, filter_candidate) in enumerate(
+            zip(ocr_records, preliminary_filter_candidates),
+            start=1,
+        ):
+            report(
+                stage="filtering",
+                message=(
+                    f"Checking page policy for object {filter_index} of "
+                    f"{detected_count}"
+                ),
+                percent=94 + int(filter_index / max(detected_count, 1)),
+                completed=filter_index,
+                total=detected_count,
+                object_current=filter_index,
+                object_total=detected_count,
+                operation_label="Preliminary page value filters",
+                candidate_count=detected_count,
+            )
+            decision = evaluate_page_value(
+                filter_candidate,
+                page_candidates=preliminary_filter_candidates,
+                table_masks=table_masks,
+            )
+            preliminary_decisions.append(decision)
+            preliminary_state, preliminary_reason = resolve_candidate_state(
+                record,
+                decision,
+                authoritative=False,
+            )
+            record["preliminary_state"] = preliminary_state
+            record["preliminary_reason"] = preliminary_reason
+            if preliminary_state != "excluded":
+                authoritative_indexes.append(filter_index - 1)
+
+        authoritative_total = len(authoritative_indexes)
+        for reread_index, record_index in enumerate(
+            authoritative_indexes,
+            start=1,
+        ):
+            record = ocr_records[record_index]
+            report(
+                stage="rereading",
+                message=(
+                    f"Reading final value {reread_index} of "
+                    f"{authoritative_total} with Draw Value OCR"
+                ),
+                percent=(
+                    95
+                    + int(
+                        3
+                        * (reread_index - 1)
+                        / max(authoritative_total, 1)
+                    )
+                ),
+                completed=reread_index - 1,
+                total=authoritative_total,
+                object_current=reread_index,
+                object_total=authoritative_total,
+                operation_label="Authoritative value OCR",
+                candidate_count=authoritative_total,
+            )
+            previous_result = dict(record["result"])
+            record["preliminary_result"] = previous_result
+            authoritative_crops = build_authoritative_crops(
+                image,
+                record["bbox"],
+                record["polygon"],
+            )
+            tight_crop = authoritative_crops[0]
+            tight_result = self.recognize(
+                tight_crop.image,
+                debug_dump=debug_dump,
+                debug_dump_force=debug_dump_force,
+                compute_text_bbox=True,
+            )
+            authoritative_attempts = [
+                assess_authoritative_result(tight_result, tight_crop)
+            ]
+            if authoritative_result_needs_retry(authoritative_attempts[0]):
+                padded_crop = authoritative_crops[1]
+                padded_result = self.recognize(
+                    padded_crop.image,
+                    debug_dump=debug_dump,
+                    debug_dump_force=debug_dump_force,
+                    compute_text_bbox=True,
+                )
+                authoritative_attempts.append(
+                    assess_authoritative_result(padded_result, padded_crop)
+                )
+            accurate_result = resolve_authoritative_hypotheses(
+                previous_result,
+                authoritative_attempts,
+            )
+            accurate_text = str(accurate_result.get("text") or "")
+            record["result"] = accurate_result
+            record["text"] = accurate_text
+            record["recognized"] = bool(accurate_text)
+            record["authoritative_reread"] = True
+            report(
+                stage="rereading",
+                message=(
+                    f"Read final value {reread_index} of "
+                    f"{authoritative_total}"
+                ),
+                percent=(
+                    95
+                    + int(
+                        3 * reread_index / max(authoritative_total, 1)
+                    )
+                ),
+                completed=reread_index,
+                total=authoritative_total,
+                object_current=reread_index,
+                object_total=authoritative_total,
+                operation_label="Authoritative value OCR",
+                candidate_count=authoritative_total,
+            )
+
+        # Refresh cheap neighbouring-token context after authoritative text has
+        # replaced preliminary OCR. Existing expanded context reads are kept.
+        for record in ocr_records:
+            if not record["recognized"] or not needs_expanded_filter_context(
+                record["text"],
+                record["bbox"],
+            ):
+                continue
+            reconstructed = reconstruct_line_context(record, ocr_records)
+            record["context_text"] = " ".join(
+                dict.fromkeys(
+                    part
+                    for part in (record["context_text"], reconstructed)
+                    if part
+                )
+            )
+
+        filter_candidates = build_filter_candidates()
+        filter_rule_counts: Counter[str] = Counter()
+        regions: list[dict[str, Any]] = []
+        review_candidates: list[dict[str, Any]] = []
+        candidate_outcomes: list[dict[str, Any]] = []
+        filtered_overlay_candidates: list[dict[str, object]] = []
+
+        for filter_index, (record, filter_candidate) in enumerate(
+            zip(ocr_records, filter_candidates),
+            start=1,
+        ):
+            report(
+                stage="filtering",
+                message=(
+                    f"Resolving final state for object {filter_index} of "
+                    f"{detected_count}"
+                ),
+                percent=98 + int(filter_index / max(detected_count, 1)),
+                completed=filter_index,
+                total=detected_count,
+                object_current=filter_index,
+                object_total=detected_count,
+                operation_label="Final page value filters",
+                candidate_count=detected_count,
+            )
+            if (
+                record.get("preliminary_state") == "excluded"
+                and not record.get("authoritative_reread", False)
+            ):
+                decision = preliminary_decisions[filter_index - 1]
+                final_state = "excluded"
+                final_reason = str(record.get("preliminary_reason") or "")
+            else:
+                decision = evaluate_page_value(
+                    filter_candidate,
+                    page_candidates=filter_candidates,
+                    table_masks=table_masks,
+                )
+                final_state, final_reason = resolve_candidate_state(
+                    record,
+                    decision,
+                    authoritative=bool(record.get("authoritative_reread")),
+                )
+            if not record["recognized"] and decision.rule_name != "table_region":
+                filter_rule_counts["unread"] += 1
+            else:
+                filter_rule_counts[decision.rule_name] += 1
+
+            candidate = record["candidate"]
+            result = record["result"]
+            # A non-numeric review proposal is safer as a blank editable value
+            # than misleading OCR such as "rat". Raw text remains diagnostic.
+            published_text = record["text"]
+            if (
+                final_state == "review"
+                and decision.rule_name == "no_numeric_component"
+            ):
+                published_text = ""
+
+            common_region = {
+                "candidate_id": record["candidate_id"],
+                "bbox": record["bbox"],
+                "text": published_text,
+                "confidence": result.get("confidence", 0.0),
+                "type": result.get("type"),
+                "orientation": result.get("orientation", "horizontal"),
+                "rotation": result.get("rotation", 0),
+                "needs_review": final_state == "review",
+                "recognized": record["recognized"],
+                "boundary_review": candidate.boundary_review,
+                "agreement": result.get("agreement", 0.0),
+                "engine": result.get("engine", "paddleocr"),
+                "symbols_detected": result.get("symbols_detected"),
+                "ocr_profile": result.get("ocr_profile", "batch_recognition"),
+                "page_filter_rule": decision.rule_name,
+                "page_filter_reason": decision.reason,
+                "review_reason": final_reason if final_state == "review" else "",
+                "recovery_attempted": bool(result.get("recovery_attempted")),
+                "authoritative_reread": bool(
+                    result.get("authoritative_reread")
+                ),
+                "authoritative_target_owned": bool(
+                    result.get("authoritative_target_owned")
+                ),
+                "numeric_conflict": bool(result.get("numeric_conflict")),
+            }
+            if final_state == "eligible":
+                regions.append(common_region)
+            elif final_state == "review":
+                review_candidates.append(common_region)
+
+            outcome = {
+                "candidate_id": record["candidate_id"],
+                "bbox": dict(record["bbox"]),
+                "polygon": [list(point) for point in candidate.polygon],
+                "state": final_state,
+                "text": published_text,
+                "confidence": float(result.get("confidence") or 0.0),
+                "recognized": record["recognized"],
+                "reason": final_reason,
+                "rule": decision.rule_name,
+                "recovery_attempted": bool(result.get("recovery_attempted")),
+                "authoritative_reread": bool(
+                    result.get("authoritative_reread")
+                ),
+            }
+            candidate_outcomes.append(outcome)
+            filtered_overlay_candidates.append(
+                {
+                    "id": record["candidate_id"],
+                    "bbox": dict(record["bbox"]),
+                    "state": final_state,
+                    "text": published_text,
+                    "reason": final_reason,
+                    "rule": decision.rule_name,
+                }
+            )
+
+        recognized_count = sum(
+            1 for record in ocr_records if record["recognized"]
+        )
+        unread_count = detected_count - recognized_count
+        eligible_count = len(regions)
+        excluded_count = sum(
+            1
+            for outcome in candidate_outcomes
+            if outcome["state"] == "excluded"
+        )
+        review_count = len(review_candidates)
+        if detected_count != eligible_count + excluded_count + review_count:
+            raise AssertionError("Every detected page object must have one final state")
+
+        report(
+            stage="finalizing",
+            message=(
+                f"Prepared {eligible_count} balloons from {detected_count} "
+                f"detected: {excluded_count} excluded, {review_count} review"
+            ),
+            percent=99,
+            completed=detected_count,
+            total=detected_count,
+            candidate_count=eligible_count,
+            operation_label="Page scan complete",
+            overlay=layout.overlay(
+                scope_kind="page",
+                panel_states=panel_states,
+                candidates=filtered_overlay_candidates,
+            ),
+        )
+        return {
+            "count": eligible_count,
+            "detected_count": detected_count,
+            "recognized_count": recognized_count,
+            "eligible_count": eligible_count,
+            "excluded_count": excluded_count,
+            "review_count": review_count,
+            "unread_count": unread_count,
+            "duplicates_removed": duplicates_removed,
+            "skipped_existing_count": skipped_existing_count,
+            "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
+            "regions": regions,
+            "review_candidates": review_candidates,
+            "candidate_outcomes": candidate_outcomes,
+        }
 
     def _complete_angle_regions(
         self, image: Image.Image, regions: list[dict[str, Any]]
@@ -2740,6 +3843,8 @@ class OcrPipeline:
         debug_dump: bool = False,
         debug_dump_force: bool = False,
         compute_text_bbox: bool = True,
+        max_paddle_predictions: int | None = None,
+        allow_prefix_ocr: bool = True,
     ) -> dict[str, Any]:
         pipeline_started = perf_counter()
         paddle_timings: list[dict[str, Any]] = []
@@ -2781,6 +3886,7 @@ class OcrPipeline:
             oriented,
             dumper=dumper,
             timings=paddle_timings,
+            max_predictions=max_paddle_predictions,
         )
 
         symbols, symbol_debug = detect_symbols(prep)
@@ -2813,7 +3919,8 @@ class OcrPipeline:
         # High-confidence plain values do not need a second Paddle prediction.
         # Keep the prefix pass for uncertain or symbol-ambiguous cases.
         prefix_ocr_used = bool(
-            raw_text.strip()
+            allow_prefix_ocr
+            and raw_text.strip()
             and not reusable_symbol_hints
             and (
                 confidence <= EARLY_ACCEPT_CONFIDENCE
@@ -2822,7 +3929,9 @@ class OcrPipeline:
             )
         )
 
-        if not raw_text.strip():
+        if not allow_prefix_ocr:
+            prefix_ocr_reason = "disabled_by_scan_profile"
+        elif not raw_text.strip():
             prefix_ocr_reason = "empty_main_result"
         elif reusable_symbol_hints:
             prefix_ocr_reason = "reused_main_or_visual_symbol"
@@ -2920,31 +4029,6 @@ class OcrPipeline:
         text = composed.text
         engine = "paddleocr+compose" if composed.applied else "paddleocr"
 
-        # Dual-unit (inch [mm]) cross-check: the bracket is a redundant ×25.4
-        # encoding of the primary, so it validates — and, when a digit was
-        # misread, repairs — the read against the ratio a human would use. A
-        # no-op unless the text actually carries a numeric [bracket] pair.
-        from dual_unit import repair_dual
-
-        dual = repair_dual(text)
-        if dual.status == "repaired":
-            text = dual.text
-            engine = f"{engine}+dual" if "+" in engine else "paddleocr+dual"
-        dumper.stage(
-            "dual_unit",
-            {
-                "status": dual.status,
-                "text": dual.text,
-                "direction": dual.direction,
-                "expected_mm": dual.expected_mm,
-                "edits": dual.edits,
-            },
-        )
-
-        # GD&T rule engine: classify into a feature category and derive a
-        # balloon label from OCR text + detected symbols (geometry optional).
-        feature = classify_feature(text, symbols=symbols_to_dict(symbols))
-
         dumper.stage(
             "compose_output",
             {
@@ -2954,15 +4038,10 @@ class OcrPipeline:
             },
         )
 
-        # A dual pair that violates 25.4 and can't be repaired is a hard
-        # signal the read is wrong; a repaired pair changed a digit, so a human
-        # should confirm it. A pair that already agrees is, conversely, strong
-        # evidence the read is right — trust it even at lower raw confidence.
         needs_review = bool(
             text.strip()
             and (confidence < 0.9 or agreement < 0.6 or corrected)
-            and dual.status != "consistent"
-        ) or dual.needs_review or dual.corrected
+        )
 
         text_bbox: dict[str, float] | None = None
         text_bbox_source: str | None = None
@@ -3024,10 +4103,6 @@ class OcrPipeline:
             "text_bbox": text_bbox,
             "text_bbox_source": text_bbox_source,
             "type": composed.kind,
-            "category": feature.category,
-            "subtype": feature.subtype,
-            "label": feature.label,
-            "feature": feature.to_dict(),
             "engine": engine,
             "orientation": "vertical" if vertical else "horizontal",
             "rotation": 0,
@@ -3036,12 +4111,11 @@ class OcrPipeline:
             "symbols_detected": symbols_to_dict(symbols),
             "prefix_ocr": prefix_text,
             "prefix_ocr_used": prefix_ocr_used,
-            "dual_unit": {
-                "status": dual.status,
-                "direction": dual.direction,
-                "expected_mm": dual.expected_mm,
-                "edits": dual.edits,
-            },
+            "ocr_profile": (
+                "single_pass"
+                if max_paddle_predictions == 1 and not allow_prefix_ocr
+                else "accuracy"
+            ),
             "timings_ms": timings_ms,
         }
 
@@ -3066,3 +4140,4 @@ def get_pipeline() -> OcrPipeline:
         _pipeline = OcrPipeline()
         _pipeline.load()
     return _pipeline
+

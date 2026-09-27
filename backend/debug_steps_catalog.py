@@ -218,3 +218,4 @@ GLOSSARY: dict[str, str] = {
         "dimension_compose (whether to prepend Ø, format ±)."
     ),
 }
+

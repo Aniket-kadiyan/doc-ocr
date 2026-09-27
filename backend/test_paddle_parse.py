@@ -4,7 +4,13 @@ Run from backend/:
     python test_paddle_parse.py
 """
 
-from paddle_parse import extract_paddle_lines
+from paddle_parse import (
+    extract_paddle_detection_boxes,
+    extract_paddle_detection_regions,
+    extract_paddle_lines,
+    extract_text_orientation_result,
+    extract_text_recognition_result,
+)
 
 
 BOX = [[1, 2], [21, 2], [21, 10], [1, 10]]
@@ -20,6 +26,37 @@ class Paddle3Result:
                 "rec_texts": ["42.50"],
                 "rec_scores": [0.98],
                 "rec_polys": [BOX],
+            }
+        }
+
+
+class Paddle3DetectionResult:
+    """Minimal standalone TextDetection result with no recognition fields."""
+
+    @property
+    def json(self):
+        return {
+            "res": {
+                "dt_polys": [BOX],
+                "dt_scores": [0.03],
+            }
+        }
+
+
+class Paddle3TextRecognitionResult:
+    @property
+    def json(self):
+        return {"res": {"rec_text": "M8", "rec_score": 0.97}}
+
+
+class Paddle3OrientationResult:
+    @property
+    def json(self):
+        return {
+            "res": {
+                "class_ids": [1],
+                "scores": [0.998],
+                "label_names": ["180_degree"],
             }
         }
 
@@ -49,56 +86,40 @@ def test_paddle_2_recognition_only_result() -> None:
     assert parsed == [("8.00", 0.0, 0.0, 0.0, 0.0, 0.94)], parsed
 
 
-def test_quad_is_preserved_for_slanted_text():
-    """The detector's corners carry the text's angle; they must survive parsing."""
-    from paddle_parse import extract_paddle_records
-
-    # Corners PaddleOCR returned for the GPD 18T "Ø18H10 +0.070" fit callout.
-    slanted = [[475, 530], [930, 192], [1029, 322], [574, 661]]
-
-    class Slanted:
-        @property
-        def json(self):
-            return {
-                "res": {
-                    "rec_texts": ["18H10 +0.070"],
-                    "rec_scores": [0.94],
-                    "rec_polys": [slanted],
-                }
-            }
-
-    record = extract_paddle_records([Slanted()])[0]
-    assert record["quad"] == [(475.0, 530.0), (930.0, 192.0), (1029.0, 322.0), (574.0, 661.0)]
-    # The axis-aligned box is still the hull of those corners.
-    assert (record["x"], record["y"], record["width"], record["height"]) == (475.0, 192.0, 554.0, 469.0)
+def test_paddle_3_detector_only_result_keeps_low_confidence_box() -> None:
+    parsed = extract_paddle_detection_boxes(iter([Paddle3DetectionResult()]))
+    assert parsed == [(1.0, 2.0, 20.0, 8.0, 0.03)]
 
 
-def test_axis_aligned_box_reports_no_quad() -> None:
-    """An (x0, y0, x1, y1) box says nothing about orientation."""
-    from paddle_parse import extract_paddle_records
+def test_paddle_3_detector_only_result_preserves_polygon() -> None:
+    parsed = extract_paddle_detection_regions(iter([Paddle3DetectionResult()]))
+    assert parsed == [
+        {
+            "x": 1.0,
+            "y": 2.0,
+            "width": 20.0,
+            "height": 8.0,
+            "confidence": 0.03,
+            "polygon": [[1.0, 2.0], [21.0, 2.0], [21.0, 10.0], [1.0, 10.0]],
+        }
+    ]
 
-    class Rect:
-        @property
-        def json(self):
-            return {"res": {"rec_texts": ["12.5"], "rec_scores": [0.9], "rec_polys": [[1, 2, 21, 10]]}}
 
-    record = extract_paddle_records([Rect()])[0]
-    assert record["quad"] is None
-    assert (record["x"], record["y"], record["width"], record["height"]) == (1.0, 2.0, 20.0, 8.0)
-
-
-def test_recognition_only_result_has_no_quad() -> None:
-    from paddle_parse import extract_paddle_records
-
-    record = extract_paddle_records([[("8.00", 0.94)]])[0]
-    assert record["quad"] is None
+def test_standalone_text_modules_are_parsed_per_input_crop() -> None:
+    assert extract_text_recognition_result(Paddle3TextRecognitionResult()) == (
+        "M8",
+        0.97,
+    )
+    assert extract_text_orientation_result(Paddle3OrientationResult()) == (
+        180,
+        0.998,
+    )
 
 
 if __name__ == "__main__":
     test_paddle_3_result_object()
     test_paddle_2_nested_result()
     test_paddle_2_recognition_only_result()
-    test_quad_is_preserved_for_slanted_text()
-    test_axis_aligned_box_reports_no_quad()
-    test_recognition_only_result_has_no_quad()
+    test_paddle_3_detector_only_result_keeps_low_confidence_box()
+    test_paddle_3_detector_only_result_preserves_polygon()
     print("OK")

@@ -13,6 +13,7 @@ from pathlib import Path
 from checksheet_converter import (
     convert_ts2_json_to_checksheet,
     make_template_id_from_filename,
+    parse_range,
     save_checksheet_template,
 )
 
@@ -60,9 +61,83 @@ def test_conversion_shape_and_ranges() -> None:
     assert first_part_input["range"] == {"min": 58.16, "max": 58.26}
 
     angle_part_input = template["items"][2]["items"][6]["items"][0]
-    assert angle_part_input["type"] == "text"
-    assert "range" not in angle_part_input
+    assert angle_part_input["type"] == "number"
+    assert angle_part_input["range"] == {
+        "min": 24.521111,
+        "max": 24.521111,
+    }
 
+
+
+def test_default_zero_and_supported_tolerances() -> None:
+    assert parse_range("25", "") == {"min": 25, "max": 25}
+    assert parse_range("25", "0") == {"min": 25, "max": 25}
+    assert parse_range("25", "±0.1") == {"min": 24.9, "max": 25.1}
+    assert parse_range("25", "+0.1 -0.2") == {"min": 24.8, "max": 25.1}
+    assert parse_range("25", "+.1, -.2") == {"min": 24.8, "max": 25.1}
+    assert parse_range("25 +0.1 -0.2", "") == {
+        "min": 24.8,
+        "max": 25.1,
+    }
+    assert parse_range("58.21±0.05", "") == {
+        "min": 58.16,
+        "max": 58.26,
+    }
+
+
+
+def test_angle_ranges_preserve_valid_dms_and_fallback_safely() -> None:
+    assert parse_range("90°", "") == {"min": 90, "max": 90}
+    assert parse_range("45.5°", "") == {"min": 45.5, "max": 45.5}
+    assert parse_range("24°31'", "") == {
+        "min": 24.516667,
+        "max": 24.516667,
+    }
+    assert parse_range("24°31′16″", "") == {
+        "min": 24.521111,
+        "max": 24.521111,
+    }
+    assert parse_range("24°31'16" + '"', "±1°") == {
+        "min": 23.521111,
+        "max": 25.521111,
+    }
+    assert parse_range("24°31'16" + '"', "+2° -1°") == {
+        "min": 23.521111,
+        "max": 26.521111,
+    }
+
+    # Malformed minutes/seconds do not block export; the valid degree portion
+    # is used as the nominal value.
+    malformed_angles = (
+        "24°75'",
+        "24°31'80" + '"',
+        "24°abc",
+        "24°31",
+    )
+    for malformed_angle in malformed_angles:
+        assert parse_range(malformed_angle, "") == {"min": 24, "max": 24}
+
+
+def test_malformed_tolerance_expressions_block_conversion() -> None:
+    malformed_cases = [
+        ("25", "+0.1 +0.2"),
+        ("25", "+ -0.2"),
+        ("25", "±"),
+        ("25", "+0.1 -"),
+        ("25 +0.1 +0.2", ""),
+        ("25 + -0.2", ""),
+        ("25 ±", ""),
+        ("25 +0.1 -", ""),
+    ]
+    for value, tolerance in malformed_cases:
+        try:
+            parse_range(value, tolerance)
+        except ValueError as exc:
+            assert "Malformed" in str(exc)
+        else:
+            raise AssertionError(
+                f"Expected malformed expression to fail: {value!r}, {tolerance!r}"
+            )
 
 def test_template_filename_is_safe_and_portable() -> None:
     assert (
@@ -118,6 +193,9 @@ def test_part_column_is_required() -> None:
 
 if __name__ == "__main__":
     test_conversion_shape_and_ranges()
+    test_default_zero_and_supported_tolerances()
+    test_angle_ranges_preserve_valid_dms_and_fallback_safely()
+    test_malformed_tolerance_expressions_block_conversion()
     test_template_filename_is_safe_and_portable()
     test_save_creates_then_replaces_complete_json()
     test_part_column_is_required()

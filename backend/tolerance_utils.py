@@ -44,3 +44,4 @@ def ocr_has_diameter_marker(text: str) -> bool:
 
 def ocr_has_radius_marker(text: str) -> bool:
     return bool(re.match(r"^[\s]*[Rr](?=\d)", text))
+

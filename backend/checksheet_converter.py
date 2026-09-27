@@ -43,6 +43,11 @@ WIDTH_PARTS_TOTAL = 47.0
 
 DEFAULT_FONT_SIZE = 12
 INPUT_FONT_SIZE = 11
+DEFAULT_TOLERANCE = 0.0
+
+# Unsigned decimal used by tolerance expressions. Leading-decimal OCR forms
+# such as .1 are accepted as well as 0.1 and whole numbers.
+_TOLERANCE_NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
 
 
 class ChecksheetConfigurationError(RuntimeError):
@@ -189,8 +194,8 @@ def round_for_json(value: float, digits: int = 6) -> int | float:
 
 
 def contains_angle_symbols(text: str) -> bool:
-    """Angle specifications stay text inputs rather than numeric ranges."""
-    return any(symbol in text for symbol in ["°", "'", '"'])
+    """Return whether text contains degree, minute, or second markers."""
+    return any(symbol in text for symbol in ["°", "'", '"', "′", "″"])
 
 
 def first_number(text: str) -> float | None:
@@ -201,25 +206,87 @@ def first_number(text: str) -> float | None:
     return float(match.group(0)) if match else None
 
 
+def nominal_value_for_range(value_text: str) -> float | None:
+    """Return a decimal-degree nominal for angles, or the first normal number.
+
+    Valid degree/minute/second forms preserve readable minutes and seconds.
+    If anything after the degree marker is malformed, only the degree value is
+    used. The original OCR/display text is never changed.
+    """
+    text = str(value_text or "").strip()
+    if not text:
+        return None
+
+    angle_match = re.search(r"([-+]?\d+(?:\.\d+)?)\s*°", text)
+    if angle_match is None:
+        return first_number(text)
+
+    degrees = float(angle_match.group(1))
+    remainder = text[angle_match.end():].strip()
+    if not remainder:
+        return degrees
+
+    dms_match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*['′]"
+        r'(?:\s*(\d+(?:\.\d+)?)\s*["″])?',
+        remainder,
+    )
+    if dms_match is None:
+        return degrees
+
+    minutes = float(dms_match.group(1))
+    seconds = float(dms_match.group(2) or 0)
+    if not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        return degrees
+
+    fraction = minutes / 60 + seconds / 3600
+    return degrees - fraction if degrees < 0 else degrees + fraction
+
+
 def parse_tolerance_text(tolerance_text: str) -> tuple[float, float] | None:
-    """Return ``(lower_tolerance, upper_tolerance)`` when recognizable."""
+    """Return (lower, upper), rejecting non-empty malformed expressions."""
     text = str(tolerance_text or "").strip()
     if not text:
         return None
 
-    plus_minus_match = re.search(r"±\s*(\d+(?:\.\d+)?)", text)
+    plain_match = re.fullmatch(rf"({_TOLERANCE_NUMBER})\s*°?", text)
+    if plain_match:
+        tolerance = float(plain_match.group(1))
+        return tolerance, tolerance
+
+    plus_minus_match = re.fullmatch(
+        rf"±\s*({_TOLERANCE_NUMBER})\s*°?",
+        text,
+    )
     if plus_minus_match:
         tolerance = float(plus_minus_match.group(1))
         return tolerance, tolerance
 
-    plus_match = re.search(r"\+\s*(\d+(?:\.\d+)?)", text)
-    minus_match = re.search(r"-\s*(\d+(?:\.\d+)?)", text)
-    upper_tolerance = float(plus_match.group(1)) if plus_match else None
-    lower_tolerance = float(minus_match.group(1)) if minus_match else None
+    asymmetric_match = re.fullmatch(
+        rf"\+\s*({_TOLERANCE_NUMBER})\s*°?\s*,?\s*"
+        rf"-\s*({_TOLERANCE_NUMBER})\s*°?",
+        text,
+    )
+    if asymmetric_match:
+        upper_tolerance = float(asymmetric_match.group(1))
+        lower_tolerance = float(asymmetric_match.group(2))
+        return lower_tolerance, upper_tolerance
 
-    if upper_tolerance is None and lower_tolerance is None:
-        return None
-    return lower_tolerance or 0.0, upper_tolerance or 0.0
+    raise ValueError(
+        f"Malformed tolerance expression: {text!r}. "
+        "Use a number, ±x, or +x -y."
+    )
+
+
+def _has_embedded_tolerance_intent(text: str) -> bool:
+    """Return whether text after its nominal number contains tolerance signs."""
+    nominal_match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if nominal_match is None:
+        return any(symbol in text for symbol in ("±", "+", "-"))
+    return any(
+        symbol in text[nominal_match.end():]
+        for symbol in ("±", "+", "-")
+    )
 
 
 def parse_range_from_value_text(value_text: str) -> dict[str, int | float] | None:
@@ -239,8 +306,9 @@ def parse_range_from_value_text(value_text: str) -> dict[str, int | float] | Non
             "max": round_for_json(float(range_match.group(2))),
         }
 
-    plus_minus_match = re.search(
-        r"([-+]?\d+(?:\.\d+)?)\s*±\s*(\d+(?:\.\d+)?)",
+    plus_minus_match = re.fullmatch(
+        rf"\s*([-+]?\d+(?:\.\d+)?)\s*±\s*"
+        rf"({_TOLERANCE_NUMBER})\s*",
         text,
         flags=re.IGNORECASE,
     )
@@ -250,6 +318,22 @@ def parse_range_from_value_text(value_text: str) -> dict[str, int | float] | Non
         return {
             "min": round_for_json(nominal - tolerance),
             "max": round_for_json(nominal + tolerance),
+        }
+
+    asymmetric_match = re.fullmatch(
+        rf"\s*([-+]?\d+(?:\.\d+)?)\s*"
+        rf"\+\s*({_TOLERANCE_NUMBER})\s*,?\s*"
+        rf"-\s*({_TOLERANCE_NUMBER})\s*",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if asymmetric_match:
+        nominal = float(asymmetric_match.group(1))
+        upper_tolerance = float(asymmetric_match.group(2))
+        lower_tolerance = float(asymmetric_match.group(3))
+        return {
+            "min": round_for_json(nominal - lower_tolerance),
+            "max": round_for_json(nominal + upper_tolerance),
         }
 
     maximum_match = re.search(
@@ -271,6 +355,14 @@ def parse_range_from_value_text(value_text: str) -> dict[str, int | float] | Non
     if minimum_match:
         return {"min": round_for_json(float(minimum_match.group(1)))}
 
+    # Do not silently apply the zero default when OCR detected tolerance-like
+    # punctuation but the complete expression is not one of the valid forms.
+    if _has_embedded_tolerance_intent(text):
+        raise ValueError(
+            f"Malformed value/tolerance expression: {text!r}. "
+            "Use z ±x or z +x -y."
+        )
+
     return None
 
 
@@ -278,14 +370,11 @@ def parse_range(
     value_text: str,
     tolerance_text: str,
 ) -> dict[str, int | float] | None:
-    """Parse a range, preferring the dedicated tolerance field."""
+    """Parse a range and use zero only when no tolerance was supplied."""
     value_text = str(value_text or "").strip()
     tolerance_text = str(tolerance_text or "").strip()
 
-    if contains_angle_symbols(value_text):
-        return None
-
-    nominal = first_number(value_text)
+    nominal = nominal_value_for_range(value_text)
     parsed_tolerance = parse_tolerance_text(tolerance_text)
     if nominal is not None and parsed_tolerance is not None:
         lower_tolerance, upper_tolerance = parsed_tolerance
@@ -294,7 +383,17 @@ def parse_range(
             "max": round_for_json(nominal + upper_tolerance),
         }
 
-    return parse_range_from_value_text(value_text)
+    embedded_range = parse_range_from_value_text(value_text)
+    if embedded_range is not None:
+        return embedded_range
+
+    if nominal is not None:
+        return {
+            "min": round_for_json(nominal - DEFAULT_TOLERANCE),
+            "max": round_for_json(nominal + DEFAULT_TOLERANCE),
+        }
+
+    return None
 
 
 # ---------------------------------------------------------------------------

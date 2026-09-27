@@ -1,15 +1,8 @@
-"""
-Normalize PaddleOCR output across v2/v3 and det=True/det=False.
-
-The detector returns a *quadrilateral* per text line, not a rectangle: for text
-drawn along a leader line its corners follow the text, so the quad carries the
-text's own angle. That angle is kept here (``quad``) instead of being collapsed
-into an axis-aligned box, because re-deriving it downstream (a sheet-wide Hough
-vote) is both expensive and scale-dependent.
-"""
+"""Normalize PaddleOCR output across v2/v3 and det=True/det=False."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from numbers import Real
 from typing import Any, Iterator
 
@@ -37,26 +30,6 @@ def _is_box(obj: Any) -> bool:
     return False
 
 
-def _box_points(box: Any) -> list[tuple[float, float]] | None:
-    """
-    Corner points of a detection box, or ``None`` when it carries no shape.
-
-    Returns points only for a genuine polygon. The ``(x0, y0, x1, y1)`` form is
-    already axis-aligned and says nothing about orientation, so it yields
-    ``None`` rather than four synthetic corners that would claim an angle of 0.
-    """
-    if hasattr(box, "tolist"):
-        box = box.tolist()
-    if not isinstance(box, (list, tuple)):
-        return None
-    if len(box) == 4 and all(isinstance(v, Real) for v in box):
-        return None
-    points = [
-        (float(p[0]), float(p[1])) for p in box if _is_point_pair(p)
-    ]
-    return points if len(points) >= 4 else None
-
-
 def _box_to_rect(box: Any) -> tuple[float, float, float, float]:
     if hasattr(box, "tolist"):
         box = box.tolist()
@@ -76,6 +49,28 @@ def _box_to_rect(box: Any) -> tuple[float, float, float, float]:
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+
+def _box_to_polygon(box: Any) -> list[list[float]]:
+    """Return detector geometry without collapsing an angled quadrilateral."""
+
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        if all(isinstance(value, Real) for value in box):
+            x0, y0, x1, y1 = map(float, box)
+            return [
+                [x0, y0],
+                [x1, y0],
+                [x1, y1],
+                [x0, y1],
+            ]
+
+    return [
+        [float(point[0]), float(point[1])]
+        for point in box
+        if _is_point_pair(point)
+    ]
 
 
 def _parse_recognition(rec: Any) -> tuple[str, float]:
@@ -127,27 +122,42 @@ def _unwrap_result(obj: Any) -> Any:
     return obj
 
 
-def _record(
-    text: str, conf: float, box: Any = None
-) -> dict[str, Any]:
-    if box is None:
-        x = y = w = h = 0.0
-        quad = None
-    else:
-        x, y, w, h = _box_to_rect(box)
-        quad = _box_points(box)
-    return {
-        "text": str(text),
-        "x": x,
-        "y": y,
-        "width": w,
-        "height": h,
-        "confidence": float(conf),
-        "quad": quad,
-    }
+def unwrap_paddle_result(obj: Any) -> Any:
+    """Public wrapper used by standalone PaddleOCR module integrations."""
+
+    return _unwrap_result(obj)
 
 
-def _yield_from_dict_page(page: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def extract_text_recognition_result(obj: Any) -> tuple[str, float]:
+    """Return one standalone ``TextRecognition`` result as text/confidence."""
+
+    payload = _unwrap_result(obj)
+    if not isinstance(payload, dict):
+        return "", 0.0
+    texts = _as_list(_first_present(payload, "rec_text", "rec_texts"))
+    scores = _as_list(_first_present(payload, "rec_score", "rec_scores"))
+    text = str(texts[0]).strip() if texts else ""
+    score = float(scores[0]) if scores else 0.0
+    return text, score
+
+
+def extract_text_orientation_result(obj: Any) -> tuple[int, float]:
+    """Return one standalone text-line orientation as degrees/confidence."""
+
+    payload = _unwrap_result(obj)
+    if not isinstance(payload, dict):
+        return 0, 0.0
+    labels = _as_list(_first_present(payload, "label_names", "label_name"))
+    scores = _as_list(_first_present(payload, "scores", "score"))
+    label = str(labels[0]).lower() if labels else ""
+    degrees = 180 if "180" in label else 0
+    score = float(scores[0]) if scores else 0.0
+    return degrees, score
+
+
+def _yield_from_dict_page(
+    page: dict[str, Any],
+) -> Iterator[tuple[str, float, float, float, float, float]]:
     texts = _as_list(_first_present(page, "rec_texts", "rec_text"))
     scores = _as_list(_first_present(page, "rec_scores", "rec_score"))
     # rec_polys aligns with the confidence-filtered recognition arrays.
@@ -155,12 +165,15 @@ def _yield_from_dict_page(page: dict[str, Any]) -> Iterator[dict[str, Any]]:
 
     for i, text in enumerate(texts):
         conf = float(scores[i]) if i < len(scores) else 0.0
-        box = polys[i] if i < len(polys) and _is_box(polys[i]) else None
+        if i < len(polys) and _is_box(polys[i]):
+            x, y, w, h = _box_to_rect(polys[i])
+        else:
+            x, y, w, h = 0.0, 0.0, 0.0, 0.0
         if str(text).strip():
-            yield _record(text, conf, box)
+            yield str(text), x, y, w, h, conf
 
 
-def _yield_from_line(line: Any) -> Iterator[dict[str, Any]]:
+def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, float, float]]:
     if line is None:
         return
 
@@ -178,7 +191,7 @@ def _yield_from_line(line: Any) -> Iterator[dict[str, Any]]:
     if len(line) == 2 and isinstance(line[0], str) and not _is_box(line[0]):
         text, conf = _parse_recognition(line)
         if text.strip():
-            yield _record(text, conf)
+            yield text, 0.0, 0.0, 0.0, 0.0, conf
         return
 
     # Sometimes: [box, text, score]
@@ -186,14 +199,18 @@ def _yield_from_line(line: Any) -> Iterator[dict[str, Any]]:
         text = line[1]
         conf = float(line[2])
         if text.strip():
-            yield _record(text, conf, line[0])
+            x, y, w, h = _box_to_rect(line[0])
+            yield text, x, y, w, h, conf
         return
 
     # Classic: [box, (text, score)]
     if len(line) >= 2 and _is_box(line[0]):
-        text, conf = _parse_recognition(line[1])
+        box = line[0]
+        rec = line[1]
+        text, conf = _parse_recognition(rec)
         if text.strip():
-            yield _record(text, conf, line[0])
+            x, y, w, h = _box_to_rect(box)
+            yield text, x, y, w, h, conf
         return
 
 
@@ -207,7 +224,9 @@ def _looks_like_recognition_line(obj: Any) -> bool:
     return len(obj) >= 2 and _is_box(obj[0])
 
 
-def _walk_result(obj: Any) -> Iterator[dict[str, Any]]:
+def _walk_result(
+    obj: Any,
+) -> Iterator[tuple[str, float, float, float, float, float]]:
     """Recursively walk v2 nested lists and v3 Result objects."""
     obj = _unwrap_result(obj)
     if obj is None:
@@ -226,22 +245,64 @@ def _walk_result(obj: Any) -> Iterator[dict[str, Any]]:
             yield from _walk_result(child)
 
 
-def extract_paddle_records(result: Any) -> list[dict[str, Any]]:
-    """
-    Every recognized line as ``{text, x, y, width, height, confidence, quad}``.
-
-    ``quad`` holds the detector's four corner points when it reported them, so
-    callers can read the text's own angle; it is ``None`` for results that carry
-    no polygon (``det=False``, or an axis-aligned ``(x0, y0, x1, y1)`` box).
-    """
-    return list(_walk_result(result))
-
-
 def extract_paddle_lines(
     result: Any,
 ) -> list[tuple[str, float, float, float, float, float]]:
     """Returns list of (text, x, y, width, height, confidence)."""
+    return list(_walk_result(result))
+
+
+def _walk_detection_regions(obj: Any) -> Iterator[dict[str, Any]]:
+    """Walk standalone detector output while preserving every polygon."""
+
+    obj = _unwrap_result(obj)
+    if obj is None:
+        return
+
+    if isinstance(obj, dict):
+        polys = _as_list(_first_present(obj, "dt_polys", "rec_polys"))
+        scores = _as_list(_first_present(obj, "dt_scores", "rec_scores"))
+        for index, polygon in enumerate(polys):
+            if not _is_box(polygon):
+                continue
+            x, y, width, height = _box_to_rect(polygon)
+            score = float(scores[index]) if index < len(scores) else 0.0
+            if width > 0 and height > 0:
+                yield {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "confidence": score,
+                    "polygon": _box_to_polygon(polygon),
+                }
+        return
+
+    if hasattr(obj, "tolist"):
+        obj = obj.tolist()
+    if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        for child in obj:
+            yield from _walk_detection_regions(child)
+
+
+def extract_paddle_detection_regions(result: Any) -> list[dict[str, Any]]:
+    """Return detector boxes and their original quadrilateral geometry."""
+
+    return list(_walk_detection_regions(result))
+
+
+def extract_paddle_detection_boxes(
+    result: Any,
+) -> list[tuple[float, float, float, float, float]]:
+    """Compatibility view of detector-only axis-aligned boxes."""
+
     return [
-        (r["text"], r["x"], r["y"], r["width"], r["height"], r["confidence"])
-        for r in extract_paddle_records(result)
+        (
+            float(region["x"]),
+            float(region["y"]),
+            float(region["width"]),
+            float(region["height"]),
+            float(region["confidence"]),
+        )
+        for region in extract_paddle_detection_regions(result)
     ]

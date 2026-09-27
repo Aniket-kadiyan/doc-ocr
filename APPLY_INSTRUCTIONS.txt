@@ -1,0 +1,47 @@
+Doc OCR Box - internal checksheet integration replacements
+===========================================================
+
+Target branch: checksheet_integration
+Verified base commit: 0ae04b10dd3863685ff17af3d033765dd6414deb
+
+How to apply
+------------
+
+1. Check out the checksheet_integration branch in your own repository.
+2. Extract this archive.
+3. Copy the extracted contents into the repository root, preserving folders.
+4. Allow existing files with the same paths to be replaced.
+5. Do not copy the containing archive folder itself into the repository.
+
+The archive contains complete replacement copies of every modified file and
+complete contents for every new file. It does not contain node_modules, build
+output, OCR models, source documents, a database, test changes, or Git metadata.
+
+Runtime
+-------
+
+Start the backend and frontend normally:
+
+  npm run ocr-api
+  npm run dev
+
+The backend creates its SQLite database and source-document directory at:
+
+  backend/data/checksheets/
+
+For a durable deployment location, add this to .env.local using an appropriate
+absolute path for the server:
+
+  CHECKSHEET_DATA_DIR=D:\doc-ocr-data\checksheets
+  CHECKSHEET_MAX_DOCUMENT_MB=200
+
+Validation already completed
+----------------------------
+
+- TypeScript compilation
+- Targeted ESLint checks
+- Next.js production build
+- Python syntax parsing
+- SQLite schema initialization
+
+No automated test files were added or changed.

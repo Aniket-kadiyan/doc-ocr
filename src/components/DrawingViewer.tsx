@@ -3,28 +3,45 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import { Stage, Layer, Image as KonvaImage, Rect } from "react-konva";
+import {
+  Stage,
+  Layer,
+  Group,
+  Image as KonvaImage,
+  Rect,
+  Text,
+} from "react-konva";
 import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
 import {
-  runOCR,
-  runSegment,
-  runPageTitleFields,
+  isScanJobCancelledError,
   preloadOcr,
+  runAutoBalloonScan,
+  runPageTitleFields,
+  runOCR,
+  stopAutoBalloonScan,
 } from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
-import { suggestLabel } from "@/lib/labelSuggestions";
+import { filterNewScanRegions } from "@/lib/scanCandidates";
+import { mergePageReviewCandidates } from "@/lib/scanReviewCandidates";
+import {
+  runSectionScanQueue,
+  type QueuedScanSection,
+  type ScanRunOutcome,
+  type SectionQueuePosition,
+} from "@/lib/sectionScanQueue";
+import { deriveRange } from "@/lib/valueFields";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
   renderPdfPage,
   loadImageFile,
+  PDF_RENDER_SCALE,
 } from "@/lib/pdfLoader";
 import {
   saveAnnotations,
@@ -35,6 +52,7 @@ import {
 } from "@/lib/db";
 import {
   buildProjectBundle,
+  normalizeLegacyAnnotations,
   parseProjectBundle,
   fileToDataUrl,
   dataUrlToFile,
@@ -45,16 +63,46 @@ import { Balloon } from "@/components/Balloon";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
-import { LabelEditor } from "@/components/LabelEditor";
+import { ValueEditor } from "@/components/ValueEditor";
+import { ScanProgressBanner } from "@/components/ScanProgressBanner";
+import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
+import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
+import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
 import type { Annotation, BBox, DimensionType } from "@/types/annotation";
+import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type {
+  ScanCompletionSummary,
+  ScanDebugOverlay as ScanDebugOverlayModel,
+  ScanProgress,
+  ScanScopeKind,
+} from "@/types/scanJob";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
+const DRAWING_BACKGROUND_NAME = "drawing-background";
 
-// PDFs are rasterized once at this fixed resolution; this canvas is the base
-// coordinate system every bbox is stored in. Zoom is applied as a Konva Stage
-// transform on top — never by re-rendering — so boxes stay aligned at any zoom.
-const PDF_RENDER_SCALE = 1.5;
+type PageScanReviewCandidate = Omit<SegmentRegion, "candidateId"> & {
+  candidateId: string;
+  page: number;
+  reviewOrder: number;
+};
+
+interface AutoBalloonRunOptions {
+  manageProcessing?: boolean;
+  sectionPosition?: SectionQueuePosition;
+}
+
+const waitForBrowserPaint = () =>
+  new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+const legacyMigrationWarning = (orphanLabelCount: number) =>
+  orphanLabelCount > 0
+    ? `${orphanLabelCount} legacy label${
+        orphanLabelCount === 1 ? "" : "s"
+      } had no associated value and ${
+        orphanLabelCount === 1 ? "was" : "were"
+      } not imported.`
+    : null;
 
 export function DrawingViewer() {
   const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
@@ -64,6 +112,7 @@ export function DrawingViewer() {
   /** Original drawing bytes, kept so a saved project can embed them. */
   const sourceFileRef = useRef<ProjectSource | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  const projectIdRef = useRef("");
 
   const [konvaImage, setKonvaImage] = useState<HTMLImageElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
@@ -71,9 +120,25 @@ export function DrawingViewer() {
   const [projectId, setProjectId] = useState(() => uuidv4());
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<
+    string | null
+  >(null);
   const [currentBox, setCurrentBox] = useState<BBox | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [lastDebugDump, setLastDebugDump] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanOverlay, setScanOverlay] =
+    useState<ScanDebugOverlayModel | null>(null);
+  const [scanSummary, setScanSummary] =
+    useState<ScanCompletionSummary | null>(null);
+  const [scanReviewCandidates, setScanReviewCandidates] = useState<
+    PageScanReviewCandidate[]
+  >([]);
+  const scanReviewCandidatesRef = useRef<PageScanReviewCandidate[]>([]);
+  const reviewOrderRef = useRef(0);
+  const [selectedScanSections, setSelectedScanSections] = useState<
+    QueuedScanSection[]
+  >([]);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -81,6 +146,12 @@ export function DrawingViewer() {
   const setAnnotations = useAnnotationStore((s) => s.setAnnotations);
   const addAnnotations = useAnnotationStore((s) => s.addAnnotations);
   const updateAnnotation = useAnnotationStore((s) => s.updateAnnotation);
+  const moveAnnotationToNumber = useAnnotationStore(
+    (s) => s.moveAnnotationToNumber
+  );
+  const setAllBalloonVisibility = useAnnotationStore(
+    (s) => s.setAllBalloonVisibility
+  );
   const removeAnnotation = useAnnotationStore((s) => s.removeAnnotation);
   const setPending = useAnnotationStore((s) => s.setPending);
   const currentPage = useAnnotationStore((s) => s.currentPage);
@@ -89,45 +160,45 @@ export function DrawingViewer() {
   const setTotalPages = useAnnotationStore((s) => s.setTotalPages);
   const scale = useAnnotationStore((s) => s.scale);
   const setScale = useAnnotationStore((s) => s.setScale);
-  const addValueLabelId = useAnnotationStore((s) => s.addValueLabelId);
-  const setAddValueLabelId = useAnnotationStore((s) => s.setAddValueLabelId);
-  const editingLabelId = useAnnotationStore((s) => s.editingLabelId);
-  const setEditingLabelId = useAnnotationStore((s) => s.setEditingLabelId);
+  const isDrawingValue = useAnnotationStore((s) => s.isDrawingValue);
+  const setIsDrawingValue = useAnnotationStore((s) => s.setIsDrawingValue);
+  const editingValueId = useAnnotationStore((s) => s.editingValueId);
+  const setEditingValueId = useAnnotationStore((s) => s.setEditingValueId);
   const isSegmenting = useAnnotationStore((s) => s.isSegmenting);
   const setIsSegmenting = useAnnotationStore((s) => s.setIsSegmenting);
-  const isLabeling = useAnnotationStore((s) => s.isLabeling);
-  const setIsLabeling = useAnnotationStore((s) => s.setIsLabeling);
-  const labelInputMode = useAnnotationStore((s) => s.labelInputMode);
-  const setLabelInputMode = useAnnotationStore((s) => s.setLabelInputMode);
   const isProcessing = useAnnotationStore((s) => s.isProcessing);
   const setIsProcessing = useAnnotationStore((s) => s.setIsProcessing);
   const setProjectName = useAnnotationStore((s) => s.setProjectName);
   const projectName = useAnnotationStore((s) => s.projectName);
   const setStoreProjectId = useAnnotationStore((s) => s.setProjectId);
-  const setPageCanvasProvider = useAnnotationStore(
-    (s) => s.setPageCanvasProvider
+
+  const pageAnnotations = annotations.filter(
+    (annotation) =>
+      annotation.page === currentPage && annotation.kind !== "label"
+  );
+  const visiblePageAnnotations = pageAnnotations.filter(
+    (annotation) => !annotation.hidden
+  );
+  const valueAnnotations = annotations.filter(
+    (annotation) => annotation.kind !== "label"
+  );
+  const balloonsVisible =
+    valueAnnotations.length > 0 &&
+    valueAnnotations.every((annotation) => !annotation.hidden);
+  const pageScanReviewCandidates = scanReviewCandidates.filter(
+    (candidate) => candidate.page === currentPage
+  );
+  const pageSelectedScanSections = selectedScanSections.filter(
+    (section) => section.page === currentPage
   );
 
-  const pageAnnotations = annotations.filter((a) => a.page === currentPage);
-
-  // The selected annotation plus its mapped partner(s): a dimension maps to its
-  // label via labelId; a label maps to every dimension that points at it. Both
-  // sides stay highlighted (not dimmed) when either is selected.
-  const relatedIds = useMemo(() => {
-    const set = new Set<string>();
-    if (!selectedId) return set;
-    set.add(selectedId);
-    const sel = annotations.find((a) => a.id === selectedId);
-    if (!sel) return set;
-    if (sel.kind === "label") {
-      annotations.forEach((a) => {
-        if (a.labelId === sel.id) set.add(a.id);
-      });
-    } else if (sel.labelId) {
-      set.add(sel.labelId);
-    }
-    return set;
-  }, [selectedId, annotations]);
+  const replaceScanReviewCandidates = useCallback(
+    (next: PageScanReviewCandidate[]) => {
+      scanReviewCandidatesRef.current = next;
+      setScanReviewCandidates(next);
+    },
+    []
+  );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
     const img = new window.Image();
@@ -160,9 +231,21 @@ export function DrawingViewer() {
   }, [pdfDoc, currentPage, renderCurrentPage]);
 
   useEffect(() => {
+    // Overlay geometry belongs to one exact page/project and is never persisted.
+    setScanOverlay(null);
+  }, [currentPage, projectId]);
+
+  useEffect(() => {
+    // Review boxes are temporary scan output, never project data.
+    replaceScanReviewCandidates([]);
+    reviewOrderRef.current = 0;
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+  }, [projectId, replaceScanReviewCandidates]);
+
+  useEffect(() => {
     void preloadOcr();
   }, []);
-
 
   useEffect(() => {
     if (annotations.length === 0) return;
@@ -172,46 +255,12 @@ export function DrawingViewer() {
     return () => clearTimeout(t);
   }, [annotations, projectId]);
 
-  // Rasterize any page of the open drawing at the base resolution, clean (no
-  // balloons). The ballooned exports in the Export menu need pages the viewer
-  // isn't currently showing, so hand this to the store rather than exposing the
-  // PDF document itself.
-  const renderPageCanvas = useCallback(
-    async (page: number): Promise<HTMLCanvasElement | null> => {
-      if (pdfDoc) {
-        const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
-        return canvas;
-      }
-      // Single-page image: only page 1 exists, and it's already rendered.
-      return page === 1 ? sourceCanvasRef.current : null;
-    },
-    [pdfDoc]
-  );
-
-  useEffect(() => {
-    setPageCanvasProvider(konvaImage ? renderPageCanvas : null);
-    return () => setPageCanvasProvider(null);
-  }, [konvaImage, renderPageCanvas, setPageCanvasProvider]);
-
-  // Expose the current project id to the store so the Export menu can hand it to
-  // the checksheet web view (which opens in a separate browser tab).
+  // Expose the current project id so Export can retrieve the original drawing
+  // blob and create a durable backend checksheet snapshot.
   useEffect(() => {
     setStoreProjectId(projectId);
+    projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
-
-  // Pull edits made in the checksheet tab back into the live drawing. The tab
-  // saves to IndexedDB and broadcasts the updated annotations on this channel.
-  useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return;
-    const channel = new BroadcastChannel("doc-ocr-box:checksheet");
-    channel.onmessage = (e) => {
-      const msg = e.data as { projectId?: string; annotations?: Annotation[] };
-      if (msg?.projectId === projectId && Array.isArray(msg.annotations)) {
-        setAnnotations(msg.annotations);
-      }
-    };
-    return () => channel.close();
-  }, [projectId, setAnnotations]);
 
   // Render a drawing onto the stage. Shared by fresh uploads and project loads
   // so both paths render at the same scale and produce matching bbox coords.
@@ -260,7 +309,13 @@ export function DrawingViewer() {
       dataUrl: await fileToDataUrl(file),
     };
     await loadSource(file);
-    setAnnotations(await loadAnnotations(recent.id));
+    const migration = normalizeLegacyAnnotations(
+      await loadAnnotations(recent.id)
+    );
+    setAnnotations(migration.annotations);
+    await saveAnnotations(recent.id, migration.annotations);
+    const warning = legacyMigrationWarning(migration.orphanLabelCount);
+    if (warning) setSelectionError(warning);
   }, [loadSource, setAnnotations, setProjectName]);
 
   useEffect(() => {
@@ -275,6 +330,14 @@ export function DrawingViewer() {
     setProjectId(id);
     setAnnotations([]);
     setSelectedId(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+    setEditingValueId(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setScanProgress(null);
+    setScanOverlay(null);
+    setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = file.type === "application/pdf" ? "pdf" : "image";
     sourceFileRef.current = {
@@ -325,8 +388,15 @@ export function DrawingViewer() {
     sourceFileRef.current = null;
     setAnnotations([]);
     setSelectedId(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+    setEditingValueId(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
     setPending(null);
     setSelectionError(null);
+    setScanProgress(null);
+    setScanSummary(null);
     setCurrentPage(1);
     setTotalPages(1);
     setProjectName("Untitled Drawing");
@@ -336,6 +406,12 @@ export function DrawingViewer() {
 
   const handleLoadProject = async (file: File) => {
     setSelectionError(null);
+    setScanProgress(null);
+    setScanSummary(null);
+    setSelectedReviewCandidateId(null);
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
     try {
       const bundle = parseProjectBundle(await file.text());
       const id = uuidv4();
@@ -349,7 +425,11 @@ export function DrawingViewer() {
       );
       await loadSource(srcFile);
       setSelectedId(null);
-      setAnnotations(bundle.annotations);
+      setEditingValueId(null);
+      const migration = normalizeLegacyAnnotations(bundle.annotations);
+      setAnnotations(migration.annotations);
+      const warning = legacyMigrationWarning(migration.orphanLabelCount);
+      if (warning) setSelectionError(warning);
       // Persist so the loaded project reopens on the next visit too.
       await saveProject({
         id,
@@ -360,7 +440,7 @@ export function DrawingViewer() {
         fileBlob: srcFile,
         updatedAt: Date.now(),
       });
-      await saveAnnotations(id, bundle.annotations);
+      await saveAnnotations(id, migration.annotations);
     } catch (err) {
       setSelectionError(
         err instanceof Error ? err.message : "Could not open project file."
@@ -371,24 +451,77 @@ export function DrawingViewer() {
   // Select an annotation and follow it to its page so it's actually on screen.
   const handleSelect = useCallback(
     (id: string | null) => {
-      setSelectedId(id);
-      if (!id) return;
+      setSelectedReviewCandidateId(null);
+      if (!id) {
+        setSelectedId(null);
+        return;
+      }
       const ann = annotations.find((a) => a.id === id);
+      setSelectedId(ann?.hidden ? null : id);
       if (ann && ann.page !== currentPage) setCurrentPage(ann.page);
     },
     [annotations, currentPage, setCurrentPage]
   );
 
-  // Read a value box (drawn via a label's "Add value" action) and open the
-  // popup. labelId binds the value one-to-one to the label it was added from.
+  // Clear the local selection with the deleted value so the remaining balloons
+  // do not stay dimmed against an id that no longer exists.
+  const handleDelete = useCallback(
+    (id: string) => {
+      removeAnnotation(id);
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+      setSelectedId((current) => (current === id ? null : current));
+      if (editingValueId === id) setEditingValueId(null);
+    },
+    [editingValueId, projectId, removeAnnotation, setEditingValueId]
+  );
+
+  const toggleAnnotationVisibility = useCallback(
+    (id: string) => {
+      const annotation = useAnnotationStore
+        .getState()
+        .annotations.find((candidate) => candidate.id === id);
+      if (!annotation) return;
+
+      const hidden = !annotation.hidden;
+      updateAnnotation(id, { hidden });
+      if (hidden) {
+        setSelectedId((current) => (current === id ? null : current));
+      }
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+    },
+    [projectId, updateAnnotation]
+  );
+
+  const handleMoveAnnotation = useCallback(
+    (id: string, targetNumber: number) => {
+      moveAnnotationToNumber(id, targetNumber);
+      void saveAnnotations(
+        projectId,
+        useAnnotationStore.getState().annotations
+      );
+    },
+    [moveAnnotationToNumber, projectId]
+  );
+
+  // Read one drawn value and open the value/tolerance confirmation popup.
   const finishBox = useCallback(
-    async (bbox: BBox, labelId?: string) => {
+    async (bbox: BBox) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
       const source = sourceCanvasRef.current;
-      if (!source) return;
+      if (!source) {
+        setIsDrawingValue(false);
+        return;
+      }
 
       setIsProcessing(true);
       setSelectionError(null);
+      setScanSummary(null);
       try {
         const ocrResult = await runOCR(source, bbox, 1);
         if (ocrResult.debugDumpDir) {
@@ -405,8 +538,6 @@ export function DrawingViewer() {
           bbox,
           page: currentPage,
           ocrResult,
-          kind: "dimension",
-          labelId,
         });
       } catch (err) {
         const message =
@@ -415,8 +546,6 @@ export function DrawingViewer() {
         setPending({
           bbox,
           page: currentPage,
-          kind: "dimension",
-          labelId,
           ocrResult: {
             text: "",
             confidence: 0,
@@ -428,183 +557,484 @@ export function DrawingViewer() {
         });
       } finally {
         setIsProcessing(false);
-        setAddValueLabelId(null);
+        setIsDrawingValue(false);
       }
     },
-    [currentPage, setPending, setIsProcessing, setAddValueLabelId]
+    [currentPage, setPending, setIsDrawingValue, setIsProcessing]
   );
 
-  // Finish an Add Label box. "manual" skips OCR and opens an empty label form;
-  // "ocr" reads the box and pre-fills the label text. Either way the result is a
-  // label-kind annotation (its own color + numbering).
-  const finishLabelBox = useCallback(
-    async (bbox: BBox, mode: typeof labelInputMode) => {
+  const runAutoBalloon = useCallback(
+    async (
+      bbox: BBox,
+      scopeKind: ScanScopeKind,
+      scanPage: number,
+      options: AutoBalloonRunOptions = {}
+    ): Promise<ScanRunOutcome> => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) {
-        setIsLabeling(false);
-        return;
+        setSelectionError("The selected scan section is too small.");
+        return { status: "failed" };
       }
       const source = sourceCanvasRef.current;
       if (!source) {
-        setIsLabeling(false);
-        return;
+        setSelectionError("No drawing is available to scan.");
+        return { status: "failed" };
       }
+
+      const projectAtStart = projectIdRef.current;
+      const scanRunId = uuidv4();
+      const manageProcessing = options.manageProcessing ?? true;
+      const sectionLabel = options.sectionPosition
+        ? "Section " +
+          options.sectionPosition.current +
+          " of " +
+          options.sectionPosition.total
+        : "";
+      if (manageProcessing) setIsProcessing(true);
       setSelectionError(null);
-
-      const emptyOcr = {
-        text: "",
-        confidence: 0,
-        rotation: 0,
-        orientation: "horizontal" as const,
-        words: [],
-        engine: "paddleocr" as const,
-      };
-
-      if (mode === "manual") {
-        setPending({
-          bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "manual",
-          ocrResult: emptyOcr,
-        });
-        setIsLabeling(false);
-        return;
-      }
-
-      setIsProcessing(true);
+      setScanSummary(null);
+      setScanOverlay(null);
+      setScanProgress({
+        jobId: "",
+        status: "queued",
+        stage: "preparing",
+        message: sectionLabel
+          ? sectionLabel + " · Preparing selected area"
+          : "Preparing selected area",
+        percent: 0,
+        completed: 0,
+        total: 0,
+        passCurrent: 0,
+        passTotal: 0,
+        tileCurrent: 0,
+        tileTotal: 0,
+        objectCurrent: 0,
+        objectTotal: 0,
+        batchCurrent: 0,
+        batchTotal: 0,
+        candidateCount: 0,
+        operationLabel: sectionLabel,
+        elapsedSeconds: 0,
+        stepElapsedSeconds: 0,
+        heartbeatAgeSeconds: 0,
+        progressAgeSeconds: 0,
+        estimatedRemainingSeconds: null,
+        liveness: "queued",
+        overlay: null,
+      });
       try {
-        const ocrResult = await runOCR(source, bbox, 1);
-        if (!ocrResult.text.trim()) {
-          setSelectionError(
-            "No label text detected — type it in or draw a tighter box."
+        const scanResult = await runAutoBalloonScan({
+          sourceCanvas: source,
+          bbox,
+          page: scanPage,
+          scopeKind,
+          displayScale: 1,
+          existingValueBoxes: useAnnotationStore
+            .getState()
+            .annotations.filter(
+              (annotation) =>
+                annotation.kind !== "label" && annotation.page === scanPage
+            )
+            .map((annotation) => annotation.bbox),
+          onProgress: (progress) => {
+            const displayedProgress = sectionLabel
+              ? {
+                  ...progress,
+                  message: sectionLabel + " · " + progress.message,
+                  operationLabel: progress.operationLabel
+                    ? sectionLabel + " · " + progress.operationLabel
+                    : sectionLabel,
+                }
+              : progress;
+            setScanProgress(displayedProgress);
+            if (SCAN_DEBUG_OVERLAY_ENABLED && progress.overlay) {
+              setScanOverlay(progress.overlay);
+            }
+          },
+        });
+        if (projectIdRef.current !== projectAtStart) {
+          throw new Error(
+            "The drawing changed while the scan was running. No balloons were added."
           );
         }
-        setPending({
-          bbox: ocrResult.valueBox ?? bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "ocr",
-          ocrResult,
-        });
-      } catch (err) {
-        setSelectionError(
-          err instanceof Error ? err.message : "Label OCR failed unexpectedly"
+
+        // Recheck against the live store immediately before the single batch
+        // insertion so existing manual or edited balloons always win.
+        const liveAnnotations = useAnnotationStore.getState().annotations;
+        const filtered = filterNewScanRegions(
+          scanResult.regions,
+          liveAnnotations,
+          scanPage,
+          undefined,
+          scopeKind
         );
-        setPending({
-          bbox,
-          page: currentPage,
-          kind: "label",
-          labelSource: "ocr",
-          ocrResult: emptyOcr,
-        });
-      } finally {
-        setIsProcessing(false);
-        setIsLabeling(false);
-      }
-    },
-    [currentPage, setPending, setIsProcessing, setIsLabeling]
-  );
-
-  const finishSegmentBox = useCallback(
-    async (bbox: BBox) => {
-      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
-      const source = sourceCanvasRef.current;
-      if (!source) return;
-
-      setIsProcessing(true);
-      setSelectionError(null);
-      try {
-        const regions = await runSegment(source, bbox, 1);
-        if (regions.length === 0) {
-          setSelectionError(
-            "No values detected in that area — draw a tighter box around the cluster."
-          );
-          return;
-        }
         const now = Date.now();
-        const newAnnotations: Annotation[] = regions
-          .filter((r) => r.text.trim())
+        const newAnnotations: Annotation[] = filtered.accepted
           .map((r) => {
-            // Prefer the backend rule-engine category/label (it also sees
-            // detected symbols + geometry); fall back to local text-only rules.
-            const type = ((r.category as DimensionType) ||
-              classifyDimension(r.text)) as DimensionType;
-            const label = r.label?.trim() || suggestLabel(type, r.text);
+            const cleanValue = r.text.trim();
+            const type = classifyDimension(cleanValue);
             return {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
-              label,
-              value: r.text.trim(),
+              label: "",
+              value: cleanValue,
               type,
               confidence: r.confidence,
               bbox: r.valueBox,
               rotation: r.rotation,
-              orientedBox: r.orientedBox,
-              page: currentPage,
+              page: scanPage,
               createdAt: now,
-              needsReview: r.needsReview,
+              kind: "dimension",
+              needsReview: r.needsReview || !r.recognized,
+              range: deriveRange(cleanValue) || undefined,
             };
           });
-        if (newAnnotations.length === 0) {
-          setSelectionError("Detected regions but read no text — try a tighter box.");
-          return;
-        }
 
-        // Title-block fields are read from the WHOLE page, not this selection:
-        // the title block sits at a fixed spot on the sheet, so which fields
-        // were found used to depend on where the box was drawn. Fields already
-        // present are not added twice, so re-running Auto-Segment is safe.
-        const existingFields = new Set(
-          useAnnotationStore
-            .getState()
-            .annotations.filter((a) => a.type === "Title Block")
-            .map((a) => a.label.trim().toUpperCase())
+        // Review candidates stay outside the annotation store. Filter them
+        // against both existing balloons and this scan's atomic insert so a
+        // resolved object is never shown again as a grey review box.
+        const reviewExisting = [...liveAnnotations, ...newAnnotations];
+        const filteredReview = filterNewScanRegions(
+          scanResult.reviewCandidates,
+          reviewExisting,
+          scanPage,
+          undefined,
+          scopeKind
         );
-        try {
-          const fields = await runPageTitleFields(source);
-          const fieldAnnotations: Annotation[] = fields
-            .filter((f) => f.value.trim() && f.bbox)
-            .filter((f) => !existingFields.has(f.label.trim().toUpperCase()))
-            .map((f) => ({
-              id: uuidv4(),
-              number: 0,
-              label: f.label,
-              value: f.value.trim(),
-              type: "Title Block" as DimensionType,
-              confidence: f.confidence,
-              bbox: f.bbox as BBox,
-              rotation: 0,
-              page: currentPage,
-              createdAt: now,
-            }));
-          newAnnotations.push(...fieldAnnotations);
-        } catch {
-          // The dimensions are the point of Auto-Segment; a failed title-block
-          // read must not throw them away. The export still lists every
-          // configured keyword, with an empty value to fill in by hand.
+        const reviewCandidates: PageScanReviewCandidate[] =
+          filteredReview.accepted.map((candidate) => ({
+            ...candidate,
+            candidateId: [
+              projectAtStart,
+              scanPage,
+              scanRunId,
+              candidate.candidateId ?? uuidv4(),
+            ].join(":"),
+            page: scanPage,
+            reviewOrder: reviewOrderRef.current++,
+          }));
+
+        const mergedReviews = mergePageReviewCandidates({
+          existing: scanReviewCandidatesRef.current,
+          incoming: reviewCandidates,
+          newAnnotations,
+          page: scanPage,
+          scopeKind,
+        });
+        const incomingReviewIds = new Set(
+          reviewCandidates.map((candidate) => candidate.candidateId)
+        );
+        const addedReviewCount = mergedReviews.candidates.filter((candidate) =>
+          incomingReviewIds.has(candidate.candidateId)
+        ).length;
+        const pageReviewCount = mergedReviews.candidates.filter(
+          (candidate) => candidate.page === scanPage
+        ).length;
+
+        // Title-block fields ("DWG NO.", "REV") are read from the WHOLE page,
+        // not this scan's scope: the title block sits at a fixed spot on the
+        // sheet, so which fields turn up must not depend on the section being
+        // scanned. Fields already present are skipped, so running more than one
+        // section — or re-scanning — never duplicates them.
+        if (scopeKind === "page") {
+          const existingFields = new Set(
+            useAnnotationStore
+              .getState()
+              .annotations.filter((a) => a.type === "Title Block")
+              .map((a) => (a.label ?? "").trim().toUpperCase())
+          );
+          try {
+            const fields = await runPageTitleFields(source);
+            for (const f of fields) {
+              if (!f.value.trim() || !f.bbox) continue;
+              if (existingFields.has(f.label.trim().toUpperCase())) continue;
+              newAnnotations.push({
+                id: uuidv4(),
+                number: 0,
+                label: f.label,
+                value: f.value.trim(),
+                type: "Title Block" as DimensionType,
+                confidence: f.confidence,
+                bbox: f.bbox,
+                rotation: 0,
+                page: scanPage,
+                createdAt: now,
+                kind: "dimension",
+              });
+            }
+          } catch {
+            // The balloons are the point of the scan; a failed title-block read
+            // must not throw them away. The export still lists every configured
+            // keyword, with an empty value to fill in by hand.
+          }
         }
 
-        addAnnotations(newAnnotations);
+        if (newAnnotations.length > 0) {
+          // Atomic per-section commit: save these balloons before the queue is
+          // allowed to start its next section.
+          addAnnotations(newAnnotations);
+          await saveAnnotations(
+            projectAtStart,
+            useAnnotationStore.getState().annotations
+          );
+        }
+        replaceScanReviewCandidates(mergedReviews.candidates);
+        setScanOverlay(null);
+        const summary: ScanCompletionSummary = {
+          scopeKind,
+          added: newAnnotations.length,
+          detected: scanResult.detected,
+          recognized: scanResult.recognized,
+          eligible: scanResult.eligible,
+          excluded: scanResult.excluded,
+          reviewRequired:
+            scopeKind === "section" ? pageReviewCount : addedReviewCount,
+          unread: scanResult.unread,
+          skippedExisting:
+            scanResult.skippedExisting +
+            filtered.skippedExisting +
+            filteredReview.skippedExisting,
+          skippedDuplicates:
+            filtered.skippedDuplicates +
+            filteredReview.skippedDuplicates +
+            mergedReviews.skippedDuplicates,
+        };
+        setScanSummary(summary);
+        if (newAnnotations.length === 0 && addedReviewCount === 0) {
+          setSelectionError(
+            scopeKind === "page"
+              ? "No eligible numeric values remained after whole-page filtering."
+              : "No values were detected in the selected section."
+          );
+        }
+        return { status: "succeeded", summary };
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Auto-segment failed unexpectedly";
-        setSelectionError(message);
+        if (isScanJobCancelledError(err)) {
+          setScanOverlay(null);
+          setSelectionError(
+            options.sectionPosition
+              ? sectionLabel +
+                  " stopped. Earlier completed sections remain saved; no results from this section were added."
+              : "Scan stopped. No balloons or review candidates were added."
+          );
+          return { status: "cancelled" };
+        } else {
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Auto-balloon scan failed unexpectedly";
+          setSelectionError(message);
+          return { status: "failed" };
+        }
       } finally {
-        setIsProcessing(false);
+        setScanProgress(null);
+        if (manageProcessing) setIsProcessing(false);
         setIsSegmenting(false);
       }
     },
-    [currentPage, addAnnotations, setIsProcessing, setIsSegmenting]
+    [
+      addAnnotations,
+      replaceScanReviewCandidates,
+      setIsProcessing,
+      setIsSegmenting,
+    ]
+  );
+
+  const stopActiveScan = useCallback(async () => {
+    const active = scanProgress;
+    if (
+      !active?.jobId ||
+      !["queued", "running"].includes(active.status)
+    ) {
+      return;
+    }
+
+    setScanProgress((current) =>
+      current?.jobId === active.jobId
+        ? {
+            ...current,
+            status: "cancelling",
+            stage: "cancelling",
+            message: "Stopping after the current OCR operation",
+            operationLabel: "Cancellation requested",
+            liveness: "cancelling",
+          }
+        : current
+    );
+    try {
+      const updated = await stopAutoBalloonScan(active.jobId);
+      setScanProgress((current) =>
+        current?.jobId === active.jobId ? updated : current
+      );
+    } catch (err) {
+      setSelectionError(
+        err instanceof Error ? err.message : "Could not stop the active scan"
+      );
+    }
+  }, [scanProgress]);
+
+  const toggleBalloons = useCallback(() => {
+    setSelectedId(null);
+    setAllBalloonVisibility(!balloonsVisible);
+    void saveAnnotations(
+      projectId,
+      useAnnotationStore.getState().annotations
+    );
+  }, [balloonsVisible, projectId, setAllBalloonVisibility]);
+
+  const finishSegmentBox = useCallback(
+    (bbox: BBox) => {
+      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
+      setSelectedScanSections((current) => [
+        ...current,
+        { id: uuidv4(), bbox, page: currentPage },
+      ]);
+    },
+    [currentPage]
+  );
+
+  const cancelSectionSelection = useCallback(() => {
+    drawStartRef.current = null;
+    currentBoxRef.current = null;
+    setCurrentBox(null);
+    setSelectedScanSections([]);
+    setIsSegmenting(false);
+  }, [setIsSegmenting]);
+
+  const startSelectedSectionScan = useCallback(async () => {
+    const sections = [...selectedScanSections];
+    if (sections.length === 0) return;
+
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setIsProcessing(true);
+    try {
+      const result = await runSectionScanQueue({
+        sections,
+        runSection: (section, position) =>
+          runAutoBalloon(section.bbox, "section", section.page, {
+            manageProcessing: false,
+            sectionPosition: position,
+          }),
+        afterSection: async (_section, _position, aggregate) => {
+          setScanSummary(aggregate);
+          // Yield after the atomic insert/save so this section's balloons are
+          // visibly painted before the next OCR job starts.
+          await waitForBrowserPaint();
+        },
+      });
+      if (result.completedSections > 0) {
+        setScanSummary(result.summary);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [
+    runAutoBalloon,
+    selectedScanSections,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+  ]);
+
+  const scanWholePage = useCallback(async () => {
+    const source = sourceCanvasRef.current;
+    if (!source) return;
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    await runAutoBalloon(
+      { x: 0, y: 0, width: source.width, height: source.height },
+      "page",
+      currentPage
+    );
+  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
+  );
+
+  const openScanReviewCandidate = useCallback(
+    (candidate: PageScanReviewCandidate) => {
+      setSelectionError(null);
+      setSelectedId(null);
+      setSelectedReviewCandidateId(candidate.candidateId);
+      if (candidate.page !== currentPage) setCurrentPage(candidate.page);
+      setPending({
+        bbox: candidate.valueBox,
+        page: candidate.page,
+        source: "scan_review",
+        reviewCandidateId: candidate.candidateId,
+        reviewReason:
+          candidate.reviewReason ||
+          "Recognition remained uncertain after bounded recovery.",
+        ocrResult: {
+          text: candidate.text,
+          confidence: candidate.confidence,
+          rotation: candidate.rotation,
+          orientation: candidate.orientation,
+          words: [],
+          engine: "paddleocr",
+          agreement: undefined,
+          needsReview: true,
+          valueBox: candidate.valueBox,
+        },
+      });
+    },
+    [currentPage, setCurrentPage, setPending]
+  );
+
+  const selectScanReviewCandidate = useCallback(
+    (candidateId: string) => {
+      const candidate = scanReviewCandidatesRef.current.find(
+        (item) => item.candidateId === candidateId
+      );
+      if (candidate) openScanReviewCandidate(candidate);
+    },
+    [openScanReviewCandidate]
+  );
+
+  const resolveScanReviewCandidate = useCallback(
+    (candidateId: string, action: "accepted" | "ignored") => {
+      const resolved = scanReviewCandidatesRef.current.find(
+        (candidate) => candidate.candidateId === candidateId
+      );
+      replaceScanReviewCandidates(
+        scanReviewCandidatesRef.current.filter(
+          (candidate) => candidate.candidateId !== candidateId
+        )
+      );
+      setSelectedReviewCandidateId((current) =>
+        current === candidateId ? null : current
+      );
+      if (resolved?.page === currentPage) {
+        setScanSummary((summary) =>
+          summary
+            ? {
+                ...summary,
+                reviewRequired: Math.max(0, summary.reviewRequired - 1),
+                added: summary.added + (action === "accepted" ? 1 : 0),
+              }
+            : null
+        );
+      }
+    },
+    [currentPage, replaceScanReviewCandidates]
   );
 
   const isCompletingDraw = useRef(false);
 
-  const drawingActive = addValueLabelId !== null || isSegmenting || isLabeling;
+  const drawingActive = isDrawingValue || isSegmenting;
 
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!drawingActive) return;
     const stage = e.target.getStage();
+    if (!drawingActive) {
+      if (
+        e.target === stage ||
+        e.target.name() === DRAWING_BACKGROUND_NAME
+      ) {
+        handleSelect(null);
+      }
+      return;
+    }
     // Relative pointer position undoes the Stage zoom transform, so the box is
     // captured in base (unzoomed) canvas coords — the system bboxes are stored in.
     const pos = stage?.getRelativePointerPosition();
@@ -632,19 +1062,15 @@ export function DrawingViewer() {
     isCompletingDraw.current = true;
     const box = { ...currentBoxRef.current };
     const segmenting = isSegmenting;
-    const labeling = isLabeling;
-    const valueLabelId = addValueLabelId;
-    const mode = labelInputMode;
+    const drawingValue = isDrawingValue;
     drawStartRef.current = null;
     currentBoxRef.current = null;
     setCurrentBox(null);
     try {
-      if (labeling) {
-        await finishLabelBox(box, mode);
-      } else if (segmenting) {
+      if (segmenting) {
         await finishSegmentBox(box);
-      } else if (valueLabelId) {
-        await finishBox(box, valueLabelId);
+      } else if (drawingValue) {
+        await finishBox(box);
       }
     } finally {
       isCompletingDraw.current = false;
@@ -652,11 +1078,8 @@ export function DrawingViewer() {
   }, [
     finishBox,
     finishSegmentBox,
-    finishLabelBox,
     isSegmenting,
-    isLabeling,
-    addValueLabelId,
-    labelInputMode,
+    isDrawingValue,
   ]);
 
   useEffect(() => {
@@ -709,41 +1132,118 @@ export function DrawingViewer() {
         </div>
       )}
       {selectionError && (
-        <div className="bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
-          {selectionError}
+        <div className="flex items-center justify-center gap-3 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
+          <span>{selectionError}</span>
+          {scanOverlay && (
+            <button
+              type="button"
+              onClick={() => setScanOverlay(null)}
+              className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
+            >
+              Dismiss scan overlay
+            </button>
+          )}
         </div>
+      )}
+      {scanSummary && (
+        <div
+          className={`px-4 py-1.5 text-center text-xs ${
+            scanSummary.reviewRequired > 0
+              ? "bg-slate-100 text-slate-900"
+              : "bg-emerald-50 text-emerald-900"
+          }`}
+        >
+          {scanSummary.detected} detected
+          {" · "}
+          {scanSummary.recognized} recognized
+          {" · "}
+          {scanSummary.eligible} eligible
+          {" · "}
+          {scanSummary.excluded} excluded
+          {" · "}
+          {scanSummary.reviewRequired} review required
+          {" · "}
+          {scanSummary.unread} unread
+          {" · "}
+          {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
+          {" · "}
+          {scanSummary.skippedExisting} existing object
+          {scanSummary.skippedExisting === 1 ? "" : "s"} skipped
+          {scanSummary.skippedDuplicates > 0 && (
+            <>
+              {" · "}
+              {scanSummary.skippedDuplicates} duplicate candidate
+              {scanSummary.skippedDuplicates === 1 ? "" : "s"} skipped
+            </>
+          )}
+        </div>
+      )}
+      {pageScanReviewCandidates.length > 0 && scanProgress === null && (
+        <div className="bg-slate-100 px-4 py-1.5 text-center text-xs text-slate-700">
+          Click a grey dashed box to correct and accept it, ignore it, or cancel
+          and leave it for later.
+        </div>
+      )}
+      {scanProgress && (
+        <ScanProgressBanner
+          progress={scanProgress}
+          onStop={() => void stopActiveScan()}
+        />
       )}
       {lastDebugDump && (
         <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
           OCR debug: {lastDebugDump}
         </div>
       )}
-      {isLabeling && (
-        <div className="flex items-center justify-center gap-3 bg-indigo-50 px-4 py-1.5 text-center text-xs text-indigo-900">
+      {isDrawingValue && (
+        <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
-            {labelInputMode === "manual"
-              ? "Draw a box where the label goes, then type it."
-              : "Draw a box around the label text — OCR will read it."}
+            ✏️ Drag a box around one value. OCR will read it and open the
+            value/tolerance confirmation.
           </span>
           <button
             type="button"
-            onClick={() => setIsLabeling(false)}
-            className="rounded border border-indigo-300 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100"
+            onClick={() => setIsDrawingValue(false)}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
           >
             Cancel
           </button>
         </div>
       )}
-      {addValueLabelId && (
-        <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
+      {isSegmenting && !isProcessing && (
+        <div className="flex flex-wrap items-center justify-center gap-2 bg-emerald-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
-            ✏️ Now drag a box on the drawing around the value for “
-            {annotations.find((a) => a.id === addValueLabelId)?.value ?? "label"}
-            ” — OCR will read it.
+            Draw sections in scan order. {selectedScanSections.length} selected.
           </span>
           <button
             type="button"
-            onClick={() => setAddValueLabelId(null)}
+            onClick={() => void startSelectedSectionScan()}
+            disabled={selectedScanSections.length === 0}
+            className="rounded bg-white px-2 py-0.5 font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Start Scan
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedScanSections((current) => current.slice(0, -1))
+            }
+            disabled={selectedScanSections.length === 0}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20 disabled:opacity-50"
+          >
+            Undo Last
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedScanSections([])}
+            disabled={selectedScanSections.length === 0}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20 disabled:opacity-50"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={cancelSectionSelection}
             className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
           >
             Cancel
@@ -752,23 +1252,31 @@ export function DrawingViewer() {
       )}
 
       <Toolbar
-        isSegmenting={isSegmenting}
-        isLabeling={isLabeling}
+        isSelectingScanArea={isSegmenting}
+        isScanRunning={scanProgress !== null}
+        isDrawingValue={isDrawingValue}
         isProcessing={isProcessing}
         currentPage={currentPage}
         totalPages={totalPages}
         scale={scale}
-        onToggleSegment={() => {
-          setAddValueLabelId(null);
-          setIsLabeling(false);
-          setIsSegmenting(!isSegmenting);
+        balloonsVisible={balloonsVisible}
+        hasBalloons={valueAnnotations.length > 0}
+        onSelectScanSection={() => {
+          setSelectionError(null);
+          setScanSummary(null);
+          setSelectedScanSections([]);
+          setIsDrawingValue(false);
+          setIsSegmenting(true);
         }}
-        onStartLabel={(mode) => {
-          setAddValueLabelId(null);
+        onScanWholePage={() => void scanWholePage()}
+        onToggleDrawValue={() => {
+          setSelectionError(null);
+          setScanSummary(null);
+          setSelectedScanSections([]);
           setIsSegmenting(false);
-          setLabelInputMode(mode);
-          setIsLabeling(true);
+          setIsDrawingValue(!isDrawingValue);
         }}
+        onToggleBalloons={toggleBalloons}
         onZoomIn={() => setScale(Math.min(scale + 0.25, 4))}
         onZoomOut={() => setScale(Math.max(scale - 0.25, 0.5))}
         onPrevPage={() => setCurrentPage(Math.max(1, currentPage - 1))}
@@ -784,7 +1292,14 @@ export function DrawingViewer() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto p-4">
+          <div
+            className="flex-1 overflow-auto p-4"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !drawingActive) {
+                handleSelect(null);
+              }
+            }}
+          >
             {!konvaImage ? (
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-white text-slate-500">
                 <p className="text-lg font-medium">No drawing loaded</p>
@@ -815,48 +1330,75 @@ export function DrawingViewer() {
                 >
                   <Layer>
                     <KonvaImage
+                      name={DRAWING_BACKGROUND_NAME}
                       image={konvaImage}
                       width={stageSize.width}
                       height={stageSize.height}
                       listening={!drawingActive}
                     />
 
-                    {pageAnnotations.map((ann) => {
-                      const isLabel = ann.kind === "label";
-                      // Highlight the selection AND its mapped partner.
-                      const highlighted = relatedIds.has(ann.id);
-                      // Labels read indigo, dimensions red; highlight brightens.
-                      const stroke = highlighted
-                        ? isLabel
-                          ? "#4f46e5"
-                          : "#2563eb"
-                        : isLabel
-                          ? "#7c3aed"
-                          : "#dc2626";
-                      // Slanted callouts carry a tight rotated rectangle; draw
-                      // that (Konva rotates about x,y clockwise) instead of the
-                      // loose axis-aligned bbox so the box hugs the diagonal text.
-                      const box = ann.orientedBox ?? ann.bbox;
-                      const boxRotation = ann.orientedBox?.rotation ?? 0;
+                    {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
+                      <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
+                    )}
+
+                    {pageScanReviewCandidates.length > 0 &&
+                      scanProgress === null && (
+                      <ScanReviewOverlay
+                        candidates={pageScanReviewCandidates}
+                        scale={scale}
+                        disabled={drawingActive || isProcessing}
+                        selectedCandidateId={selectedReviewCandidateId}
+                        onSelect={openScanReviewCandidate}
+                      />
+                    )}
+
+                    {visiblePageAnnotations.map((ann) => {
+                      const highlighted = selectedId === ann.id;
+                      const stroke = highlighted ? "#2563eb" : "#dc2626";
                       return (
                         <Rect
                           key={ann.id}
-                          x={box.x}
-                          y={box.y}
-                          width={box.width}
-                          height={box.height}
-                          rotation={boxRotation}
+                          x={ann.bbox.x}
+                          y={ann.bbox.y}
+                          width={ann.bbox.width}
+                          height={ann.bbox.height}
                           stroke={stroke}
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.
                           strokeWidth={(highlighted ? 3 : 2) / scale}
-                          dash={(isLabel ? [3, 3] : [6, 4]).map((d) => d / scale)}
-                          // When something is selected, fade everything that
-                          // isn't the selection or its mapped partner.
+                          dash={[6 / scale, 4 / scale]}
+                          // When something is selected, fade the other values.
                           opacity={selectedId && !highlighted ? 0.15 : 1}
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
                         />
+                      );
+                    })}
+
+                    {pageSelectedScanSections.map((section) => {
+                      const order =
+                        selectedScanSections.findIndex(
+                          (candidate) => candidate.id === section.id
+                        ) + 1;
+                      return (
+                        <Group key={section.id} listening={false}>
+                          <Rect
+                            {...section.bbox}
+                            fill="#10b981"
+                            opacity={0.08}
+                            stroke="#059669"
+                            strokeWidth={2.5 / scale}
+                            dash={[8 / scale, 4 / scale]}
+                          />
+                          <Text
+                            x={section.bbox.x + 4 / scale}
+                            y={section.bbox.y + 3 / scale}
+                            text={String(order)}
+                            fill="#047857"
+                            fontSize={14 / scale}
+                            fontStyle="bold"
+                          />
+                        </Group>
                       );
                     })}
 
@@ -872,19 +1414,15 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {pageAnnotations.map((ann) => (
+                    {visiblePageAnnotations.map((ann) => (
                       <Balloon
                         key={`balloon-${ann.id}`}
                         annotation={ann}
                         scale={scale}
-                        selected={relatedIds.has(ann.id)}
-                        dimmed={!!selectedId && !relatedIds.has(ann.id)}
+                        selected={selectedId === ann.id}
+                        dimmed={!!selectedId && selectedId !== ann.id}
                         listening={!drawingActive}
                         onSelect={handleSelect}
-                        onOpen={(id) => {
-                          handleSelect(id);
-                          setEditingLabelId(id);
-                        }}
                       />
                     ))}
                   </Layer>
@@ -896,50 +1434,43 @@ export function DrawingViewer() {
 
         <Sidebar
           annotations={annotations}
+          reviewCandidates={scanReviewCandidates}
+          disabled={isSegmenting || isProcessing}
           selectedId={selectedId}
-          highlightedIds={relatedIds}
-          onSelect={handleSelect}
-          onUpdate={updateAnnotation}
-          onDelete={removeAnnotation}
-          onAddValue={(labelId) => {
-            setIsSegmenting(false);
-            setIsLabeling(false);
-            setAddValueLabelId(labelId);
-          }}
-          onEditLabel={(labelId) => {
-            setSelectedId(labelId);
-            setEditingLabelId(labelId);
+          selectedReviewCandidateId={selectedReviewCandidateId}
+          onSelect={(id) => handleSelect(id)}
+          onSelectReview={selectScanReviewCandidate}
+          onDelete={handleDelete}
+          onMove={handleMoveAnnotation}
+          onToggleVisibility={toggleAnnotationVisibility}
+          onEdit={(id) => {
+            handleSelect(id);
+            setEditingValueId(id);
           }}
         />
       </div>
 
-      <AnnotationPopup />
+      <AnnotationPopup
+        onReviewResolved={resolveScanReviewCandidate}
+        onReviewCancelled={(candidateId) =>
+          setSelectedReviewCandidateId((current) =>
+            current === candidateId ? null : current
+          )
+        }
+      />
 
       {(() => {
-        // The editor opens on a label or, for an auto-segmented value with no
-        // label, on the value itself.
-        const editingLabel = annotations.find((a) => a.id === editingLabelId);
-        if (!editingLabel) return null;
-        const editingValue =
-          editingLabel.kind === "label"
-            ? annotations.find(
-                (a) =>
-                  (a.kind ?? "dimension") === "dimension" &&
-                  a.labelId === editingLabel.id
-              )
-            : undefined;
+        const editingValue = annotations.find(
+          (annotation) =>
+            annotation.id === editingValueId && annotation.kind !== "label"
+        );
+        if (!editingValue) return null;
         return (
-          <LabelEditor
-            label={editingLabel}
-            value={editingValue}
+          <ValueEditor
+            annotation={editingValue}
             onUpdate={updateAnnotation}
-            onDeleteValue={removeAnnotation}
-            onAddValue={(labelId) => {
-              setIsSegmenting(false);
-              setIsLabeling(false);
-              setAddValueLabelId(labelId);
-            }}
-            onClose={() => setEditingLabelId(null)}
+            onDelete={handleDelete}
+            onClose={() => setEditingValueId(null)}
           />
         );
       })()}

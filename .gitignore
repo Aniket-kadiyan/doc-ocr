@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/.test-venv
 /.pnp
 .pnp.*
 .yarn/*
@@ -35,6 +36,7 @@ backend/.venv
 
 # debug step dumps
 backend/debug_output/
+backend/data
 
 
 .specstory/

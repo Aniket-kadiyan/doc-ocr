@@ -1,14 +1,11 @@
 import { create } from "zustand";
-import type { PageCanvasProvider } from "@/lib/ballooned";
-import type {
-  Annotation,
-  AnnotationKind,
-  LabelInputMode,
-  PendingSelection,
-} from "@/types/annotation";
+import {
+  moveValueAnnotationToNumber,
+  renumberValueAnnotations,
+} from "@/lib/annotationNumbers";
+import type { Annotation, PendingSelection } from "@/types/annotation";
 
-/** Treat a missing kind as "dimension" (older annotations predate the field). */
-const kindOf = (a: Annotation): AnnotationKind => a.kind ?? "dimension";
+const isValue = (annotation: Annotation) => annotation.kind !== "label";
 
 interface AnnotationState {
   annotations: Annotation[];
@@ -17,43 +14,34 @@ interface AnnotationState {
   totalPages: number;
   scale: number;
   isSegmenting: boolean;
-  /** The "Add Label" tool is active — draw the box for a label. */
-  isLabeling: boolean;
-  /** When labeling, whether the label is typed or OCR'd from the drawn box. */
-  labelInputMode: LabelInputMode;
-  /** id of the label a value is being added to (draw the box to OCR), or null. */
-  addValueLabelId: string | null;
-  /** id of the label whose values are open in the edit modal, or null. */
-  editingLabelId: string | null;
+  /** The Draw Value tool is active and waiting for one box. */
+  isDrawingValue: boolean;
+  /** id of the value whose metadata editor is open, or null. */
+  editingValueId: string | null;
   isProcessing: boolean;
   projectName: string;
-  /** id of the open project in IndexedDB — shared with the checksheet web view. */
+  /** id of the open IndexedDB project used to retrieve its source drawing. */
   projectId: string;
-  /** Renders a clean page of the open drawing. The viewer owns the PDF/canvas,
-   * so it registers this here and the Export menu uses it to build the
-   * ballooned drawing exports. null when no drawing is open. */
-  pageCanvasProvider: PageCanvasProvider | null;
 
   setAnnotations: (annotations: Annotation[]) => void;
   addAnnotation: (annotation: Annotation) => void;
   addAnnotations: (annotations: Annotation[]) => void;
   updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  moveAnnotationToNumber: (id: string, targetNumber: number) => void;
+  setAllBalloonVisibility: (visible: boolean) => void;
   removeAnnotation: (id: string) => void;
   setPending: (pending: PendingSelection | null) => void;
   setCurrentPage: (page: number) => void;
   setTotalPages: (total: number) => void;
   setScale: (scale: number) => void;
   setIsSegmenting: (segmenting: boolean) => void;
-  setIsLabeling: (labeling: boolean) => void;
-  setLabelInputMode: (mode: LabelInputMode) => void;
-  setAddValueLabelId: (id: string | null) => void;
-  setEditingLabelId: (id: string | null) => void;
+  setIsDrawingValue: (drawing: boolean) => void;
+  setEditingValueId: (id: string | null) => void;
   setIsProcessing: (processing: boolean) => void;
   setProjectName: (name: string) => void;
   setProjectId: (id: string) => void;
-  setPageCanvasProvider: (provider: PageCanvasProvider | null) => void;
-  /** Next sequence number within a kind, so dimensions and labels each count 1,2,3… */
-  getNextNumber: (kind?: AnnotationKind) => number;
+  /** Next visible balloon number in the contiguous 1…N sequence. */
+  getNextNumber: () => number;
 }
 
 export const useAnnotationStore = create<AnnotationState>((set, get) => ({
@@ -63,44 +51,40 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   totalPages: 1,
   scale: 1,
   isSegmenting: false,
-  isLabeling: false,
-  labelInputMode: "manual",
-  addValueLabelId: null,
-  editingLabelId: null,
+  isDrawingValue: false,
+  editingValueId: null,
   isProcessing: false,
   projectName: "Untitled Drawing",
   projectId: "",
-  pageCanvasProvider: null,
 
-  setAnnotations: (annotations) => set({ annotations }),
+  setAnnotations: (annotations) =>
+    set({ annotations: renumberValueAnnotations(annotations) }),
 
   addAnnotation: (annotation) =>
     set((state) => ({
-      annotations: [...state.annotations, annotation],
+      annotations: renumberValueAnnotations([
+        ...state.annotations,
+        annotation,
+      ]),
       pending: null,
     })),
 
   addAnnotations: (incoming) =>
     set((state) => {
       if (incoming.length === 0) return {};
-      // Number each batch within its own kind so dimensions and labels keep
-      // independent 1,2,3… sequences and don't collide.
-      const maxByKind = (kind: AnnotationKind) => {
-        const nums = state.annotations
-          .filter((a) => kindOf(a) === kind)
-          .map((a) => a.number);
-        return nums.length ? Math.max(...nums) : 0;
+      let nextNumber = state.annotations.filter(isValue).length + 1;
+      const numbered = incoming.filter(isValue).map((annotation) => ({
+        ...annotation,
+        kind: "dimension" as const,
+        number: nextNumber++,
+      }));
+      return {
+        annotations: renumberValueAnnotations([
+          ...state.annotations,
+          ...numbered,
+        ]),
+        pending: null,
       };
-      const counters: Record<AnnotationKind, number> = {
-        dimension: maxByKind("dimension"),
-        label: maxByKind("label"),
-      };
-      const numbered = incoming.map((a) => {
-        const kind = kindOf(a);
-        counters[kind] += 1;
-        return { ...a, number: counters[kind] };
-      });
-      return { annotations: [...state.annotations, ...numbered], pending: null };
     }),
 
   updateAnnotation: (id, patch) =>
@@ -110,9 +94,31 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       ),
     })),
 
+  moveAnnotationToNumber: (id, targetNumber) =>
+    set((state) => ({
+      annotations: moveValueAnnotationToNumber(
+        state.annotations,
+        id,
+        targetNumber
+      ),
+    })),
+
+  setAllBalloonVisibility: (visible) =>
+    set((state) => ({
+      annotations: state.annotations.map((annotation) =>
+        isValue(annotation)
+          ? { ...annotation, hidden: !visible }
+          : annotation
+      ),
+    })),
+
   removeAnnotation: (id) =>
     set((state) => ({
-      annotations: state.annotations.filter((a) => a.id !== id),
+      annotations: renumberValueAnnotations(
+        state.annotations.filter((a) => a.id !== id)
+      ),
+      editingValueId:
+        state.editingValueId === id ? null : state.editingValueId,
     })),
 
   setPending: (pending) => set({ pending }),
@@ -125,13 +131,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   setIsSegmenting: (isSegmenting) => set({ isSegmenting }),
 
-  setIsLabeling: (isLabeling) => set({ isLabeling }),
+  setIsDrawingValue: (isDrawingValue) => set({ isDrawingValue }),
 
-  setLabelInputMode: (labelInputMode) => set({ labelInputMode }),
-
-  setAddValueLabelId: (addValueLabelId) => set({ addValueLabelId }),
-
-  setEditingLabelId: (editingLabelId) => set({ editingLabelId }),
+  setEditingValueId: (editingValueId) => set({ editingValueId }),
 
   setIsProcessing: (isProcessing) => set({ isProcessing }),
 
@@ -139,12 +141,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   setProjectId: (projectId) => set({ projectId }),
 
-  setPageCanvasProvider: (pageCanvasProvider) => set({ pageCanvasProvider }),
-
-  getNextNumber: (kind = "dimension") => {
-    const nums = get()
-      .annotations.filter((a) => kindOf(a) === kind)
-      .map((a) => a.number);
-    return nums.length ? Math.max(...nums) + 1 : 1;
+  getNextNumber: () => {
+    return get().annotations.filter(isValue).length + 1;
   },
 }));

@@ -1,133 +1,160 @@
+# Doc OCR Box
 
+Local engineering-drawing OCR and ballooning application. The browser renders
+PDF/image drawings and stores annotations; a local Python API runs PaddleOCR and
+symbol recovery. No cloud OCR service is required.
 
-## Full workflow
+## Current workflow
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│  BROWSER (Next.js)                                              │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Open PDF/image (PDF.js → canvas)                            │
-│  2. Draw Box (Konva) around one dimension                       │
-│  3. Crop region + white padding → PNG                           │
-│  4. POST /ocr/recognize  ──────────────────────────────┐        │
-│  5. Popup: value, type, label → Save                    │        │
-│  6. Balloon #1,2,3… + IndexedDB + export JSON/CSV     │        │
-└───────────────────────────────────────────────────────│────────┘
-                                                        │
-                        LOCAL HTTP (no cloud)           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  PYTHON API  localhost:8000  (PaddleOCR + OpenCV)               │
-├─────────────────────────────────────────────────────────────────┤
-│  A. Receive crop PNG                                            │
-│  B. Preprocess                                                  │
-│       • Upscale small regions                                   │
-│       • CAD blue/cyan ink → high-contrast gray                  │
-│       • If vertical → rotate 90° for OCR passes                   │
-│  C. PaddleOCR (multi-pass)                                      │
-│       • Several gray variants × det on/off                      │
-│       • Parse text + confidence                                 │
-│  D. Symbol vision (OpenCV)                                      │
-│       • Template match: ±, °, Ø                                 │
-│       • Hough circles for diameter symbol                       │
-│       • Run on rotated + original views                         │
-│  E. Merge                                                       │
-│       • Insert Ø / ± / ° OCR missed                             │
-│       • Vertical tolerance heuristic → Ø174.07±0.05             │
-│  F. Return JSON → browser popup                                 │
-└─────────────────────────────────────────────────────────────────┘
+1. Open a PDF or image with **Open Drawing**.
+2. Choose **Draw Value** and draw a box around one dimension or note.
+3. Review the OCR result in the **Extracted Value** dialog.
+4. Correct Value or Tolerance if required, then select **OK**.
+5. Edit the same balloon later from the drawing or **Values** sidebar.
+6. Optionally add Label, Method, and Tool metadata.
+7. Save a reloadable `.docbox.json` project, create an internal inspection
+   checksheet, or export JSON, CSV, XML, or a verification payload.
+
+The box saved with a manually created value is the box drawn by the user.
+Balloon numbers are always contiguous `1…N`; deleting a value immediately
+renumbers the remaining values. Labels are optional metadata and do not create
+separate boxes or balloons.
+
+Numeric values without an explicit tolerance default to `0`. Complete decimal
+or angular tolerances embedded in Value are normalized into the editable
+Tolerance field. Malformed or incomplete tolerance expressions must be
+corrected before a saved annotation can be exported.
+
+```mermaid
+flowchart LR
+    A["Drawing box"] --> B["Local OCR API"]
+    B --> C["Value confirmation"]
+    C --> D["Value + balloon"]
+    D --> E["Project and exports"]
 ```
-
-**Tesseract is removed.** OCR is **PaddleOCR only** via the local API.
-
----
 
 ## Quick start
 
-### Terminal 1 — OCR API (required)
+Requirements:
 
-```bash
-cd doc-ocr-box
-cd backend && pip install -r requirements.txt && cd ..
-uvicorn main:app --reload --port 8000
-```
+- Node.js 20.19 or newer (required by the frontend test toolchain)
+- 64-bit CPython 3.13 for the validated Windows OCR environment
 
-Or, cross-platform, from the repo root: `npm run ocr-api` (auto-picks the
-venv Python for your OS).
-
-Check: http://127.0.0.1:8000/health → `"paddleocr": true`
-
-### Terminal 2 — UI
+Install the UI dependencies:
 
 ```bash
 npm install
+```
+
+Create the Python environment and install the OCR backend:
+
+```bash
+python -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+```
+
+On Windows PowerShell or Command Prompt, use:
+
+```bat
+py -m venv backend\.venv
+backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
+```
+
+Start the two processes from the repository root:
+
+```bash
+# Terminal 1
+npm run ocr-api
+
+# Terminal 2
 npm run dev
 ```
 
-Open http://localhost:3000 → banner: **PaddleOCR + symbol vision**
+Open `http://localhost:3000`. Check `http://127.0.0.1:8000/health` if the
+frontend cannot reach OCR. A healthy configured service reports
+`"paddleocr": true`.
 
----
-
-## Windows
-
-The `.venv` is OS-specific and gitignored — a macOS venv will **not** run on
-Windows, so create a fresh one. From the repo root in **PowerShell / cmd**:
+Windows also has a one-shot backend setup and launcher:
 
 ```bat
-REM One-shot: create venv, install deps, and start the OCR API
 scripts\win-ocr-setup.bat
 ```
 
-Or manually:
+The `ocr-api`, `ocr-api:debug`, and `ocr-api:debug:force` commands choose the
+correct virtual-environment Python path on Windows, macOS, and Linux.
 
-```bat
-REM Terminal 1 — OCR API (required)
-py -m venv backend\.venv
-backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
-npm run ocr-api
+## Internal checksheets
 
-REM Terminal 2 — UI
-npm install
-npm run dev
+Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a
+checksheet name and one or more measured-part columns. The backend saves an
+immutable snapshot of the specifications, balloon geometry, and original
+PDF/image, then opens the first draft inspection run.
+
+Use **Saved Checksheets** in the main toolbar to search definitions, reopen
+drafts, start another inspection, view completed history, rename, duplicate,
+archive, restore, or permanently delete an archived checksheet. Completing a
+run locks its readings.
+
+By default, durable checksheet data is written below
+`backend/data/checksheets/`. Set these variables in `.env.local` when deploying:
+
+```dotenv
+# Absolute or repo-relative backend storage location.
+CHECKSHEET_DATA_DIR=D:\doc-ocr-data\checksheets
+
+# Maximum accepted original drawing size in MB (default 200).
+CHECKSHEET_MAX_DOCUMENT_MB=200
 ```
 
-`npm run ocr-api` / `ocr-api:debug` / `ocr-api:debug:force` work on Windows,
-macOS and Linux (they use `scripts/run-ocr.mjs`, which selects
-`.venv\Scripts\python.exe` on Windows and `.venv/bin/python` elsewhere).
+Keep `CHECKSHEET_DATA_DIR` on a backed-up server volume. Other computers access
+it through the backend API; the browser is not the persistence layer for these
+checksheets.
 
-> If OCR produces no output but you see **no error**, the backend isn't
-> reachable. Open http://127.0.0.1:8000/health — if it doesn't return
-> `"paddleocr": true`, the Python API in Terminal 1 isn't running.
+## Drawing and OCR tips
 
----
+- Include the full `Ø`, `±`, degree, minute, or second symbol inside the box.
+- A tall, narrow box is valid for a vertical dimension; the backend evaluates
+  rotated variants.
+- If OCR misses a symbol, insert it with the buttons in the Value editor.
+- OCR is PaddleOCR-only. The former Tesseract worker is not used.
 
-## Sharing a ballooned drawing
+## Balloon appearance
 
-**Export ▾** carries two options that package the drawing *and* its readings
-together, so a recipient sees exactly what the annotator saw:
+Balloon appearance is deployment-controlled, not user-configurable. Drawing
+markers and sidebar thumbnails both load `public/balloon-style.json`. Replacing
+that one file changes every existing and future balloon after refresh; style is
+not embedded in saved projects.
 
-| Option | File | What's in it |
-| --- | --- | --- |
-| Ballooned Drawing (HTML) | `<name>_ballooned.html` | Every annotated page with its balloons, plus the inspection table. Images are inlined, so the single file opens offline in any browser — click a balloon or a row and the pair highlights, like the app. Ctrl/Cmd + P saves it as a PDF. |
-| Ballooned Drawing (PNG) | `<name>_ballooned_p<N>.png` | The page on screen as a flat image with the balloons burned in — for pasting into a report or a chat. |
+See [docs/BALLOON_STYLE.md](docs/BALLOON_STYLE.md) for the developer builder,
+validation, replacement, and fallback process.
 
-Both ask for the same optional extra columns as the CSV/JSON exports (blank
-columns for measured readings). They are read-only views: **Save Project**
-(`.docbox.json`) is still what you send to someone who needs to keep editing.
+## Testing
 
----
+Install test dependencies and run the fast verification suite:
 
-## Tips for Ø and ±
+```bash
+npm install
+backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
+npm run verify
+```
 
-1. Include the **full symbol** in the box (slightly left of digits for Ø).  
-2. For **vertical** dimensions, a tall narrow box is correct — we rotate internally.  
-3. If Ø still missing once, type it in the popup — field is editable.
+Use the equivalent `backend\.venv\Scripts\python` path on Windows. OCR/model
+integration tests are intentionally separate:
 
----
+```bash
+npm run test:ocr
+```
+
+See [docs/TESTING.md](docs/TESTING.md) for the command matrix, Windows manual
+acceptance checklist, and explicitly deferred follow-ups.
 
 ## Project layout
 
-```text
-src/           Next.js UI (Konva, PDF.js, Dexie)
-backend/       PaddleOCR + symbol_vision + image_preprocess
-main.py        Run uvicorn from project root
-```
+| Path | Purpose |
+|---|---|
+| `src/` | Next.js UI, annotation state, persistence, and exports |
+| `backend/` | FastAPI, PaddleOCR, image processing, and durable checksheet storage |
+| `public/balloon-style.json` | Single deployed balloon-style data file |
+| `tools/balloon_builder/` | Developer-only artwork conversion and validation utility |
+| `scripts/` | Cross-platform OCR and test launchers |
+| `docs/` | Testing and balloon-style operating documentation |

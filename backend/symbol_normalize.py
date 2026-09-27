@@ -52,3 +52,4 @@ def merge_ocr_candidates(candidates: list[tuple[str, float]]) -> tuple[str, floa
         key=lambda x: engineering_quality_score(x[0], x[1]),
     )
     return best_text, best_conf
+

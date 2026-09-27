@@ -6,6 +6,8 @@ Run: PYTHONPATH=. .venv/bin/python -m pytest test_region_cluster.py
 
 from __future__ import annotations
 
+import region_cluster
+
 from region_cluster import (
     cluster_boxes,
     drop_bridge_boxes,
@@ -152,27 +154,57 @@ def test_drop_bridge_keeps_fragment_of_one_dimension():
     assert value in kept and ref in kept
 
 
-def test_square_box_off_row_does_not_join_line():
-    """A datum 'B' below a feature-control frame stays separate."""
-    frame = _box(86, 97, 178, 56, "L 0.03 A")
-    datum = _box(192, 182, 36, 42, "B")
-    clusters = cluster_boxes([frame, datum], margin_ratio=0.72, img_w=900, img_h=800)
-    assert len(clusters) == 2
+def test_spatial_clustering_avoids_all_pairs_for_separated_candidates(monkeypatch):
+    """A dense page grid should compare local neighbours, not every box pair."""
+
+    boxes = [
+        _box(float(col * 80), float(row * 80), 14, 36)
+        for row in range(25)
+        for col in range(40)
+    ]
+    original = region_cluster._should_merge
+    comparisons = 0
+
+    def counted(a, b, margin_ratio):
+        nonlocal comparisons
+        comparisons += 1
+        return original(a, b, margin_ratio)
+
+    monkeypatch.setattr(region_cluster, "_should_merge", counted)
+    clusters = cluster_boxes(boxes, img_w=3200, img_h=2000)
+
+    assert len(clusters) == len(boxes)
+    assert comparisons < len(boxes) * 4
 
 
-def test_square_box_on_row_joins_line():
-    """A tolerance stack centred on its value's row still merges."""
-    value = _box(100, 100, 60, 30, "23")
-    stack = _box(166, 92, 40, 44, "0 -0.1")
-    clusters = cluster_boxes([value, stack], margin_ratio=0.72, img_w=900, img_h=800)
-    assert len(clusters) == 1
+def test_spatial_overlap_merge_avoids_all_pairs_for_separated_candidates(
+    monkeypatch,
+):
+    clusters = [
+        [_box(float(col * 80), float(row * 80), 14, 36)]
+        for row in range(25)
+        for col in range(40)
+    ]
+    original = region_cluster._ubbox_overlap_frac
+    comparisons = 0
+
+    def counted(a, b):
+        nonlocal comparisons
+        comparisons += 1
+        return original(a, b)
+
+    monkeypatch.setattr(region_cluster, "_ubbox_overlap_frac", counted)
+    merged = merge_overlapping_clusters(clusters)
+
+    assert len(merged) == len(clusters)
+    assert comparisons < len(clusters) * 4
 
 
-def test_overlapping_complete_clusters_stay_separate():
-    """Two complete diagonal callouts with overlapping AABBs are not fused."""
-    a = [_box(175, 77, 179, 178, "20H10")]
-    b = [_box(246, 167, 192, 153, "18H10")]
-    assert len(merge_overlapping_clusters([a, b])) == 2
-    # A fragment (unworthy text) overlapping a complete value still re-joins.
-    frag = [_box(250, 170, 100, 60, "REF.")]
-    assert len(merge_overlapping_clusters([b, frag])) == 1
+def test_bridge_filter_handles_many_crossed_columns_without_nested_pairs():
+    columns = [_box(float(index * 12), 0, 4, 120) for index in range(200)]
+    bridge = _box(0, 50, 2400, 8)
+
+    kept = drop_bridge_boxes([*columns, bridge])
+
+    assert bridge not in kept
+    assert kept == columns

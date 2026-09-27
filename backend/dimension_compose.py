@@ -256,3 +256,4 @@ def compose_engineering_dimension(
         kind = "angle"
 
     return ComposedDimension(fix_engineering_symbols_light(t), kind, applied)
+

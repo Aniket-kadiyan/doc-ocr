@@ -183,3 +183,4 @@ def merge_symbol_scores(a: DetectedSymbols, b: DetectedSymbols) -> DetectedSymbo
         degree=a.degree or b.degree,
         radius=a.radius or b.radius,
     )
+

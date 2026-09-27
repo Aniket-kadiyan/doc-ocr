@@ -64,6 +64,12 @@ export async function saveProject(project: ProjectRecord): Promise<void> {
   await db.projects.put(project);
 }
 
+export async function getProject(
+  projectId: string
+): Promise<ProjectRecord | undefined> {
+  return db.projects.get(projectId);
+}
+
 /** Remove a project and all of its annotations (e.g. when closing a drawing). */
 export async function deleteProject(projectId: string): Promise<void> {
   await db.transaction("rw", db.projects, db.annotations, async () => {

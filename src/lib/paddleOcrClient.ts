@@ -119,6 +119,8 @@ interface ApiRecognizeResponse {
 }
 
 export interface SegmentRegion {
+  /** Stable backend identity for a deduplicated whole-page detector object. */
+  candidateId?: string;
   text: string;
   confidence: number;
   type?: string;
@@ -129,6 +131,16 @@ export interface SegmentRegion {
   orientation: "horizontal" | "vertical" | "rotated";
   rotation: number;
   needsReview: boolean;
+  /** False when detection succeeded but the single OCR pass was empty/invalid. */
+  recognized: boolean;
+  /** Whole-page acceptance rule; absent for section scans. */
+  pageFilterRule?: string;
+  /** Human-readable whole-page acceptance reason. */
+  pageFilterReason?: string;
+  /** Why this detected object needs manual confirmation. */
+  reviewReason?: string;
+  /** True when bounded post-detection recovery was attempted. */
+  recoveryAttempted?: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
   /**
@@ -139,26 +151,132 @@ export interface SegmentRegion {
   orientedBox?: BBox & { rotation: number };
 }
 
-interface ApiSegmentResponse {
+export interface ApiSegmentRegion {
+  candidate_id?: string;
+  bbox: { x: number; y: number; width: number; height: number };
+  text: string;
+  confidence: number;
+  type?: string;
+  orientation?: "horizontal" | "vertical" | "rotated";
+  rotation?: number;
+  needs_review?: boolean;
+  recognized?: boolean;
+  page_filter_rule?: string;
+  page_filter_reason?: string;
+  review_reason?: string;
+  recovery_attempted?: boolean;
+}
+
+export interface ApiSegmentResponse {
   count: number;
-  regions: Array<{
-    bbox: { x: number; y: number; width: number; height: number };
-    text: string;
-    confidence: number;
-    type?: string;
-    category?: string;
-    label?: string;
-    orientation?: "horizontal" | "vertical" | "rotated";
-    rotation?: number;
-    needs_review?: boolean;
-    oriented_box?: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-      rotation: number;
-    };
+  detected_count?: number;
+  recognized_count?: number;
+  eligible_count?: number;
+  excluded_count?: number;
+  review_count?: number;
+  unread_count?: number;
+  skipped_existing_count?: number;
+  filter_rule_counts?: Record<string, number>;
+  coordinate_space?: "scope" | "page";
+  regions: ApiSegmentRegion[];
+  review_candidates?: ApiSegmentRegion[];
+  candidate_outcomes?: Array<{
+    candidate_id?: string;
+    bbox: BBox;
+    state: "eligible" | "excluded" | "review";
+    text?: string;
+    reason?: string;
+    rule?: string;
   }>;
+}
+
+function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
+  return {
+    candidateId: r.candidate_id,
+    // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
+    // newlines. A notes paragraph needs neither: its line breaks are what let
+    // the sheet split it back into numbered points, and "fixing" prose only
+    // risks turning letters into engineering symbols.
+    text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
+    confidence: r.confidence ?? 0,
+    type: r.type,
+    orientation: r.orientation ?? "horizontal",
+    rotation: r.rotation ?? 0,
+    needsReview: r.needs_review ?? false,
+    recognized: r.recognized ?? Boolean((r.text ?? "").trim()),
+    pageFilterRule: r.page_filter_rule,
+    pageFilterReason: r.page_filter_reason,
+    reviewReason: r.review_reason,
+    recoveryAttempted: r.recovery_attempted,
+    valueBox,
+  };
+}
+
+/** Map backend crop coordinates into the drawing's base canvas coordinates. */
+export function mapSegmentRegions(
+  regions: ApiSegmentRegion[],
+  bbox: BBox,
+  displayScale = 1
+): SegmentRegion[] {
+  const pad = Math.max(4, CROP_PAD_PX / displayScale);
+
+  return regions.map((r) => {
+    const mapped: BBox = {
+      x: bbox.x + (r.bbox.x - CROP_PAD_PX) / displayScale,
+      y: bbox.y + (r.bbox.y - CROP_PAD_PX) / displayScale,
+      width: r.bbox.width / displayScale,
+      height: r.bbox.height / displayScale,
+    };
+
+    const outOfBounds =
+      !Number.isFinite(mapped.x) ||
+      !Number.isFinite(mapped.y) ||
+      !Number.isFinite(mapped.width) ||
+      !Number.isFinite(mapped.height) ||
+      mapped.x < bbox.x - pad ||
+      mapped.y < bbox.y - pad ||
+      mapped.x + mapped.width > bbox.x + bbox.width + pad ||
+      mapped.y + mapped.height > bbox.y + bbox.height + pad;
+
+    const valueBox: BBox = outOfBounds
+      ? {
+          x: bbox.x,
+          y: bbox.y,
+          width: bbox.width,
+          height: bbox.height,
+        }
+      : mapped;
+
+    return mappedSegmentRegion(r, valueBox);
+  });
+}
+
+/** Map API regions that are already expressed in full-page coordinates. */
+export function mapPageSegmentRegions(
+  regions: ApiSegmentRegion[],
+  pageBounds: BBox
+): SegmentRegion[] {
+  return regions.map((r) => {
+    const direct: BBox = {
+      x: r.bbox.x,
+      y: r.bbox.y,
+      width: r.bbox.width,
+      height: r.bbox.height,
+    };
+    const invalid =
+      !Number.isFinite(direct.x) ||
+      !Number.isFinite(direct.y) ||
+      !Number.isFinite(direct.width) ||
+      !Number.isFinite(direct.height) ||
+      direct.width <= 0 ||
+      direct.height <= 0 ||
+      direct.x < pageBounds.x ||
+      direct.y < pageBounds.y ||
+      direct.x + direct.width > pageBounds.x + pageBounds.width ||
+      direct.y + direct.height > pageBounds.y + pageBounds.height;
+
+    return mappedSegmentRegion(r, invalid ? pageBounds : direct);
+  });
 }
 
 /**
@@ -216,64 +334,7 @@ export async function runSegmentOcr(
 
   const data = (await res.json()) as ApiSegmentResponse;
 
-  const pad = Math.max(4, CROP_PAD_PX / displayScale);
-
-  return (data.regions ?? []).map((r) => {
-    const mapped: BBox = {
-      x: bbox.x + (r.bbox.x - CROP_PAD_PX) / displayScale,
-      y: bbox.y + (r.bbox.y - CROP_PAD_PX) / displayScale,
-      width: r.bbox.width / displayScale,
-      height: r.bbox.height / displayScale,
-    };
-
-    const outOfBounds =
-      !Number.isFinite(mapped.x) ||
-      !Number.isFinite(mapped.y) ||
-      !Number.isFinite(mapped.width) ||
-      !Number.isFinite(mapped.height) ||
-      mapped.x < bbox.x - pad ||
-      mapped.y < bbox.y - pad ||
-      mapped.x + mapped.width > bbox.x + bbox.width + pad ||
-      mapped.y + mapped.height > bbox.y + bbox.height + pad;
-
-    const valueBox: BBox = outOfBounds
-      ? {
-          x: bbox.x,
-          y: bbox.y,
-          width: bbox.width,
-          height: bbox.height,
-        }
-      : mapped;
-
-    // Map the oriented rectangle (angled callouts only) the same way — its
-    // top-left corner translates + scales like any point; rotation is invariant.
-    const orientedBox = r.oriented_box
-      ? {
-          x: bbox.x + (r.oriented_box.x - CROP_PAD_PX) / displayScale,
-          y: bbox.y + (r.oriented_box.y - CROP_PAD_PX) / displayScale,
-          width: r.oriented_box.width / displayScale,
-          height: r.oriented_box.height / displayScale,
-          rotation: r.oriented_box.rotation,
-        }
-      : undefined;
-
-    return {
-      // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
-      // newlines. A notes paragraph needs neither: its line breaks are what
-      // let the sheet split it back into numbered points, and "fixing" prose
-      // only risks turning letters into engineering symbols.
-      text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
-      confidence: r.confidence ?? 0,
-      type: r.type,
-      category: r.category,
-      label: r.label,
-      orientation: r.orientation ?? "horizontal",
-      rotation: r.rotation ?? 0,
-      needsReview: r.needs_review ?? false,
-      valueBox,
-      orientedBox,
-    };
-  });
+  return mapSegmentRegions(data.regions ?? [], bbox, displayScale);
 }
 
 /** One title-block field read off the sheet for a configured keyword. */

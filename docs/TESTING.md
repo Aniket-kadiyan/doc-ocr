@@ -1,0 +1,317 @@
+# Testing
+
+The test strategy has two levels:
+
+1. Fast automated regressions that do not load OCR models.
+2. Manual and model-loading tests on the validated Windows OCR environment.
+
+## Setup
+
+Install JavaScript and Python development dependencies from the repository
+root. Runtime deployments can continue using `backend/requirements.txt`; only
+developers need `requirements-dev.txt`. Use Node.js 20.19 or newer so the
+Vitest/Vite test toolchain is within its supported engine range.
+
+```bash
+npm install
+backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
+```
+
+Windows:
+
+```bat
+npm install
+backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
+```
+
+## Commands
+
+| Command | Coverage |
+|---|---|
+| `npm run lint` | Next.js/TypeScript source through ESLint CLI |
+| `npm run typecheck` | TypeScript without emitting files |
+| `npm run test:frontend` | Value/tolerance, numbering, state, migration, exports, and balloon geometry |
+| `npm run test:backend` | Fast Python parsing, conversion, clustering, and balloon-builder regressions |
+| `npm run test:ocr` | OpenCV region refinement and synthetic PaddleOCR integration; may load models |
+| `npm run verify` | Lint, typecheck, frontend tests, and fast Python tests |
+| `npm run build` | Production Next.js build; run before a release |
+
+`scripts/run-python-tests.mjs` selects
+`backend\.venv\Scripts\python.exe` on Windows and
+`backend/.venv/bin/python` on macOS/Linux. It falls back to the system Python
+only when the repository virtual environment is absent.
+
+## Automated regression boundaries
+
+The fast suite verifies:
+
+- Numeric values default to tolerance `0`.
+- Decimal, asymmetric, and DMS tolerances are derived consistently.
+- Incomplete tolerance intent remains invalid instead of silently becoming `0`.
+- Balloon numbers normalize to a contiguous `1…N` sequence after load/delete.
+- Stable annotation IDs, array order, and manually drawn bounding boxes survive
+  numbering operations.
+- Optional Label, Method, and Tool fields export as empty values when omitted.
+- Legacy label-first projects migrate to values-only records and report orphans.
+- JSON, CSV, XML, checksheet, and verification data remain values-only.
+- The deployed balloon JSON validates, stays anchored at every zoom level, and
+  fits multi-digit numbers.
+- The developer balloon builder preserves enclosed white regions, round-trips
+  one-file styles, and rejects corrupt or unsafe files.
+- Section auto-balloon localization retains its morphology proposal pass,
+  bounded detector passes, grouping, and capped local refinements.
+- Whole-page auto-ballooning bypasses the section cascade: every page is split
+  into four to eight adaptive overlapping panels, with two bounded standalone
+  detector calls (`0°` and `90°`) per panel.
+- Repeated-cell grids produce hard-exclusion masks only when they touch or lie
+  within 2% of the shorter page dimension from a page edge. Interior table-like
+  drawing geometry remains unmasked. Section crops retain all selected pixels.
+- Whole-page crops use standalone orientation and recognition modules in
+  batches for preliminary policy decisions. Every preliminary eligible/review
+  candidate is then reread through the complete Draw Value accuracy pipeline;
+  preliminary text is never published as a balloon or review proposal.
+- Detector quadrilaterals survive page-coordinate restoration and deduplication.
+  Only unread, explicitly truncated, or genuinely confusable primary reads enter
+  recovery. The rectified variant runs first; the expanded/sharpened variant runs
+  only when that result remains unusable or conflicts numerically. Recovery stays
+  capped at 96 candidates and uses batches of 16; detection is never rerun.
+- Recovery consensus compares ordered numeric meaning after normalizing spacing,
+  degree/diameter variants, primes, and `+/-`/`±`. Confidence, orientation score,
+  and panel-boundary contact are diagnostic or ranking data, not approval gates.
+  Stable alphabetic confusables are rejected while unresolved numeric or
+  alphabetic conflicts remain explicit review candidates.
+- Context OCR is limited to at most 48 exclusion-prone values and affects only
+  filtering; it never replaces the candidate's recognized technical value.
+- Whole-page eligibility rules are isolated in
+  `backend/page_value_filters.py`. OCR-confusable forms of detail, scale,
+  revision/release, note, and metadata keywords are excluded before a complete
+  engineering-value grammar is applied. Nearby labels affect only ratios,
+  identifiers, single-character markers, or mixed text; they cannot suppress a
+  strong dimension such as an angular tolerance.
+- Scan results remain hidden until success while heartbeat, liveness,
+  panel/pass/batch counters, elapsed time, stage-rate ETA, and temporary debug
+  geometry remain observable. Cooperative cancellation publishes no partial
+  annotations and enters `cancelling` until the current model call returns.
+- Section scans return every non-empty recognized object after clustering and
+  duplicate suppression, without table, length, numeric, syntax, confidence,
+  or whole-page eligibility filters.
+
+Automated tests do not claim OCR accuracy on real manufacturing drawings or
+pixel-perfect browser rendering. Those remain manual acceptance checks.
+
+## Windows manual acceptance checklist
+
+Use representative horizontal, vertical, angular, and low-contrast drawings.
+For calculation checks, manually enter the exact Value text so OCR accuracy and
+range parsing can be diagnosed independently.
+
+### Value lifecycle
+
+- Draw one value and confirm that the final box exactly matches the selection.
+- Create several values; confirm drawing/sidebar numbers are `1…N`.
+- Delete a middle value; confirm all remaining values renumber immediately.
+- Leave Label, Method, and Tool blank, save, reload, and export successfully.
+- Add and remove optional metadata without creating a separate label balloon.
+- Save `.docbox.json`, remove the drawing, load the project, and compare boxes,
+  page numbers, rotations, values, tolerances, and metadata.
+- Load a pre–value-first project and verify mapped labels migrate into value
+  metadata while orphan labels produce one warning.
+
+### Tolerance and angle cases
+
+| Value | Expected automatic Tolerance |
+|---|---:|
+| `0.02` | `0` |
+| `58.21±0.05` | `+0.05, -0.05` |
+| `25 +0.1 -0.2` | `+0.1, -0.2` |
+| `90°±0°30` | Empty/incomplete; final export blocked after save |
+| `90°±0°30′` | `+0.5, -0.5` |
+| `90°±0°30′15″` | `+0.504167, -0.504167` |
+
+Generate a Digital Checksheet and verify the numeric ranges as well as the
+displayed text. Malformed cases such as `25 ±`, `+0.1 +0.2`, and `+0.1 -` must
+identify the offending balloon and block final output once the edit is saved.
+
+### Balloon rendering
+
+- Confirm the white number circle, black outline/text, and orange pointer match
+  in the drawing and sidebar.
+- Confirm the pointer tip touches the value box's top centre.
+- Check 50%, 100%, 200%, and 400% zoom; screen size stays approximately
+  constant and the pointer remains anchored.
+- Confirm numbers `1`, `35`, and `128` fit without clipping.
+- Confirm selection adds a blue halo without recolouring the artwork.
+- Toggle **Hide Balloons** and confirm saved red boxes, leaders, markers, and
+  numbers disappear while the sidebar, review boxes, and scan progress remain.
+  Toggle **Show Balloons**, reload the browser, and confirm visibility persists
+  without changing saved annotations, numbering, or exports.
+- Use **Hide** on one sidebar value and confirm only that value box, leader,
+  marker, and number disappear. Its sidebar row must remain with a **Hidden**
+  badge, and it must still be present in saved projects, checksheets, exports,
+  and duplicate protection. The global toggle must not reset individual choices.
+- Select a balloon, then click blank drawing space or the surrounding workspace.
+  Confirm selection clears and every visible balloon returns to full opacity.
+  Hiding the selected balloon must clear selection as well.
+- Replace only `public/balloon-style.json`, refresh, and verify old, new, and
+  loaded-project balloons all change without changing their data.
+- Test a missing, malformed, and corrupt-artwork style file separately; the app
+  must remain usable with the built-in fallback.
+
+### OCR integration
+
+- Run `npm run test:ocr` with the complete Windows OCR environment installed.
+- Start `npm run ocr-api` and verify `/health` reports `paddleocr: true`,
+  `text_detector: true`, `text_recognizer: true`,
+  `text_line_orientation: true`, and `page_batch_recognition: true`. Whole-page
+  scanning must fail clearly if a standalone page model is unavailable; it
+  uses those models for preliminary page processing before authoritative
+  per-candidate Draw Value OCR.
+- Read at least one horizontal dimension, vertical dimension, diameter,
+  decimal tolerance, and DMS angle from representative drawings.
+- Verify an OCR failure still opens an editable empty Value dialog without
+  moving the user-drawn box.
+
+### Auto-balloon progress and liveness
+
+- Scan the same small and large sections used before the page-orchestration
+  change. Confirm their object boxes and OCR results are unchanged and each
+  blocking detection pass is named before PaddleOCR begins it.
+- Scan a whole page and confirm layout analysis visibly creates 4–8 adaptive
+  overlapping panels regardless of render resolution. Each panel runs `0°`
+  then `90°`; no page may be processed as one full-page panel. Whole-page mode
+  must not show morphology, section grouping, local coverage refinement, or
+  cluster refinement stages.
+- Confirm the temporary overlay shows red table masks, blue pending panels,
+  one bright-green active panel, muted completed panels, amber overlap, neutral
+  detections, purple recovering values, green eligible values, orange
+  exclusions, and grey review values.
+  It must stay aligned at every zoom, disappear after success, and remain with
+  a Dismiss action after failure.
+- Confirm neighbouring atomic boxes are never merged; only similar-size,
+  same-position repeats across panel overlap or rotation may be deduplicated.
+- Confirm elapsed time and current-step time continue advancing throughout the
+  job. Before a comparable unit completes, the UI must say **Calculating
+  estimate**. Afterwards it shows **Stage ETA**; it must not extrapolate total
+  runtime from the global weighted percentage.
+- Confirm the heartbeat normally stays current. A slow unit may change to
+  **Long-running step**. A current heartbeat with unusually old progress must
+  read **Service responsive — slow progress**; **Heartbeat missing — possibly
+  stalled** is reserved for a stale service heartbeat. None of these warnings
+  cancels the scan or commits partial balloons.
+- Confirm cross-tile deduplication removes repeated overlap views only when the
+  boxes have similar position and size. A large containing box and its smaller
+  child objects must all survive for review.
+- Confirm primary recognition reports `Batch N/M` and uses the
+  `batch_recognition` profile with a batch size of 16. Low confidence, low
+  orientation confidence, and panel-boundary contact must not trigger recovery
+  or review for a usable numeric value. Pure text also skips recovery. Only
+  unread, explicitly truncated, corrected-confusable, or suspicious
+  letter/digit candidates enter the capped recovery route.
+- Confirm only preliminary eligible/review candidates enter **Reading final
+  values**. Their final Value, type, confidence, and symbols must match Draw
+  Value OCR on the same crop; preliminary strings such as `rat`, `Ø0`, or
+  `5×050` must never reach balloons, review proposals, or CSV export. A failed
+  authoritative read must create a blank review value.
+- Confirm angled detections are rectified from their detector polygons. A usable
+  first recovery result must skip the expanded/sharpened variant; that second
+  variant runs only for unread or numerically conflicting first results. Valid
+  values such as `R5.00`, `R1.50`, and angular tolerances should be automatically
+  ballooned; review boxes are reserved for genuinely unresolved cases.
+- Confirm the completion banner reports detected, recognized, eligible,
+  excluded, review-required, and unread counts, with
+  `detected = eligible + excluded + review-required`. Unread is a diagnostic
+  subset based on whether any OCR text was recovered; it is not a fourth final
+  state.
+- Confirm unresolved objects remain as grey dashed, clickable boxes after the
+  processing overlay disappears. **OK** creates a normal balloon and removes
+  the review box; **Ignore** removes it without creating data; **Cancel** leaves
+  it available. Review boxes must not appear in saved projects or exports until
+  accepted. Every unresolved object must also appear in the right panel after
+  all numbered balloons; selecting that row must open the same review workflow
+  and navigate to its page.
+- Confirm whole-page filtering accepts values such as `50`, `.25`, `R5.00`,
+  `Ø24.80`, `15°±3°`, `32°20'40"`, `M8`, `2X Ø10`, `SS304`, `R0.2 MAX`, and
+  standalone `2:1` without requiring units, leaders, arrows, or other geometry.
+  Harmless boundary noise such as `?30°±3°` must normalize to `30°±3°`.
+- Confirm `DETAIL B SCALE 2:1`, `D3TAIL`, `SC4LE`, `REV1SION`, `RELEA5ED`,
+  `MOD1FICATIONS`, `N0TE`, dates, and drawing/document/part/sheet metadata are
+  excluded. A split value such as `TS232224` is excluded when its nearby
+  recognized label is `PART NUMBER`, but accepted without that association.
+- Place `DETAIL`, `SCALE`, or `REVISION` near a valid angle such as `30°±3°`;
+  the angle must remain eligible. Place the same labels beside `2:1`, a compact
+  identifier, or a single-character revision marker; those context-prone
+  values must be excluded. Isolated `0`, `1`, or `8` and mixed text such as
+  `ZONE A 25` must enter authoritative rereading rather than becoming automatic
+  balloons; they remain review candidates only when the accurate read is still
+  unresolved.
+- Record standalone batch and authoritative OCR profiles separately. The page
+  classifier must not add detector/recovery/context calls, and total runtime
+  must remain below ten minutes on the representative Windows drawing.
+- Confirm boundary specification/revision/title/tolerance grids produce no
+  balloons in whole-page mode. Confirm a repeated-cell structure in the drawing
+  interior remains available to detection. In section mode, deliberately select
+  a table and confirm its non-empty OCR results are returned because the user
+  selection—not automatic filtering—is the boundary.
+- Disable one whole-page rule in `backend/page_value_filters.py`, restart the
+  backend, and confirm only that rule changes. Section scans bypass both those
+  whole-page rules and table exclusions.
+- For **Select Sections**, draw at least three non-overlapping areas and confirm
+  they receive visible `1`, `2`, `3` order markers. Verify **Undo Last**,
+  **Clear**, and **Cancel**, then start the queue.
+- Confirm section jobs run strictly in the selected order. Each section must
+  publish and save its complete balloon batch before the next section starts;
+  the progress banner must identify `Section N of M`. Overlapping later
+  sections must skip balloons already added by earlier sections.
+- Confirm whole-page finalization remains atomic: all whole-page balloons appear
+  together only after that complete job succeeds. Section batches are atomic per
+  section and never publish a partially completed active section.
+- Press **Stop** during detection, batch recognition, and final-value rereading.
+  The banner must show **Stopping…** until the active model call returns, then
+  close with a stopped message. Existing saved balloons remain; the stopped job
+  adds no balloons or review candidates.
+- Press **Stop** during the second item of a multi-section queue. Balloons and
+  reviews from the first section must remain; the active section must publish
+  nothing, and no later queued section may start.
+- During a section scan, confirm the banner advances through bridge filtering,
+  spatial grouping, fragment merging, orientation splitting, bounded local
+  refinement, and overlap merging. The current candidate count must remain
+  visible instead of leaving the banner unchanged for the entire stage.
+- Oversized-cluster refinement may run at most eight standalone detector calls.
+  If more oversized candidates exist, or the standalone detector is unavailable,
+  the remaining candidates must be retained without launching full OCR inside
+  grouping.
+
+## Milestone 2B performance gate
+
+Performance is now a prerequisite for the remaining auto-ballooning accuracy
+milestones. On the actual deployment Windows machine, complete click-to-balloon
+insertion must take no more than **10 minutes** for the agreed representative
+worst-case drawing and maximum page resolution; **5–7 minutes** is the target.
+Use a warm OCR service, exclude manual review time, and retain
+at least the accepted detection/recognition accuracy. Neither limit is an
+automatic cancellation timeout. For whole-page runs record total time plus
+layout analysis, masked panel detection, atomic deduplication, primary batched
+recognition, bounded recovery, filter-context recognition, preliminary
+filtering, authoritative Draw Value OCR, final filtering, and finalization time
+so the next optimization targets measured work. The
+section-only morphology and refinement timings are not part of this route.
+
+## Explicitly deferred until after auto-ballooning
+
+These observed behaviors are recorded but intentionally not changed during the
+current auto-ballooning milestones:
+
+1. Editing the separate Tolerance field does not yet rewrite a tolerance already
+   embedded in Value.
+2. Export validation evaluates committed annotation data; exporting while the
+   latest editor changes are still unsaved can miss those pending changes.
+3. Balloons cannot yet be reordered by the user. Reordering must preserve
+   contiguous `1...N` numbering in the drawing, sidebar, project, and exports.
+Do not mark tests for these three behaviors as passing until their later fixes are
+implemented.
+
+## Reporting a failure
+
+Record the test command or manual case, expected behavior, actual behavior,
+screenshot/error, and affected project/export file. Keep the original project
+file unchanged and reproduce with a copy whenever possible.

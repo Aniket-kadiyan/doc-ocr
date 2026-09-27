@@ -340,3 +340,4 @@ def detect_phi_multi_strip(
     else:
         best = min(best, LEGACY_CAP)
     return best >= 0.32, round(best, 3), details
+
