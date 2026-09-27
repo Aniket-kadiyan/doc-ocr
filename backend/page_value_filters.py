@@ -173,6 +173,46 @@ def _unwrapped_value(text: str) -> str:
     return text
 
 
+# A dual-dimensioned callout: the primary value followed by its converted
+# equivalent in brackets ("2.25[57.15]", "Ø0.33[8.38]", "1.13[28.70]REF.").
+# Drawings that carry INCHES[MILLIMETERS] in the title block write nearly every
+# dimension this way, and without this rule the grammar below rejects all of
+# them as incomplete.
+_DUAL_UNIT_VALUE = _compile(
+    r"^(?P<primary>[^\[\]]+?)"
+    r"\s*\[\s*(?P<secondary>[^\[\]]+?)\s*\]"
+    r"\s*(?P<suffix>REF|BASIC|MAX|MIN|TYP|THRU)?\.?$"
+)
+
+
+def _is_single_value(value: str) -> bool:
+    """One value on its own, by the grammar rules below."""
+    return bool(
+        _ANGLE_VALUE.fullmatch(value)
+        or _LINEAR_VALUE.fullmatch(value)
+        or _THREAD_VALUE.fullmatch(value)
+        or _STANDALONE_TOLERANCE.fullmatch(value)
+    )
+
+
+def _is_dual_unit_value(value: str) -> bool:
+    """
+    A primary value with its bracketed unit conversion.
+
+    Both halves have to be complete values in their own right, which is what
+    keeps two callouts fused by a clustering error ("1.00[25.40]0.25[6.35]")
+    from passing: their combined text is not primary + one bracket + suffix.
+    """
+    match = _DUAL_UNIT_VALUE.fullmatch(value)
+    if not match:
+        return False
+    primary = match.group("primary").strip()
+    secondary = match.group("secondary").strip()
+    if not primary or not secondary:
+        return False
+    return _is_single_value(primary) and _is_single_value(secondary)
+
+
 def is_complete_engineering_value(text: str) -> bool:
     """Recognize a complete value without extracting digits from prose."""
 
@@ -188,6 +228,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _THREAD_VALUE.fullmatch(value):
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
+        return True
+    if _is_dual_unit_value(value):
         return True
     return bool(COMPACT_IDENTIFIER_VALUE.fullmatch(value))
 

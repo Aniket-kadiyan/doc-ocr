@@ -2071,6 +2071,213 @@ class OcrPipeline:
         region["_line_h"] = line_h
         return region, sorted(chosen)
 
+    @staticmethod
+    def _region_from_result(
+        res: dict[str, Any],
+        bbox: dict[str, float],
+        text: str,
+    ) -> dict[str, Any]:
+        """Assemble one segment region dict from a `recognize` result."""
+        return {
+            "bbox": bbox,
+            "text": text,
+            "confidence": res.get("confidence", 0.0),
+            "type": res.get("type"),
+            "category": res.get("category"),
+            "subtype": res.get("subtype"),
+            "label": res.get("label"),
+            "orientation": res.get("orientation", "horizontal"),
+            "rotation": res.get("rotation", 0),
+            "needs_review": res.get("needs_review", False),
+            "agreement": res.get("agreement", 0.0),
+            "engine": res.get("engine", "paddleocr"),
+            "symbols_detected": res.get("symbols_detected"),
+        }
+
+    @staticmethod
+    def _cluster_row_count(cluster: list[dict[str, Any]]) -> int:
+        """
+        Number of distinct horizontal text rows among a cluster's member boxes.
+
+        Boxes that don't overlap on the y-axis sit on separate rows. Two stacked
+        close-proximity callouts fuse into one cluster whose members span two y
+        bands; this reports that so `segment` can attempt a content split even
+        when the fused single-line read collapsed to one value.
+        """
+        spans = sorted((b["y"], b["y"] + b["h"]) for b in cluster)
+        rows: list[list[float]] = []
+        for y0, y1 in spans:
+            for r in rows:
+                if not (y1 <= r[0] or y0 >= r[1]):  # overlaps this band in y
+                    r[0], r[1] = min(r[0], y0), max(r[1], y1)
+                    break
+            else:
+                rows.append([y0, y1])
+        return len(rows)
+
+    @staticmethod
+    def _region_from_result(
+        res: dict[str, Any],
+        bbox: dict[str, float],
+        text: str,
+    ) -> dict[str, Any]:
+        """Assemble one segment region dict from a `recognize` result."""
+        return {
+            "bbox": bbox,
+            "text": text,
+            "confidence": res.get("confidence", 0.0),
+            "type": res.get("type"),
+            "category": res.get("category"),
+            "subtype": res.get("subtype"),
+            "label": res.get("label"),
+            "orientation": res.get("orientation", "horizontal"),
+            "rotation": res.get("rotation", 0),
+            "needs_review": res.get("needs_review", False),
+            "agreement": res.get("agreement", 0.0),
+            "engine": res.get("engine", "paddleocr"),
+            "symbols_detected": res.get("symbols_detected"),
+        }
+
+    @staticmethod
+    def _prefer_detection_text(
+        cluster: list[dict[str, Any]], res: dict[str, Any], text: str
+    ) -> str:
+        """
+        Fall back to the detector's own read when the crop re-read lost a tail.
+
+        The detection pass reads each box in full-crop context; the per-cluster
+        ``recognize`` re-reads a tight crop that may clip a small trailing part
+        (``45°±3°`` → ``45°``). When a single-box cluster's detection text is a
+        confident superset of the re-read (same leading digits, more content),
+        compose that instead. Never replaces a read with something that
+        disagrees on the digits already read.
+        """
+        import re
+
+        from segment_quality import is_segment_worthy, strip_foreign_glyphs
+
+        if len(cluster) != 1:
+            return text
+        det = (cluster[0].get("text") or "").strip()
+        conf = float(cluster[0].get("conf") or 0.0)
+        if not det or conf < 0.85 or det == text:
+            return text
+        d_text = re.sub(r"\D", "", text)
+        d_det = re.sub(r"\D", "", det)
+        if not d_det:
+            return text
+        # The tight re-read failed outright ("四1", "E") while the detector read
+        # a complete value ("R1") — take the detector's read.
+        rescue = not is_segment_worthy(text) and is_segment_worthy(det)
+        clipped_tail = bool(d_text) and d_det.startswith(d_text) and len(d_det) > len(d_text)
+        # "/10.03B" vs detector "// 0.03 B": the re-read turned a frame glyph's
+        # stroke into a leading "1". Same digits after that stroke, and the
+        # detector saw a GD&T symbol where the stroke is.
+        stroke_prefix = (
+            d_text.endswith(d_det)
+            and set(d_text[: len(d_text) - len(d_det)]) == {"1"}
+            and any(g in det for g in ("//", "∥", "⟂", "⊥", "∠", "◎", "⌖", "○", "↗"))
+        )
+        if not (rescue or clipped_tail or stroke_prefix):
+            return text
+        symbols = DetectedSymbols(**(res.get("symbols_detected") or {}))
+        composed = compose_engineering_dimension(det, None, symbols)
+        new = strip_foreign_glyphs((composed.text or "").strip())
+        if not new or re.sub(r"\D", "", new) != d_det or not is_segment_worthy(new):
+            return text
+        res["text"] = new
+        res["type"] = composed.kind
+        res["confidence"] = min(float(res.get("confidence") or 0.0), conf)
+        feature = classify_feature(new, symbols=res.get("symbols_detected") or {})
+        res["category"], res["subtype"], res["label"] = (
+            feature.category, feature.subtype, feature.label,
+        )
+        return new
+
+
+    def _split_stacked_cluster(
+        self,
+        image: Image.Image,
+        coords: tuple[int, int, int, int],
+        *,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+    ) -> list[dict[str, Any]] | None:
+        """
+        Re-segment one cluster that read back as multiple stacked values.
+
+        Detects text rows inside the cluster crop with a tighter merge margin so
+        the stacked callouts separate, then runs the full `recognize` pipeline
+        per row (so each gets its own dual-unit repair and balloon box). Returns
+        the per-row regions, or ``None`` when the crop doesn't actually split
+        into 2+ worthy values (leaving the original single region untouched).
+        """
+        from region_cluster import (
+            cluster_boxes,
+            order_clusters,
+            split_mixed_clusters,
+            union_bbox,
+        )
+        from segment_quality import (
+            count_dimension_values,
+            has_dimension_value,
+            is_segment_worthy,
+            strip_foreign_glyphs,
+        )
+        from stroke_filter import is_stray_line
+
+        cx0, cy0, cx1, cy1 = coords
+        sub = image.crop((cx0, cy0, cx1, cy1))
+        sub_boxes = self.detect_regions(sub)
+        if len(sub_boxes) < 2:
+            return None
+
+        sub_clusters = order_clusters(
+            split_mixed_clusters(
+                cluster_boxes(
+                    sub_boxes,
+                    margin_ratio=0.45,  # tighter than the top level -> splits rows
+                    img_w=cx1 - cx0,
+                    img_h=cy1 - cy0,
+                )
+            )
+        )
+        if len(sub_clusters) < 2:
+            return None
+
+        m = 4
+        out: list[dict[str, Any]] = []
+        for c in sub_clusters:
+            u = union_bbox(c)
+            rx0 = max(0, int(cx0 + u["x"] - m))
+            ry0 = max(0, int(cy0 + u["y"] - m))
+            rx1 = min(image.width, int(cx0 + u["x"] + u["width"] + m))
+            ry1 = min(image.height, int(cy0 + u["y"] + u["height"] + m))
+            if rx1 - rx0 < 1 or ry1 - ry0 < 1:
+                continue
+            crop = image.crop((rx0, ry0, rx1, ry1))
+            res = self.recognize(
+                crop,
+                debug_dump=debug_dump,
+                debug_dump_force=debug_dump_force,
+                compute_text_bbox=False,
+            )
+            t = strip_foreign_glyphs((res.get("text") or "").strip())
+            t = self._prefer_detection_text(c, res, t)
+            if not t or not is_segment_worthy(t) or is_stray_line(crop, t):
+                continue
+            if not has_dimension_value(t):
+                continue
+            bbox = {
+                "x": round(cx0 + u["x"], 1),
+                "y": round(cy0 + u["y"], 1),
+                "width": round(u["width"], 1),
+                "height": round(u["height"], 1),
+            }
+            out.append(self._region_from_result(res, bbox, t))
+
+        return out if len(out) >= 2 else None
+
     def segment(
         self,
         image: Image.Image,
@@ -2104,7 +2311,10 @@ class OcrPipeline:
             split_mixed_clusters,
             union_bbox,
         )
-        from segment_quality import dedupe_regions
+        from segment_quality import (
+            count_dimension_values,
+            dedupe_regions,
+        )
         from page_scan import overlaps_existing_value
         from page_value_filters import (
             PageValueCandidate,
@@ -2466,6 +2676,26 @@ class OcrPipeline:
             text = (res.get("text") or "").strip()
             if not text:
                 continue
+
+            # Content-aware split: close-proximity callouts that fused into one
+            # cluster. Trigger when the fused read still shows 2+ complete values
+            # OR the cluster's boxes span 2+ horizontal rows (the fused single
+            # read often collapses to one value, hiding the multiplicity). The
+            # split only replaces this region when it actually yields 2+ worthy
+            # values, so a false trigger falls back to the single region.
+            multivalue = count_dimension_values(text) >= 2
+            multirow = (
+                self._cluster_row_count(cluster) >= 2
+                and ub["width"] >= ub["height"]
+            )
+            if multivalue or multirow:
+                split_regions = self._split_stacked_cluster(
+                    image, (cx0, cy0, cx1, cy1),
+                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
+                )
+                if split_regions:
+                    regions.extend(split_regions)
+                    continue
 
             # Snap balloon to the full detected cluster, not a tight OCR sliver.
             bbox = {
@@ -4036,6 +4266,27 @@ class OcrPipeline:
         text = composed.text
         engine = "paddleocr+compose" if composed.applied else "paddleocr"
 
+        # Dual-unit (inch [mm]) cross-check: the bracket is a redundant ×25.4
+        # encoding of the primary, so it validates — and, when a digit was
+        # misread, repairs — the read against the ratio a human would use. A
+        # no-op unless the text actually carries a numeric [bracket] pair.
+        from dual_unit import repair_dual
+
+        dual = repair_dual(text)
+        if dual.status == "repaired":
+            text = dual.text
+            engine = f"{engine}+dual" if "+" in engine else "paddleocr+dual"
+        dumper.stage(
+            "dual_unit",
+            {
+                "status": dual.status,
+                "text": dual.text,
+                "direction": dual.direction,
+                "expected_mm": dual.expected_mm,
+                "edits": dual.edits,
+            },
+        )
+
         dumper.stage(
             "compose_output",
             {
@@ -4048,7 +4299,8 @@ class OcrPipeline:
         needs_review = bool(
             text.strip()
             and (confidence < 0.9 or agreement < 0.6 or corrected)
-        )
+            and dual.status != "consistent"
+        ) or dual.needs_review or dual.corrected
 
         text_bbox: dict[str, float] | None = None
         text_bbox_source: str | None = None

@@ -61,14 +61,26 @@ def render_pages(path: Path, dpi: int):
         yield pdf[index].render(scale=dpi / 72).to_pil().convert("RGB")
 
 
-def segment_document(path: Path, dpi: int) -> tuple[list[dict], float]:
+def segment_document(
+    path: Path, dpi: int, *, page_route: bool = False
+) -> tuple[list[dict], float]:
+    """
+    Segment every page of a drawing.
+
+    ``page_route`` selects :meth:`OcrPipeline.segment_page`, which is what a
+    whole-page Auto-Balloon scan actually runs. :meth:`segment` is the
+    section-scan route. The two give very different numbers on the same sheet,
+    so the benchmark has to be explicit about which one it is measuring.
+    """
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
     regions: list[dict] = []
     started = time.time()
     for page_no, image in enumerate(render_pages(path, dpi), start=1):
-        result = pipeline.segment(image)
+        result = (
+            pipeline.segment_page(image) if page_route else pipeline.segment(image)
+        )
         for region in result["regions"]:
             regions.append({**region, "page": page_no})
     return regions, time.time() - started
@@ -81,6 +93,11 @@ def main() -> int:
     parser.add_argument("--save-regions", action="store_true", help="write the regions for re-scoring")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--dpi", type=int, default=None, help="override the fixture's render DPI")
+    parser.add_argument(
+        "--page",
+        action="store_true",
+        help="measure segment_page (the whole-page Auto-Balloon route) instead of segment",
+    )
     args = parser.parse_args()
 
     fixtures = sorted(DOCUMENTS.glob("*.json"))
@@ -107,7 +124,9 @@ def main() -> int:
             seconds = None
         else:
             path = resolve_document(spec["document"])
-            regions, seconds = segment_document(path, args.dpi or spec.get("dpi", 250))
+            regions, seconds = segment_document(
+                path, args.dpi or spec.get("dpi", 250), page_route=args.page
+            )
             if args.save_regions:
                 RESULTS.mkdir(parents=True, exist_ok=True)
                 target = RESULTS / f"{fixture.stem}.regions.json"

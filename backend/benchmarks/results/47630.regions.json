@@ -1,351 +1,13 @@
 [
  {
   "bbox": {
-   "x": 950.0,
-   "y": 130.0,
-   "width": 354.0,
-   "height": 69.0
+   "x": 558.0,
+   "y": 31.7,
+   "width": 48.3,
+   "height": 54.5
   },
-  "text": "+0.59[14.99]",
-  "confidence": 0.9550356268882751,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1040.0,
-   "y": 202.0,
-   "width": 269.0,
-   "height": 66.0
-  },
-  "text": "Ø0.33[8.38]",
-  "confidence": 0.9764874577522278,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 2437.0,
-   "y": 222.0,
-   "width": 91.0,
-   "height": 33.0
-  },
-  "text": "4/25/11",
-  "confidence": 0.9697396159172058,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": false,
-   "diameter_score": 0.115,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1001.0,
-   "y": 293.0,
-   "width": 344.0,
-   "height": 72.0
-  },
-  "text": "0.20[5.08]",
-  "confidence": 0.9838565587997437,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 401.0,
-   "y": 340.0,
-   "width": 282.0,
-   "height": 79.0
-  },
-  "text": "1.00[25.40]",
-  "confidence": 0.9931474328041077,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1285.0,
-   "y": 370.0,
-   "width": 324.0,
-   "height": 70.0
-  },
-  "text": "Ø5.50[139.70]-",
-  "confidence": 0.9703230261802673,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 401.0,
-   "y": 430.0,
-   "width": 265.0,
-   "height": 56.0
-  },
-  "text": "0.25[6.35]",
-  "confidence": 0.9937376379966736,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1248.0,
-   "y": 460.0,
-   "width": 335.0,
-   "height": 65.0
-  },
-  "text": "Ø5.105[129.67]",
-  "confidence": 0.9888592958450317,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1148.0,
-   "y": 570.0,
-   "width": 314.0,
-   "height": 76.0
-  },
-  "text": "Ø1.10[27.94]",
-  "confidence": 0.94465571641922,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 0.333,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 1.0,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1925.0,
-   "y": 558.0,
-   "width": 271.0,
-   "height": 71.0
-  },
-  "text": "Ø0.20[5.08]",
-  "confidence": 0.9651874899864197,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 369.0,
-   "y": 682.0,
-   "width": 300.0,
-   "height": 86.0
-  },
-  "text": "2.25[57.15]",
-  "confidence": 0.9770057201385498,
-  "type": "linear",
-  "category": "Linear",
-  "subtype": null,
-  "label": "Linear Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1295.0,
-   "y": 798.0,
-   "width": 161.0,
-   "height": 71.0
-  },
-  "text": "Ø0.62000.612",
-  "confidence": 0.9748100837071737,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.92,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 2091.0,
-   "y": 925.0,
-   "width": 333.0,
-   "height": 57.0
-  },
-  "text": "Ø0.210[05.33]",
-  "confidence": 0.9422503709793091,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.92,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 451.9,
-   "y": 1125.9,
-   "width": 102.0,
-   "height": 46.8
-  },
-  "text": "8.00",
-  "confidence": 0.9999455213546753,
+  "text": "4",
+  "confidence": 0.9999860525131226,
   "type": "linear",
   "category": "Linear",
   "subtype": null,
@@ -361,43 +23,21 @@
    "plus_minus": false,
    "degree": false,
    "radius": false
-  }
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
  },
  {
   "bbox": {
-   "x": 565.5,
-   "y": 1122.3,
-   "width": 197.0,
-   "height": 51.4
+   "x": 1190.8,
+   "y": 26.8,
+   "width": 60.7,
+   "height": 64.4
   },
-  "text": "[203.20]",
-  "confidence": 0.9999608397483826,
-  "type": "linear",
-  "category": "Basic",
-  "subtype": null,
-  "label": "Basic Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": false,
-   "diameter_score": 0.179,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 446.9,
-   "y": 1174.8,
-   "width": 104.5,
-   "height": 44.3
-  },
-  "text": "9.00",
-  "confidence": 0.9999761581420898,
+  "text": "3",
+  "confidence": 0.9883841276168823,
   "type": "linear",
   "category": "Linear",
   "subtype": null,
@@ -409,21 +49,25 @@
   "engine": "paddleocr",
   "symbols_detected": {
    "diameter": false,
-   "diameter_score": 0.099,
+   "diameter_score": 0.0,
    "plus_minus": false,
    "degree": false,
    "radius": false
-  }
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
  },
  {
   "bbox": {
-   "x": 585.2,
-   "y": 1173.7,
-   "width": 174.2,
-   "height": 51.0
+   "x": 1801.3,
+   "y": 30.5,
+   "width": 47.1,
+   "height": 57.0
   },
-  "text": "228.60]",
-  "confidence": 0.9853805899620056,
+  "text": "2",
+  "confidence": 0.9999836683273315,
   "type": "linear",
   "category": "Linear",
   "subtype": null,
@@ -435,21 +79,145 @@
   "engine": "paddleocr",
   "symbols_detected": {
    "diameter": false,
-   "diameter_score": 0.162,
+   "diameter_score": 0.0,
    "plus_minus": false,
    "degree": false,
    "radius": false
-  }
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
  },
  {
   "bbox": {
-   "x": 1688.0,
-   "y": 1202.0,
-   "width": 75.0,
-   "height": 72.0
+   "x": 2450.2,
+   "y": 37.9,
+   "width": 31.0,
+   "height": 42.1
   },
-  "text": "K5/899",
-  "confidence": 0.6580138603846232,
+  "text": "1",
+  "confidence": 0.9599610567092896,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1185.0,
+   "y": 148.0,
+   "width": 96.0,
+   "height": 38.0
+  },
+  "text": "4.99",
+  "confidence": 0.9999852180480957,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2424.2,
+   "y": 138.2,
+   "width": 116.4,
+   "height": 121.4
+  },
+  "text": "DATE3/17/20114/25/11",
+  "confidence": 0.9998626708984375,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1094.0,
+   "y": 216.0,
+   "width": 55.0,
+   "height": 39.0
+  },
+  "text": "33",
+  "confidence": 0.9999780058860779,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1045.9,
+   "y": 321.5,
+   "width": 12.4,
+   "height": 12.4
+  },
+  "text": "2",
+  "confidence": 0.6772110462188721,
   "type": "linear",
   "category": "Linear",
   "subtype": null,
@@ -460,100 +228,26 @@
   "agreement": 0.333,
   "engine": "paddleocr",
   "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.4,
+   "diameter": false,
+   "diameter_score": 0.0,
    "plus_minus": false,
    "degree": false,
    "radius": false
-  }
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
  },
  {
   "bbox": {
-   "x": 1384.0,
-   "y": 1326.0,
-   "width": 160.0,
-   "height": 54.0
+   "x": 2116.0,
+   "y": 574.0,
+   "width": 57.0,
+   "height": 38.0
   },
-  "text": "Ø0.148",
-  "confidence": 0.9998680353164673,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.92,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 356.0,
-   "y": 1464.0,
-   "width": 372.0,
-   "height": 66.0
-  },
-  "text": "1.13[28.70]REF.",
-  "confidence": 0.9847961664199829,
-  "type": "linear",
-  "category": "Reference",
-  "subtype": null,
-  "label": "Reference Dimension",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 1.0,
-  "engine": "paddleocr",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 797.0,
-   "y": 1709.0,
-   "width": 468.0,
-   "height": 67.0
-  },
-  "text": "Ø3.20[81.28]REF.→",
-  "confidence": 0.9350315928459167,
-  "type": "diameter",
-  "category": "Diameter",
-  "subtype": null,
-  "label": "Diameter",
-  "orientation": "horizontal",
-  "rotation": 0,
-  "needs_review": false,
-  "agreement": 0.333,
-  "engine": "paddleocr+compose",
-  "symbols_detected": {
-   "diameter": true,
-   "diameter_score": 0.45,
-   "plus_minus": false,
-   "degree": false,
-   "radius": false
-  }
- },
- {
-  "bbox": {
-   "x": 1704.0,
-   "y": 1797.0,
-   "width": 206.0,
-   "height": 61.0
-  },
-  "text": "DWG NO.47630",
-  "confidence": 0.9993064105510712,
+  "text": "08",
+  "confidence": 0.9990758895874023,
   "type": "linear",
   "category": "Linear",
   "subtype": null,
@@ -564,11 +258,135 @@
   "agreement": 1.0,
   "engine": "paddleocr",
   "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2067.5,
+   "y": 766.1,
+   "width": 102.8,
+   "height": 58.2
+  },
+  "text": "20°",
+  "confidence": 0.9736347198486328,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1625.0,
+   "y": 794.0,
+   "width": 33.0,
+   "height": 113.0
+  },
+  "text": "1",
+  "confidence": 0.33883988857269287,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "vertical",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
    "diameter": true,
    "diameter_score": 0.45,
    "plus_minus": false,
    "degree": false,
    "radius": false
-  }
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 561.7,
+   "y": 1980.9,
+   "width": 43.3,
+   "height": 49.5
+  },
+  "text": "4",
+  "confidence": 0.9999582767486572,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1195.8,
+   "y": 1978.4,
+   "width": 49.5,
+   "height": 54.5
+  },
+  "text": "3",
+  "confidence": 0.9999558925628662,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
  }
 ]
