@@ -1230,6 +1230,23 @@ class OcrPipeline:
         # All three proposal sources currently use deskewed coordinates. Restore
         # them once, after the adaptive plan is complete, then apply only coarse
         # same-position suppression. Logical-object deduplication is Milestone 3.
+        # A morphology proposal is a connected blob, not a read line, so a
+        # shaded region or a hatched area can come back as one box covering a
+        # large part of the sheet. Left in, it bridges every callout it touches
+        # into a single cluster: on a real drawing an 877x628 blob (9% of the
+        # sheet) fused three dimensions and the notes block into one unusable
+        # read. The detector passes are unaffected — they emit one box per text
+        # line — so the guard is scoped to morphology and measured against the
+        # detector's own line height.
+        line_scale = OcrPipeline._text_scale(primary_candidates)
+        if line_scale:
+            blob_limit = line_scale * 6.0
+            morphology_candidates = [
+                b
+                for b in morphology_candidates
+                if min(b["w"], b["h"]) <= blob_limit
+            ]
+
         restored: list[dict[str, Any]] = []
         for candidate in (
             morphology_candidates + primary_candidates + refinement_candidates

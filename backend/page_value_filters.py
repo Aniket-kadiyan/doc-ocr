@@ -128,8 +128,15 @@ _THREAD_VALUE = _compile(
 _STANDALONE_TOLERANCE = _compile(
     rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
 )
-_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,]+\s*")
-_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,]+$")
+# Leader and extension lines touch the crop edge and read as a stray dash or
+# bar, so "-" and "~" join the punctuation already treated as boundary noise.
+# normalize_page_value_text only strips these when what remains is itself a
+# complete value, so a real signed value like "-0.5" is untouched.
+# A leader arrowhead touching the crop reads as an arrow glyph. Arrows are
+# never part of a value so they are stripped from the front; a leading "-" is
+# deliberately NOT stripped, because it is the sign of a real value.
+_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,\u2190-\u21FF\u25B6\u25C0]+\s*")
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,\-\u2010-\u2015~]+$")
 _KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
 _KEYWORD_CONFUSABLES = str.maketrans(
     {
