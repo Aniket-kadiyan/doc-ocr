@@ -577,11 +577,44 @@ def candidate_is_in_table(
     return False
 
 
+# A drawing sheet's frame carries zone labels — single digits along the top and
+# bottom, letters up the sides — plus trim and fold marks. They are not
+# dimensions, but they read as clean short values and get ballooned. On a real
+# sheet every one sat within 4.3% of an edge while the nearest true dimension
+# was at 15.4%, so a conservative band with a length guard separates them
+# cleanly: a zone label is one or two characters, so nothing like "12.0" or
+# "R1.4" can be caught by this even if a drawing puts one near the border.
+_FRAME_BAND_FRACTION = 0.055
+_ZONE_LABEL_MAX_CHARS = 2
+
+
+def is_sheet_frame_label(bbox: BBox, page_size: tuple[int, int] | None, text: str) -> bool:
+    """True for a short token sitting in the sheet's border band."""
+    if not page_size:
+        return False
+    width, height = page_size
+    if width <= 0 or height <= 0:
+        return False
+    compact = "".join(str(text or "").split())
+    if not compact or len(compact) > _ZONE_LABEL_MAX_CHARS:
+        return False
+    centre_x = float(bbox["x"]) + float(bbox["width"]) / 2.0
+    centre_y = float(bbox["y"]) + float(bbox["height"]) / 2.0
+    edge_distance = min(
+        centre_x / width,
+        centre_y / height,
+        (width - centre_x) / width,
+        (height - centre_y) / height,
+    )
+    return edge_distance <= _FRAME_BAND_FRACTION
+
+
 def evaluate_scan_value(
     candidate: PageValueCandidate,
     *,
     scope_kind: ScanScopeKind,
     table_masks: Sequence[BBox] = (),
+    page_size: tuple[int, int] | None = None,
     page_candidates: Sequence[PageValueCandidate] = (),
     rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
     require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
@@ -601,6 +634,13 @@ def evaluate_scan_value(
             accepted=False,
             rule_name="table_region",
             reason="Candidate lies inside a detected table region",
+        )
+
+    if is_sheet_frame_label(normalized.bbox, page_size, normalized.text):
+        return PageValueFilterDecision(
+            accepted=False,
+            rule_name="sheet_frame_label",
+            reason="Short token inside the drawing frame's zone-label band",
         )
 
     if scope_kind == "section":
@@ -678,6 +718,7 @@ def evaluate_page_value(
     *,
     page_candidates: Sequence[PageValueCandidate] = (),
     table_masks: Sequence[BBox] = (),
+    page_size: tuple[int, int] | None = None,
     rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
     require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
 ) -> PageValueFilterDecision:
@@ -687,6 +728,7 @@ def evaluate_page_value(
         candidate,
         scope_kind="page",
         table_masks=table_masks,
+        page_size=page_size,
         page_candidates=page_candidates,
         rules=rules,
         require_numeric_component=require_numeric_component,

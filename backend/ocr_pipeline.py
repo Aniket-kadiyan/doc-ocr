@@ -3703,6 +3703,7 @@ class OcrPipeline:
                 PageValueCandidate(text=text, bbox=region["bbox"]),
                 scope_kind="section",
                 table_masks=(),
+                page_size=image.size,
             )
             filter_rule_counts[decision.rule_name] = (
                 filter_rule_counts.get(decision.rule_name, 0) + 1
@@ -4687,6 +4688,7 @@ class OcrPipeline:
                 filter_candidate,
                 page_candidates=preliminary_filter_candidates,
                 table_masks=table_masks,
+                page_size=image.size,
             )
             preliminary_decisions.append(decision)
             preliminary_state, preliminary_reason = resolve_candidate_state(
@@ -4837,6 +4839,7 @@ class OcrPipeline:
                     filter_candidate,
                     page_candidates=filter_candidates,
                     table_masks=table_masks,
+                    page_size=image.size,
                 )
                 final_state, final_reason = resolve_candidate_state(
                     record,
@@ -4917,6 +4920,26 @@ class OcrPipeline:
                     "rule": decision.rule_name,
                 }
             )
+
+        # Slanted callouts (chamfers, angled fits) that this route cannot read:
+        # its detection only ever levels by a quarter turn, so text drawn along
+        # a leader line — "Ø20H10 +0.084" on a real sheet — is never recovered.
+        # The pass needs raw detection boxes to find the slant neighbourhoods,
+        # and runs only when a slant is actually present, so an orthogonal sheet
+        # pays one Hough call. Appended after the page policy, so an angled read
+        # only ADDS a value the upright passes missed; detected_count moves with
+        # it so the state invariant below still balances.
+        try:
+            angled_regions = self._detect_angled_regions(
+                image, regions, det_boxes=self.detect_regions(image)
+            )
+        except Exception:
+            # The upright balloons are the point of the scan; a failed angled
+            # recovery must never discard them.
+            angled_regions = []
+        if angled_regions:
+            regions.extend(angled_regions)
+            detected_count += len(angled_regions)
 
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
