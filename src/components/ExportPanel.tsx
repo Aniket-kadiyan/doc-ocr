@@ -5,6 +5,7 @@ import {
   exportInspectionCSV,
   exportInspectionJSON,
   exportXML,
+  downloadBlob,
   downloadFile,
   findMalformedToleranceAnnotations,
 } from "@/lib/export";
@@ -16,6 +17,13 @@ import {
   sendForVerification,
   verificationEndpoint,
 } from "@/lib/project";
+import {
+  canvasToPngBlob,
+  collectBalloonedPages,
+  pagesToExport,
+  renderBalloonedCanvas,
+} from "@/lib/ballooned";
+import { buildBalloonedPdf } from "@/lib/balloonedPdf";
 import { useAnnotationStore } from "@/store/annotationStore";
 import {
   CreateChecksheetDialog,
@@ -30,8 +38,10 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
+  const currentPage = useAnnotationStore((s) => s.currentPage);
+  const pageCanvasProvider = useAnnotationStore((s) => s.pageCanvasProvider);
   const [actionStatus, setActionStatus] = useState<{
-    kind: "idle" | "saving" | "sending" | "ok" | "error";
+    kind: "idle" | "saving" | "sending" | "rendering" | "ok" | "error";
     message: string;
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
@@ -41,8 +51,15 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
   const empty = annotations.length === 0;
   const busy =
-    actionStatus.kind === "saving" || actionStatus.kind === "sending";
-  const busyLabel = actionStatus.kind === "saving" ? "Saving…" : "Sending…";
+    actionStatus.kind === "saving" ||
+    actionStatus.kind === "sending" ||
+    actionStatus.kind === "rendering";
+  const busyLabel =
+    actionStatus.kind === "saving"
+      ? "Saving…"
+      : actionStatus.kind === "rendering"
+        ? "Rendering…"
+        : "Sending…";
 
   // Close the Export dropdown when clicking elsewhere.
   useEffect(() => {
@@ -193,6 +210,90 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     );
   };
 
+  const handleBalloonedPdf = async () => {
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
+
+    setActionStatus({ kind: "rendering", message: "Rendering pages…" });
+    try {
+      const pages = await collectBalloonedPages(
+        pageCanvasProvider,
+        annotations,
+        pagesToExport(annotations, currentPage)
+      );
+      if (pages.length === 0) {
+        throw new Error("Could not render the drawing pages.");
+      }
+      const pdf = await buildBalloonedPdf({
+        projectName,
+        pages,
+        annotations,
+        extraColumns,
+      });
+      downloadBlob(pdf, `${base}_ballooned.pdf`);
+      setActionStatus({
+        kind: "ok",
+        message: `Saved ${base}_ballooned.pdf (${pages.length} drawing page${
+          pages.length === 1 ? "" : "s"
+        } + inspection table).`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to build the ballooned drawing.",
+      });
+    }
+  };
+
+  // Flat image of the page on screen with its balloons burned in — for pasting
+  // into a report or a chat where an .html attachment won't do.
+  const handleBalloonedPng = async () => {
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    setActionStatus({ kind: "rendering", message: "Rendering page…" });
+    try {
+      const source = await pageCanvasProvider(currentPage);
+      if (!source) throw new Error("Could not render this page.");
+      const canvas = renderBalloonedCanvas(
+        source,
+        annotations.filter((a) => a.page === currentPage)
+      );
+      downloadBlob(
+        await canvasToPngBlob(canvas),
+        `${base}_ballooned_p${currentPage}.png`
+      );
+      setActionStatus({
+        kind: "ok",
+        message: `Saved page ${currentPage} as PNG.`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to render the ballooned page.",
+      });
+    }
+  };
+
   const handleXML = () => {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
@@ -284,6 +385,26 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
             <span className="font-medium">CSV</span>
             <span className="block text-[11px] text-slate-400">
               Inspection sheet with your extra columns
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBalloonedPdf()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PDF)</span>
+            <span className="block text-[11px] text-slate-400">
+              Drawing + balloons + values in one printable file
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBalloonedPng()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PNG)</span>
+            <span className="block text-[11px] text-slate-400">
+              This page as an image with balloons burned in
             </span>
           </button>
           <button

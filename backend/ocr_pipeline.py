@@ -12,6 +12,7 @@ from PIL import Image
 
 from debug_dump import StepDumper, dump_force, dump_status, should_dump
 from dimension_compose import compose_engineering_dimension
+from feature_classifier import classify_feature
 from dimension_digits import normalize_cad_number_string
 from image_preprocess import (
     bbox_from_oriented_to_original,
@@ -2480,6 +2481,12 @@ class OcrPipeline:
                     "text": text,
                     "confidence": res.get("confidence", 0.0),
                     "type": res.get("type"),
+                    # Rule-engine output, so the balloon can show the feature
+                    # category and its suggested label rather than the
+                    # frontend's text-only guess.
+                    "category": res.get("category"),
+                    "subtype": res.get("subtype"),
+                    "label": res.get("label"),
                     "orientation": res.get("orientation", "horizontal"),
                     "rotation": res.get("rotation", 0),
                     "needs_review": res.get("needs_review", False),
@@ -4118,6 +4125,16 @@ class OcrPipeline:
             ),
             "timings_ms": timings_ms,
         }
+
+        # GD&T rule engine (feature_rules / feature_dictionary): assign the
+        # feature category, subtype and the suggested balloon label. Without
+        # this a region reaches the UI with no category and the frontend falls
+        # back to its text-only classifier, losing every rule that reads the
+        # detected symbols.
+        feature = classify_feature(text, symbols=symbols_to_dict(symbols))
+        result["category"] = feature.category
+        result["subtype"] = feature.subtype
+        result["label"] = feature.label
 
         dump_path = dumper.finalize(result)
         result["debug_dump"] = {

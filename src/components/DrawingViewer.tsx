@@ -171,6 +171,9 @@ export function DrawingViewer() {
   const setProjectName = useAnnotationStore((s) => s.setProjectName);
   const projectName = useAnnotationStore((s) => s.projectName);
   const setStoreProjectId = useAnnotationStore((s) => s.setProjectId);
+  const setPageCanvasProvider = useAnnotationStore(
+    (s) => s.setPageCanvasProvider
+  );
 
   const pageAnnotations = annotations.filter(
     (annotation) =>
@@ -254,6 +257,26 @@ export function DrawingViewer() {
     }, 500);
     return () => clearTimeout(t);
   }, [annotations, projectId]);
+
+  // Hand the Export menu a way to re-render any page. The ballooned PDF/PNG
+  // exports draw balloons over the drawing, so they need the page bitmap
+  // without owning the PDF document themselves.
+  const renderPageCanvas = useCallback(
+    async (page: number): Promise<HTMLCanvasElement | null> => {
+      if (pdfDoc) {
+        const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
+        return canvas;
+      }
+      // Single-page image: only page 1 exists, and it is already rendered.
+      return page === 1 ? sourceCanvasRef.current : null;
+    },
+    [pdfDoc]
+  );
+
+  useEffect(() => {
+    setPageCanvasProvider(konvaImage ? renderPageCanvas : null);
+    return () => setPageCanvasProvider(null);
+  }, [konvaImage, renderPageCanvas, setPageCanvasProvider]);
 
   // Expose the current project id so Export can retrieve the original drawing
   // blob and create a durable backend checksheet snapshot.
@@ -671,12 +694,15 @@ export function DrawingViewer() {
         const newAnnotations: Annotation[] = filtered.accepted
           .map((r) => {
             const cleanValue = r.text.trim();
-            const type = classifyDimension(cleanValue);
+            // Prefer the backend rule engine, which also sees the detected
+            // symbols and geometry; fall back to the local text-only rules.
+            const type = ((r.category as DimensionType) ||
+              classifyDimension(cleanValue)) as DimensionType;
             return {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
-              label: "",
+              label: r.label?.trim() || "",
               value: cleanValue,
               type,
               confidence: r.confidence,

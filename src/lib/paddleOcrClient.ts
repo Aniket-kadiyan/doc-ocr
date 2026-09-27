@@ -157,6 +157,10 @@ export interface ApiSegmentRegion {
   text: string;
   confidence: number;
   type?: string;
+  /** Feature category / subtype / suggested label from the GD&T rule engine. */
+  category?: string;
+  subtype?: string;
+  label?: string;
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
   needs_review?: boolean;
@@ -200,6 +204,8 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
     confidence: r.confidence ?? 0,
     type: r.type,
+    category: r.category,
+    label: r.label,
     orientation: r.orientation ?? "horizontal",
     rotation: r.rotation ?? 0,
     needsReview: r.needs_review ?? false,
