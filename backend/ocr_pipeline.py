@@ -127,6 +127,20 @@ _TITLE_BLOCK_WORDS_RE = re.compile(
 )
 
 
+def _covers_digits(whole: str, part: str) -> bool:
+    """
+    True when ``part``'s digits all appear in ``whole``, in order.
+
+    A subsequence rather than a substring: the upright pass may read a
+    deviation pair in a different order from the levelled pass (``Ø33-0.05``
+    against ``Ø33-0.1-0.05``), and that is still the same callout.
+    """
+    if not part:
+        return False
+    it = iter(whole)
+    return all(c in it for c in part)
+
+
 class OcrPipeline:
     def __init__(self) -> None:
         self._configured_device = configured_ocr_device()
