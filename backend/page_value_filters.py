@@ -98,9 +98,16 @@ SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
+# Degrees, then optional minutes and seconds. The minute mark is often lost:
+# it is a small tick and the recogniser drops it, so "60°±0°30" arrives where
+# the drawing reads "60°±0°30'". A bare 1-2 digit integer straight after the
+# degree symbol is unambiguously minutes, so it is accepted without the prime —
+# guarded against a following digit or decimal point so "30.0°" and a longer
+# run are not swallowed.
 _ANGLE_MAGNITUDE = (
     rf"{_NUMBER}\s*°(?:\s*{_NUMBER}\s*['′]"
-    rf"(?:\s*{_NUMBER}\s*[\"″])?)?"
+    rf"(?:\s*{_NUMBER}\s*[\"″])?"
+    rf"|\s*\d{{1,2}}(?![\d.]))?"
 )
 _ANGLE_VALUE = _compile(
     rf"^{_ANGLE_MAGNITUDE}"
@@ -114,6 +121,11 @@ _LINEAR_VALUE = _compile(
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
     rf"(?:\s*±\s*{_NUMBER}"
     rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
+    # Two stacked deviations, printed one above the other on the drawing and
+    # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
+    # a shaft or hole limit often has upper AND lower below nominal. Listed
+    # before the single-deviation branch so the longer form wins.
+    rf"|\s*[+-]\s*{_NUMBER}\s*[+-]\s*{_NUMBER}"
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
