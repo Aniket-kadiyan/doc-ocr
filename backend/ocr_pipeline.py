@@ -4692,6 +4692,11 @@ class OcrPipeline:
         table_masks = [mask.to_dict() for mask in layout.table_masks]
         hard_exclusion_rules = {
             "table_region",
+            # A sheet-frame zone label is not a value a human can confirm, so
+            # it is dropped outright. Left out of this set it fell through to
+            # the review queue instead, which filled the queue with the very
+            # "1" ... "8" border digits the rule exists to remove.
+            "sheet_frame_label",
             "detail_view_section",
             "scale_information",
             "date",
@@ -4723,6 +4728,23 @@ class OcrPipeline:
 
 
             if not record["recognized"]:
+                # No text at all. Once the AUTHORITATIVE pass has also come
+                # back empty, the detector fired on ink that is not writing —
+                # hatching, a leader line, an arrowhead — and there is nothing
+                # for anyone to confirm. On a real sheet that was 27 of 57
+                # queued items, all blank, which is the noise that teaches an
+                # inspector to stop reading the queue.
+                #
+                # Before that pass runs, an empty read must stay a review: this
+                # state is what SELECTS an object for the expensive re-read, so
+                # excluding here would deny it its second chance. Doing that
+                # cost seven published values on one sheet.
+                if authoritative:
+                    return (
+                        "excluded",
+                        review_reason
+                        or "Recognition found no text at this object",
+                    )
                 return (
                     "review",
                     review_reason or "Accurate recognition returned no text",
