@@ -26,9 +26,12 @@ from tolerance_utils import (
 # is the main lever against false-positive Ø/° reads.
 _PHI_SCORE_MIN = 0.32          # corroborated by OCR text/prefix
 _PHI_SCORE_VISION_ONLY = 0.5   # vision alone, no OCR marker
-# Leading O *or* 0 misread for the Ø glyph (e.g. OCR "0174.07" for "Ø174.07").
-# Requires 2+ following digits so a genuine "0.5" is never absorbed.
-_LEADING_O_PHI_RE = re.compile(r"^[O0](\d{2,})")
+# Leading O, 0 *or* 8 misread for the Ø glyph (e.g. OCR "0174.07" for
+# "Ø174.07", or "80103" for "Ø0103" — the slash through the ring closes the
+# upper bowl and the glyph reads as an eight). Requires 2+ following digits so
+# a genuine "0.5" is never absorbed, and only ever applies when the vision pass
+# has CONFIRMED a diameter, so an ordinary "80.5" is untouched.
+_LEADING_O_PHI_RE = re.compile(r"^[O08](\d{2,})")
 _DIA_TOL_RE = re.compile(r"^(\d+\.\d{2})±(\d\.\d{2})$")
 # A plausible angle number: a bare integer 0–360. Decimals like 50.20 or a ±
 # tolerance are NOT angle-like, so a stray vision "degree ring" can't convert a

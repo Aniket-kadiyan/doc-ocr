@@ -75,6 +75,10 @@ def _normalize_engineering_text(text: str) -> str:
         .replace("–", "-")
         .replace("—", "-")
     )
+    # A comma between digits is a decimal separator, so "30,0" and "30.0" are
+    # the same value. Without this they produced different signatures and every
+    # such callout was sent for review.
+    normalized = re.sub(r"(?<=\d),(?=\d)", ".", normalized)
     normalized = re.sub(r"^[øφΦ⌀]", "Ø", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"^r(?=\s*\d)", "R", normalized, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", normalized).strip()
@@ -1002,7 +1006,20 @@ def resolve_authoritative_hypotheses(
             and authoritative_signature is not None
             and preliminary_signature != authoritative_signature
         )
-        if numeric_conflict:
+        # The preliminary pass is a cost gate, not a second opinion: it is a
+        # fast batch read, while the authoritative pass is the full Draw Value
+        # pipeline on a tight crop — the same path a hand-drawn box uses. On a
+        # real sheet the preliminary read of "R1.4" was "518" and of
+        # "M54x1.5-6H" was "-HO-]1", so treating any disagreement as ambiguity
+        # filled the review queue with correct values and taught the inspector
+        # to ignore it. A conflict is only worth a human when the
+        # authoritative read is ITSELF not a complete engineering value.
+        from page_value_filters import is_complete_engineering_value
+
+        authoritative_doubtful = not is_complete_engineering_value(
+            authoritative_text
+        )
+        if numeric_conflict and authoritative_doubtful:
             final_text = authoritative_text
             review_reason = (
                 "Preliminary and target-locked authoritative OCR disagree on "
@@ -1016,9 +1033,14 @@ def resolve_authoritative_hypotheses(
             review_reason = ""
         resolved.update(
             text=final_text,
-            needs_review=bool(numeric_conflict),
+            needs_review=bool(numeric_conflict and authoritative_doubtful),
             numeric_conflict=numeric_conflict,
-            authoritative_review_required=numeric_conflict,
+            # Must track needs_review: a bare disagreement with the fast
+            # preliminary pass is not grounds to stop the inspector, so it
+            # cannot force confirmation through this flag either.
+            authoritative_review_required=bool(
+                numeric_conflict and authoritative_doubtful
+            ),
             review_reason=review_reason,
             authoritative_reread=True,
             preliminary_text=preliminary_text,
