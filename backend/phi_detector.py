@@ -335,9 +335,15 @@ def detect_phi_multi_strip(
     # vision-only compose threshold; with one, its score is used outright.
     topo_score, topo = detect_phi_topology(image)
     details.append({"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])})
-    if topo_score >= TOPO_ACCEPT:
+    topology_confirmed = topo_score >= TOPO_ACCEPT
+    if topology_confirmed:
         best = topo_score
     else:
         best = min(best, LEGACY_CAP)
-    return best >= 0.32, round(best, 3), details
+    # The boolean must honour the cap this module documents: "a strip hit alone
+    # can never inject a Ø, but it still corroborates OCR hints". Reporting
+    # True for a capped legacy-only hit made it decisive after all, which is
+    # how a plain length whose leader read as a dash became "Ø5.50[139.70]".
+    # The score is still returned so callers can use it as corroboration.
+    return topology_confirmed, round(best, 3), details
 

@@ -175,9 +175,23 @@ def symbols_to_dict(s: DetectedSymbols) -> dict:
 
 
 def merge_symbol_scores(a: DetectedSymbols, b: DetectedSymbols) -> DetectedSymbols:
+    """
+    Combine visual and OCR-prefix evidence for the symbols.
+
+    Diameter needs *evidence*, not a score. Either side may decide it: the
+    vision pass through its own topology decision (a slashed ring, not merely
+    something round), or the OCR prefix through an explicit Ø-family glyph.
+
+    A score on its own decides nothing. The previous rule accepted any score
+    at or above 0.32, which contradicted this module's own reasoning — an
+    ambiguous "O"/"0" prefix is scored 0.4 precisely so that it corroborates
+    rather than decides, yet 0.4 cleared the 0.32 bar. The same bar let a
+    leader-line ring near a plain length publish it as a diameter, which is
+    how "5.50[139.70]" reached the sheet as "Ø5.50[139.70]".
+    """
     score = max(a.diameter_score, b.diameter_score)
     return DetectedSymbols(
-        diameter=score >= 0.32,
+        diameter=a.diameter or b.diameter,
         diameter_score=score,
         plus_minus=a.plus_minus or b.plus_minus,
         degree=a.degree or b.degree,

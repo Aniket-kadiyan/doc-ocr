@@ -115,8 +115,15 @@ def _has_phi_evidence(
     # was there, so a modest (corroborated) vision score is enough to call it Ø.
     # Without that hint, vision alone must clear a stronger bar to avoid injecting
     # a false Ø onto a plain linear dimension.
-    threshold = _PHI_SCORE_MIN if leading_glyph else _PHI_SCORE_VISION_ONLY
-    return symbols.diameter_score >= threshold
+    if leading_glyph:
+        # A stripped leading dash is WEAK evidence: a leader line clipped into
+        # the crop reads exactly like a misread Ø prefix. So the dash only
+        # lowers the bar for a vision pass that actually CONFIRMED a diameter;
+        # a score on its own, however high, no longer suffices. Without this a
+        # plain "5.50[139.70]" whose leader read as a dash was published as
+        # "Ø5.50[139.70]".
+        return symbols.diameter and symbols.diameter_score >= _PHI_SCORE_MIN
+    return symbols.diameter_score >= _PHI_SCORE_VISION_ONLY
 
 
 

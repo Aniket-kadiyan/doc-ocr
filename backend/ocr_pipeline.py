@@ -3828,6 +3828,7 @@ class OcrPipeline:
             needs_expanded_filter_context,
             normalize_page_value_text,
         )
+        from segment_quality import strip_foreign_glyphs
 
         def report(
             *,
@@ -4468,8 +4469,12 @@ class OcrPipeline:
                 budget_exhausted=index in budget_exhausted_indexes,
             )
             record["result"] = resolved
+            # The multilingual recogniser emits a CJK character for a stroke
+            # cluster it cannot resolve, so "R1.4" can arrive as "月1.4". The
+            # section route has always stripped these; the page route did not,
+            # and the residue then failed every downstream value check.
             normalized_text = normalize_page_value_text(
-                str(resolved.get("text") or "")
+                strip_foreign_glyphs(str(resolved.get("text") or ""))
             )
             resolved["text"] = normalized_text
             record["text"] = normalized_text
@@ -4608,6 +4613,7 @@ class OcrPipeline:
             review_reason = str(result.get("review_reason") or "").strip()
             if decision.rule_name in hard_exclusion_rules:
                 return "excluded", decision.reason
+
             if not record["recognized"]:
                 return (
                     "review",
