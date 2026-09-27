@@ -2278,6 +2278,888 @@ class OcrPipeline:
 
         return out if len(out) >= 2 else None
 
+    @staticmethod
+    def _oriented_box_from_rot(
+        bx: float, by: float, bw: float, bh: float, inv: Any
+    ) -> dict[str, float]:
+        """
+        Map a rotated-frame axis box to a source-frame *oriented* rectangle.
+
+        Unlike ``_bbox_rot_to_source`` (which loses orientation by taking the
+        AABB of the 4 mapped corners — loose for diagonal text), this returns the
+        tight rotated rectangle the frontend can draw with a Konva ``rotation``:
+        the top-left corner mapped to source, the (rotation-preserved) width and
+        height, and the clockwise screen-angle of the box's own x-axis.
+        """
+        import math
+
+        ox = inv[0, 0] * bx + inv[0, 1] * by + inv[0, 2]
+        oy = inv[1, 0] * bx + inv[1, 1] * by + inv[1, 2]
+        # The box's local +x (its reading direction) maps to (inv[0,0], inv[1,0]);
+        # atan2(dy, dx) with y-down is Konva's clockwise rotation.
+        angle = math.degrees(math.atan2(inv[1, 0], inv[0, 0]))
+        return {
+            "x": round(ox, 1),
+            "y": round(oy, 1),
+            "width": round(bw, 1),
+            "height": round(bh, 1),
+            "rotation": round(angle, 1),
+        }
+
+    def _slant_neighbourhoods(
+        self,
+        image: Image.Image,
+        det_boxes: list[dict[str, Any]],
+        *,
+        margin_frac: float = 1.0,
+        expand_frac: float = 0.2,
+        max_rois: int = 3,
+    ) -> list[tuple[int, int, int, int]]:
+        """
+        Regions of the crop that contain diagonal text, from the detector's quads.
+
+        Diagonal callouts sit in a few small neighbourhoods, and working on those
+        rather than the whole selection matters for accuracy, not just speed:
+        detection upscales a small image and not a large one, so the quad (and
+        therefore the measured angle) is markedly more accurate on a local region
+        than on a full sheet. Boxes are grouped when their inflated extents
+        touch, and each group returns a padded, clamped bounding region.
+
+        The padding is generous on purpose: a callout's detection box covers the
+        value but not always its stacked deviation or its leader, and a region
+        cropped tight to the boxes detects differently from one with room around
+        it.
+        """
+        iw, ih = image.size
+        slanted: list[dict[str, Any]] = []
+        for box in det_boxes or []:
+            # The branch's detector keeps a text line's corners under "polygon";
+            # this pass was written against "quad". Same four points.
+            angle = self._quad_angle(box.get("quad") or box.get("polygon"))
+            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
+                continue
+            if box.get("w", 0) <= 1 or box.get("h", 0) <= 1:
+                continue
+            slanted.append(box)
+        if not slanted:
+            return []
+
+        def extent(b: dict[str, Any]) -> tuple[float, float, float, float]:
+            pad = max(b["w"], b["h"]) * margin_frac
+            return (b["x"] - pad, b["y"] - pad,
+                    b["x"] + b["w"] + pad, b["y"] + b["h"] + pad)
+
+        parent = list(range(len(slanted)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        rects = [extent(b) for b in slanted]
+        for i in range(len(slanted)):
+            for j in range(i + 1, len(slanted)):
+                a, b = rects[i], rects[j]
+                if not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1]):
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[ri] = rj
+
+        groups: dict[int, list[int]] = {}
+        for i in range(len(slanted)):
+            groups.setdefault(find(i), []).append(i)
+
+        rois: list[tuple[float, tuple[int, int, int, int]]] = []
+        for members in groups.values():
+            xs0 = min(rects[i][0] for i in members)
+            ys0 = min(rects[i][1] for i in members)
+            xs1 = max(rects[i][2] for i in members)
+            ys1 = max(rects[i][3] for i in members)
+            # Widen by a fraction of the region's own size. The slant vote and
+            # the detector both behave better with surrounding context than on a
+            # region cropped to the ink, and a callout's leader and stacked
+            # deviation often reach past the boxes that located it.
+            grow_x = (xs1 - xs0) * expand_frac
+            grow_y = (ys1 - ys0) * expand_frac
+            x0 = max(0, int(xs0 - grow_x))
+            y0 = max(0, int(ys0 - grow_y))
+            x1 = min(iw, int(xs1 + grow_x))
+            y1 = min(ih, int(ys1 + grow_y))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            weight = sum(max(slanted[i]["w"], slanted[i]["h"]) for i in members)
+            rois.append((weight, (x0, y0, x1, y1)))
+        rois.sort(key=lambda r: r[0], reverse=True)
+        return [r[1] for r in rois[:max_rois]]
+
+    def _neighbourhood_sign(
+        self,
+        det_boxes: list[dict[str, Any]],
+        roi: tuple[int, int, int, int],
+    ) -> float | None:
+        """
+        Which way the diagonal text in ``roi`` leans, from the detector's quads.
+
+        A quad's magnitude drifts for steeply slanted text, but its sign does
+        not, and knowing the sign halves the passes the caller has to make.
+        """
+        x0, y0, x1, y1 = roi
+        total = 0.0
+        for box in det_boxes:
+            # The branch's detector keeps a text line's corners under "polygon";
+            # this pass was written against "quad". Same four points.
+            angle = self._quad_angle(box.get("quad") or box.get("polygon"))
+            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
+                continue
+            cx = box["x"] + box["w"] / 2.0
+            cy = box["y"] + box["h"] / 2.0
+            if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                continue
+            total += max(box["w"], box["h"]) * (1.0 if angle >= 0 else -1.0)
+        if total == 0.0:
+            return None
+        return 1.0 if total > 0 else -1.0
+
+    @staticmethod
+    def _leader_angles_for_roi(
+        lines: list[dict[str, float]],
+        roi: tuple[int, int, int, int],
+        *,
+        max_angles: int = 2,
+    ) -> list[float]:
+        """
+        Angles of the leader lines that run through ``roi``, longest first.
+
+        A callout lettered along a leader shares that leader's direction, so
+        this is the angle to level by — measured from a long straight stroke
+        rather than voted from the text's own strokes. Unlike that vote it does
+        not weaken as the selection grows, which is what made the two fit
+        callouts unreadable on a full sheet.
+        """
+        x0, y0, x1, y1 = roi
+        angles: list[float] = []
+        for line in lines:
+            lx0, lx1 = sorted((line["x1"], line["x2"]))
+            ly0, ly1 = sorted((line["y1"], line["y2"]))
+            # The leader must actually pass through this region.
+            if lx1 < x0 or lx0 > x1 or ly1 < y0 or ly0 > y1:
+                continue
+            angle = float(line["angle"])
+            if all(abs(angle - kept) > 6.0 for kept in angles):
+                angles.append(angle)
+            if len(angles) >= max_angles:
+                break
+        return angles
+
+    def _angled_in_roi(
+        self,
+        image: Image.Image,
+        *,
+        sign: float | None = None,
+        max_magnitudes: int = 1,
+        weight_floor: float | None = None,
+        fallback_angles: list[float] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Read the diagonal callouts in one image, levelling it by its own slant.
+
+        The slant magnitude comes from the Hough vote over this image, so a
+        tighter image gives a sharper answer. ``sign`` resolves the vote's
+        sign ambiguity when the caller already knows which way the text leans
+        (from the detector's quads), halving the number of passes and leaving
+        room to try more magnitudes instead. ``weight_floor`` lowers the bar a
+        magnitude must clear to be worth trying, which is safe once the caller
+        has established that this region really does hold diagonal text.
+
+        ``fallback_angles`` is used only when the vote finds nothing at all —
+        the angles of the leader lines running through this region. Measuring a
+        long straight stroke works at any scale, so it covers regions where the
+        vote over text strokes is too weak to name an angle. It does not
+        override the vote, which measured better wherever both had an opinion.
+        """
+        import re
+
+        from image_preprocess import cad_ink_to_gray
+        from region_cluster import cluster_boxes, union_bbox
+        from region_detect import dominant_slant_angles
+        from segment_quality import (
+            contains_annotation_note,
+            count_dimension_values,
+            has_dimension_value,
+            is_annotation_note,
+            is_segment_worthy,
+            strip_foreign_glyphs,
+        )
+        from stroke_filter import is_stray_line
+
+        iw, ih = image.size
+        # Preferred source: the angle each detection reports for itself. It is
+        # exact, per callout, and free — the detector already computed it.
+        vote_args: dict[str, Any] = {"max_magnitudes": max_magnitudes}
+        if weight_floor is not None:
+            vote_args["min_weight_frac"] = weight_floor
+        magnitudes = dominant_slant_angles(image, **vote_args)
+
+        angles: list[float] = []
+        for m in magnitudes:
+            if sign is None:
+                # A slant bucket is sign-ambiguous (a line at +a and -a land in
+                # the same bucket), so try both and let worthiness and dedupe
+                # drop the wrong one.
+                angles.extend((-m, m))
+            else:
+                angles.append(round(sign * m, 1))
+        # Knowing the sign buys a third magnitude for the same pass count.
+        voted = angles[: 3 if sign is not None else 2]
+        # A leader's angle is measured from the line the text is written on, so
+        # it is exact; the vote's is a 1°-bucket estimate over ink. That
+        # difference decides whether a deviation stack reads as ``+0.070/0`` or
+        # runs together as ``+0.0700``, so leaders are tried first and the vote
+        # fills the remaining slots.
+        angles = []
+        for candidate in list(fallback_angles or []) + voted:
+            if all(abs(candidate - kept) > 6.0 for kept in angles):
+                angles.append(candidate)
+        angles = angles[:4]
+        if not angles:
+            return []
+
+        found: list[dict[str, Any]] = []
+        for angle in angles:
+            rimg, inv = self._rotate_expand(image, angle)
+            rw, rh = rimg.size
+            # Detect again on the *levelled* ink. The quads told us the angle,
+            # but a detector box for steeply slanted text is a poor fit — it
+            # misses a stacked deviation and merges neighbours. Once the text is
+            # horizontal the detector is accurate, which is what makes the
+            # value-plus-deviation grouping below work. (Do NOT reuse the full
+            # detect_regions/cluster pipeline here — its 90° pass and aggressive
+            # merge fuse the now-diagonal axis text into giant blobs.)
+            raw = self._paddle_det_boxes(cad_ink_to_gray(rimg).convert("RGB"))
+            if not raw:
+                continue
+            boxes = [
+                {"x": b["x"], "y": b["y"], "w": b["w"], "h": b["h"]}
+                for b in raw
+                if b["w"] > 1 and b["h"] > 1
+                and not is_annotation_note(b.get("text", ""))
+            ]
+            if not boxes:
+                continue
+            scale = self._text_scale(boxes)
+            if scale:
+                # Keep only what reads as a single line at THIS angle. Text
+                # belonging to a different leader is still slanted here, so the
+                # detector returns it as a tall blob — and that blob bridges the
+                # two callouts into one cluster, which is how a levelled pass
+                # ruins the very callout it was meant to read.
+                upright_here = [b for b in boxes if b["h"] <= scale * 2.2]
+                if upright_here:
+                    boxes = upright_here
+            # Tight merge only: join split fragments of one callout, never span
+            # separate callouts. Cap the union so nothing balloons.
+            clusters = cluster_boxes(boxes, margin_ratio=0.3, img_w=rw, img_h=rh)
+
+            margin = 6
+            for cluster in clusters:
+                ub = union_bbox(cluster)
+                cx0 = max(0, int(ub["x"] - margin))
+                cy0 = max(0, int(ub["y"] - margin))
+                cx1 = min(rw, int(ub["x"] + ub["width"] + margin))
+                cy1 = min(rh, int(ub["y"] + ub["height"] + margin))
+                if cx1 - cx0 < 1 or cy1 - cy0 < 1:
+                    continue
+                # A callout is at most a few lines across (value + tolerance
+                # stack) and a dozen or so long. Judge that against the text
+                # size in this frame, not the crop: a crop-fraction cap threw
+                # away clean reads on a zoomed-in selection, and rejected the
+                # larger of two fit callouts purely because it sat in a small
+                # rotated canvas.
+                if scale and (
+                    min(ub["width"], ub["height"]) > scale * 4.0
+                    or max(ub["width"], ub["height"]) > scale * 12.0
+                ):
+                    continue
+                sub = rimg.crop((cx0, cy0, cx1, cy1))
+                res = self.recognize(sub, compute_text_bbox=False)
+                text = strip_foreign_glyphs((res.get("text") or "").strip())
+                # A value with stacked deviations reads back interleaved. Only
+                # worth a finer pass when the text is long enough to hold one.
+                if sum(c.isdigit() for c in text) >= 5:
+                    text = self._stacked_deviation_read(sub, res) or text
+                # "0.2-0.3×45°R1": a radius callout drawn right after the
+                # chamfer is a second value; keep the chamfer.
+                m_tail = re.match(r"^(.*\d°)\s*[Rr]\d[\d.]*$", text)
+                if m_tail:
+                    text = m_tail.group(1)
+                if not text or not is_segment_worthy(text):
+                    continue
+                if not has_dimension_value(text):
+                    continue
+                # A rotated re-read is speculative: the upright passes already
+                # had their turn at this ink. An unconfident one is noise, and
+                # on a wide selection that noise is what puts a tilted box over
+                # a feature-control frame.
+                if float(res.get("confidence") or 0.0) < 0.80:
+                    continue
+                # The box has to fit what it reports. A levelled cluster covering
+                # far more area than its own characters occupy is a box drawn
+                # around mostly empty drawing, which is what a stray balloon over
+                # a watermark or a title block looks like on screen.
+                if scale:
+                    content = 0.6 * len(text) * scale * scale
+                    if ub["width"] * ub["height"] > max(2.5 * content, 3.0 * scale * scale):
+                        continue
+                # Note wording mixed into digits means this rotated crop fused a
+                # callout with an annotation; the upright pass already has the
+                # values, so drop it rather than emit the blob.
+                if contains_annotation_note(text):
+                    continue
+                if is_stray_line(sub, text):
+                    continue
+                # A single slanted callout is ONE line of text, optionally with
+                # its tolerance stacked above/below it. Judge fusion by that
+                # structure — rows in the levelled frame — rather than by a raw
+                # digit count, which a legitimate fit callout
+                # (``Ø20H10 +0.084/0``, 9 digits) trips.
+                if count_dimension_values(text) >= 2:
+                    continue
+                if self._cluster_row_count(cluster) > 3:
+                    continue
+                if sum(c.isdigit() for c in text) > 14:
+                    continue
+                # Shrink the cluster box onto the ink it actually contains, so
+                # the balloon hugs the writing instead of the hull plus margin.
+                box_x, box_y = ub["x"], ub["y"]
+                box_w, box_h = ub["width"], ub["height"]
+                ink = self._ink_extent(sub)
+                if ink is not None:
+                    ix0, iy0, ix1, iy1 = ink
+                    if ix1 - ix0 >= 4 and iy1 - iy0 >= 4:
+                        box_x, box_y = cx0 + ix0, cy0 + iy0
+                        box_w, box_h = ix1 - ix0, iy1 - iy0
+                        # Writing along a leader is elongated once the box is on
+                        # the ink. A square patch is not a line of text, it is a
+                        # piece of the part caught at this angle.
+                        if max(box_w, box_h) < min(box_w, box_h) * 1.8:
+                            continue
+                bbox = self._bbox_rot_to_source(
+                    box_x, box_y, box_w, box_h, inv, iw, ih
+                )
+                if bbox is None:
+                    continue
+                region = self._region_from_result(res, bbox, text)
+                region["rotation"] = round(float(angle), 1)
+                # Tight rotated rectangle for the frontend to draw; bbox stays the
+                # loose AABB so dedupe/anchor logic remains axis-aligned.
+                region["oriented_box"] = self._oriented_box_from_rot(
+                    box_x, box_y, box_w, box_h, inv
+                )
+                found.append(region)
+
+        return found
+
+    @staticmethod
+    def _dedupe_angled(
+        angled: list[dict[str, Any]], base_regions: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Keep angled reads that add something new.
+
+        A diagonal callout's upright AABB is loose, so area-overlap dedupe would
+        wrongly clobber neighbouring upright regions. Instead we drop an angled
+        region only when its own centre sits inside a base region whose text
+        already contains the same digit string (i.e. the value is genuinely a
+        re-read), and drop angled-vs-angled duplicates the same way — never
+        removing a base region.
+        """
+        import re
+
+        import math
+
+        from geom_utils import overlap_frac as geom_overlap_frac
+        from geom_utils import polygon_area, region_polygon
+
+        def digits(t: str) -> str:
+            return re.sub(r"\D", "", t or "")
+
+        def center(r: dict[str, Any]) -> tuple[float, float]:
+            # The tight oriented box centre is exact; the AABB of a diagonal
+            # box is loose and its centre can fall outside a neighbour it
+            # actually re-read.
+            ob = r.get("oriented_box")
+            if ob:
+                a = math.radians(ob["rotation"])
+                hx, hy = ob["width"] / 2.0, ob["height"] / 2.0
+                return (
+                    ob["x"] + hx * math.cos(a) - hy * math.sin(a),
+                    ob["y"] + hx * math.sin(a) + hy * math.cos(a),
+                )
+            b = r["bbox"]
+            return (b["x"] + b["width"] / 2.0, b["y"] + b["height"] / 2.0)
+
+        def inside(pt: tuple[float, float], r: dict[str, Any]) -> bool:
+            b = r["bbox"]
+            return (
+                b["x"] <= pt[0] <= b["x"] + b["width"]
+                and b["y"] <= pt[1] <= b["y"] + b["height"]
+            )
+
+        def same_value(d: str, other: str) -> bool:
+            """Digit strings of one value read twice (one may carry junk)."""
+            if not d or not other:
+                return False
+            if d in other or other in d:
+                return True
+            # Same length, at most one digit differs: "753" vs "153" is the
+            # same callout with one stroke-confused glyph.
+            if len(d) == len(other) and len(d) >= 3:
+                return sum(a != b for a, b in zip(d, other)) <= 1
+            return False
+
+        def overlaps(r: dict[str, Any], other: dict[str, Any]) -> bool:
+            # Tight-rectangle overlap first: two callouts on parallel leaders
+            # share almost no ink even where their axis-aligned hulls do.
+            if geom_overlap_frac(r, other) >= 0.4:
+                return True
+            return inside(center(r), other) or inside(center(other), r)
+
+        def symbol_count(t: str) -> int:
+            return sum(t.count(ch) for ch in "Ø°±×/")
+
+        def junk_letters(t: str) -> int:
+            # Letters that belong on a dimension: the H of a fit class, R for a
+            # radius, X as a multiplier. Anything else in a numeric callout is a
+            # stray stroke the recogniser turned into a letter.
+            return sum(1 for c in t or "" if c.isalpha() and c not in "HRXhrx")
+
+        def quality(r: dict[str, Any]) -> float:
+            """
+            How well a candidate read came out.
+
+            The same callout levelled well reads ``Ø18H10+0.070/0`` and levelled
+            poorly reads ``Ø118H10V+0.070M0`` — the poor one is *longer*, so
+            ranking by length alone keeps the wrong one. Resolved symbols count
+            for more than length, and stray letters count against.
+            """
+            text = r.get("text", "")
+            # A tie on text and confidence is broken by how the box sits on the
+            # writing: the same callout levelled at the right angle comes back
+            # in a tighter, longer box than one levelled a dozen degrees off,
+            # and the off-angle box is what ends up crossing its neighbour.
+            oriented = r.get("oriented_box")
+            aspect = 0.0
+            if oriented:
+                side_a = float(oriented["width"])
+                side_b = float(oriented["height"])
+                aspect = max(side_a, side_b) / max(min(side_a, side_b), 1.0)
+            return (
+                symbol_count(text) * 2.0
+                - junk_letters(text) * 2.0
+                + len(digits(text)) * 0.5
+                + float(r.get("confidence") or 0.0)
+                + min(aspect, 8.0) * 0.15
+            )
+
+        kept: list[dict[str, Any]] = []
+        # Best reads first, so a duplicate keeps the better one.
+        order = sorted(angled, key=quality, reverse=True)
+        for r in order:
+            d = digits(r.get("text", ""))
+            if len(d) < 2:
+                continue
+            # Two angled reads whose tight rectangles coincide are the same ink
+            # read at two candidate angles, whatever their digits say. Only the
+            # better-levelled one is worth keeping, and separate callouts never
+            # coincide — that is what the oriented rectangle buys us.
+            if any(geom_overlap_frac(r, k) >= 0.5 for k in kept):
+                continue
+            # An angled read lying across a region the upright pass already
+            # produced is a second box over the same ink. Only one may be drawn.
+            # It is a straight swap of one read for a better one, so it applies
+            # to a single region of comparable size: overlap is measured against
+            # the smaller of the two, so a long angled box contains a small
+            # upright one completely, and letting that count as a swap once
+            # deleted eight good callouts on one sheet. Anything broader is
+            # dropped, and replacing several regions at once stays the job of
+            # _supersede_fused_base.
+            # Sitting on top of a region the upright pass already produced has to
+            # be earned. The angled read is kept only if it is the better read;
+            # otherwise it is a second box over ink that is already accounted
+            # for. Quality decides this rather than size, because a long chamfer
+            # box legitimately passes over a small neighbouring callout, while a
+            # bloated re-read of one value does not.
+            # A third of a callout covered is already a visible double box, and
+            # a bloated re-read covers only part of the region it duplicates.
+            overlapped = [b for b in base_regions if geom_overlap_frac(r, b) >= 0.3]
+            swap_for: list[dict[str, Any]] = []
+            if overlapped:
+                # The upright read wins unless this one is plainly better.
+                if quality(r) <= max(quality(b) for b in overlapped):
+                    continue
+                # Better, and now: does it account for what it covers? The
+                # upright pass often splits a leader callout into its value and
+                # its deviation stack, and the levelled read is those fragments
+                # put back together — its digits contain each of theirs, in
+                # order. Then it stands in for them. Covering a value it cannot
+                # account for means it ran into a neighbour, and drawing it
+                # would stack a second box over that neighbour, so it is
+                # dropped instead. Fragments of one or no digits are ignored:
+                # an R1 that a chamfer box merely passes over is not something
+                # the chamfer has to explain.
+                area_r = polygon_area(region_polygon(r))
+                accounted: list[dict[str, Any]] = []
+                blocked = False
+                for b in overlapped:
+                    bd = digits(b.get("text", ""))
+                    if len(bd) < 2:
+                        continue  # nothing to account for
+                    if _covers_digits(d, bd):
+                        accounted.append(b)
+                        continue
+                    # Not accounted for. It may still be a garbled fragment of
+                    # this same callout, which the levelled read got right — but
+                    # only if it is a decisively worse read of a box this size.
+                    # Without the size test a long box overrules every small
+                    # region it happens to lie across, which once deleted eight
+                    # good callouts on one sheet.
+                    area_b = polygon_area(region_polygon(b))
+                    comparable = max(area_r, area_b) <= min(area_r, area_b) * 2.5
+                    if comparable and quality(r) >= quality(b) + 2.0:
+                        accounted.append(b)
+                    else:
+                        blocked = True
+                        break
+                if blocked:
+                    continue
+                swap_for = accounted
+            dup = [
+                b for b in base_regions
+                if overlaps(r, b) and same_value(d, digits(b.get("text", "")))
+            ]
+            if dup:
+                # The upright read of a slanted callout keeps its digits but
+                # drops the symbols only the levelled view resolves (the ° of
+                # ``0.5×45°``). Same digits + more symbols → enrich the base
+                # region's text in place; its box is kept.
+                for b in dup:
+                    bt = b.get("text", "")
+                    # Same value, better read: hand the upright region the
+                    # levelled text AND its box, so the balloon ends up along
+                    # the line. Judged on overall quality — comparing symbol
+                    # counts alone left ``V V0.5×45°`` in place, because the
+                    # stray V's do not change how many symbols it has.
+                    if digits(bt) == d and quality(r) > quality(b):
+                        for key in ("text", "type", "category", "subtype", "label"):
+                            b[key] = r.get(key)
+                        b["bbox"] = r["bbox"]
+                        b["oriented_box"] = r.get("oriented_box")
+                        b["rotation"] = r.get("rotation", 0)
+                        b["confidence"] = r.get("confidence", b.get("confidence"))
+                        b["enriched_from"] = "angled"
+                continue
+            if any(
+                overlaps(r, k) and same_value(d, digits(k.get("text", "")))
+                for k in kept
+            ):
+                continue
+            # Only now that this read is definitely being kept does the region
+            # it replaces step aside; marking earlier could delete a region and
+            # then drop its replacement further down.
+            for replaced in swap_for:
+                replaced["superseded"] = True
+            kept.append(r)
+        return kept
+
+    @staticmethod
+    def _supersede_fused_base(
+        angled: list[dict[str, Any]], base_regions: list[dict[str, Any]]
+    ) -> set[int]:
+        """
+        Retire an upright region that fused several along-the-line callouts.
+
+        When two or more *distinct* slanted reads sit inside one base region,
+        that region is the axis-aligned hull of both leaders and its text is the
+        garbled concatenation of them (``118H10+0.070-20H10``). The levelled
+        view resolved what the upright view could not, so the base region is
+        marked ``superseded`` — excluded from the redundancy check below, and
+        dropped by ``segment`` — and the per-leader reads stand in its place.
+
+        Returns the ids of the superseded base regions. Conservative: a base
+        region holding a single slanted value keeps its authority, so an
+        ordinary upright read is never displaced by a rotated re-read.
+        """
+        import re
+
+        from geom_utils import contains_point, overlap_frac, region_center
+
+        superseded: set[int] = set()
+        for base in base_regions:
+            inside = [a for a in angled if contains_point(base, region_center(a))]
+            if len(inside) < 2:
+                continue
+            digit_sets = {re.sub(r"\D", "", a.get("text", "")) for a in inside}
+            digit_sets.discard("")
+            if len(digit_sets) < 2:
+                continue  # the same value read twice, not a fusion
+            # The two reads must occupy separate ink: overlapping rotated boxes
+            # are one callout read twice, not two callouts fused.
+            separate = any(
+                overlap_frac(inside[i], inside[j]) < 0.3
+                for i in range(len(inside))
+                for j in range(i + 1, len(inside))
+            )
+            if not separate:
+                continue
+            base["superseded"] = True
+            superseded.add(id(base))
+        return superseded
+
+    def _detect_angled_regions(
+        self,
+        image: Image.Image,
+        base_regions: list[dict[str, Any]],
+        det_boxes: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
+        upright/90° detector misses.
+
+        Runs per diagonal *neighbourhood* rather than over the whole selection,
+        so the result no longer depends on how much of the drawing was selected —
+        the failure that left the two ``H10`` fit callouts unread on a full
+        sheet while they read correctly on a zoomed crop. Each neighbourhood is
+        levelled by its own measured angle, re-detected, read, and mapped back.
+        Results are deduped against ``base_regions`` so a value already read
+        upright is not reported twice.
+        """
+        # First the whole selection, which is what a zoomed-in crop needs.
+        found = self._angled_in_roi(image)
+        # Then each diagonal neighbourhood, always — not only when the pass
+        # above came back empty. On a large selection the slant vote is diluted
+        # by the rest of the drawing and names one angle, so it recovers one
+        # leader's callout and misses its neighbour on the next leader. Working
+        # neighbourhood by neighbourhood picks up the rest; anything found
+        # twice is reconciled by the dedupe below.
+        from region_detect import detect_leader_lines
+
+        leaders = detect_leader_lines(image)
+        for x0, y0, x1, y1 in self._slant_neighbourhoods(image, det_boxes or []):
+            sign = self._neighbourhood_sign(det_boxes or [], (x0, y0, x1, y1))
+            roi = image.crop((x0, y0, x1, y1))
+            leader_angles = self._leader_angles_for_roi(leaders, (x0, y0, x1, y1))
+            # Two zoom levels. Detection resolves a callout's parts at one
+            # zoom and its neighbour's at another — on the two fit callouts
+            # each is read cleanly at a different one — so gather both and
+            # let the quality ranking in ``_dedupe_angled`` choose.
+            for zoom in (1.0, 1.5):
+                if zoom == 1.0:
+                    view = roi
+                else:
+                    view = roi.resize(
+                        (int(roi.width * zoom), int(roi.height * zoom)),
+                        Image.Resampling.LANCZOS,
+                    )
+                for region in self._angled_in_roi(
+                    view,
+                    sign=sign,
+                    max_magnitudes=3,
+                    # Only consulted when no leader runs through the region:
+                    # this region is known to hold diagonal text, so a
+                    # magnitude needs less of the vote to be worth a try. At
+                    # sheet scale the correct angle is rarely the top bucket.
+                    weight_floor=0.08,
+                    fallback_angles=leader_angles,
+                ):
+                    for box in (region["bbox"], region.get("oriented_box")):
+                        if not box:
+                            continue
+                        box["x"] = round(box["x"] / zoom + x0, 1)
+                        box["y"] = round(box["y"] / zoom + y0, 1)
+                        box["width"] = round(box["width"] / zoom, 1)
+                        box["height"] = round(box["height"] / zoom, 1)
+                    found.append(region)
+
+        superseded = self._supersede_fused_base(found, base_regions)
+        return self._dedupe_angled(
+            found, [b for b in base_regions if id(b) not in superseded]
+        )
+
+    @staticmethod
+    def _bbox_rot_to_source(
+        bx: float, by: float, bw: float, bh: float, inv: Any, iw: int, ih: int
+    ) -> dict[str, float] | None:
+        """Map a rotated-frame AABB to a clamped upright AABB via ``inv``."""
+        corners = [
+            (bx, by), (bx + bw, by), (bx, by + bh), (bx + bw, by + bh),
+        ]
+        xs, ys = [], []
+        for px, py in corners:
+            sx = inv[0, 0] * px + inv[0, 1] * py + inv[0, 2]
+            sy = inv[1, 0] * px + inv[1, 1] * py + inv[1, 2]
+            xs.append(sx)
+            ys.append(sy)
+        x0 = max(0.0, min(xs))
+        y0 = max(0.0, min(ys))
+        x1 = min(float(iw), max(xs))
+        y1 = min(float(ih), max(ys))
+        if x1 - x0 < 1 or y1 - y0 < 1:
+            return None
+        return {
+            "x": round(x0, 1),
+            "y": round(y0, 1),
+            "width": round(x1 - x0, 1),
+            "height": round(y1 - y0, 1),
+        }
+
+    @staticmethod
+    def _ink_extent(image: Image.Image) -> tuple[int, int, int, int] | None:
+        """
+        Tight bounds of the *text* ink in a levelled crop, or ``None``.
+
+        A cluster's union box is the hull of its detection boxes plus a margin,
+        which on a diagonal callout leaves a box noticeably larger than the
+        writing — that is what makes a balloon look like it is drawn over empty
+        drawing rather than along the text. Long straight strokes are removed
+        first so the leader the text sits on does not stretch the bounds back
+        out to the whole crop.
+        """
+        try:
+            import cv2
+        except ImportError:
+            return None
+        import numpy as np
+
+        from image_preprocess import _suppress_long_lines, cad_ink_to_gray
+
+        gray = np.asarray(cad_ink_to_gray(image).convert("L"))
+        if gray.size == 0:
+            return None
+        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = _suppress_long_lines(mask)
+        ys, xs = np.nonzero(mask)
+        if xs.size == 0:
+            return None
+        return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+    @staticmethod
+    def _quad_angle(quad: Any) -> float | None:
+        """
+        Screen angle of a detection quad's reading direction, in degrees.
+
+        The detector returns the four corners of a text line, so its longer edge
+        *is* the direction the text runs — no estimation needed. Returns degrees
+        in (-90, 90], clockwise positive (y axis down), or ``None`` when the quad
+        is missing or degenerate.
+        """
+        import math
+
+        if not quad or len(quad) < 4:
+            return None
+        (x0, y0), (x1, y1), _, (x3, y3) = quad[:4]
+        top = (x1 - x0, y1 - y0)
+        side = (x3 - x0, y3 - y0)
+        len_top = math.hypot(*top)
+        len_side = math.hypot(*side)
+        if max(len_top, len_side) < 2.0:
+            return None
+        dx, dy = top if len_top >= len_side else side
+        angle = math.degrees(math.atan2(dy, dx))
+        while angle <= -90.0:
+            angle += 180.0
+        while angle > 90.0:
+            angle -= 180.0
+        return angle
+
+    @staticmethod
+    def _rotate_expand(
+        image: Image.Image, angle: float, *, with_forward: bool = False
+    ) -> tuple[Image.Image, Any] | tuple[Image.Image, Any, Any]:
+        """
+        Rotate ``image`` CCW by ``angle`` degrees onto an expanded white canvas.
+
+        Returns the rotated PIL image plus the inverse 2×3 affine that maps a
+        point in the *rotated* frame back to the original (used to place a
+        rotated-frame detection's balloon in received-image coordinates).
+        With ``with_forward`` the forward matrix comes too, so source-frame
+        detections can be projected into the rotated frame without re-detecting.
+        """
+        import cv2
+
+        arr = np.asarray(image.convert("RGB"))
+        h, w = arr.shape[:2]
+        cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+        M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        cos, sin = abs(M[0, 0]), abs(M[0, 1])
+        nw = int(h * sin + w * cos)
+        nh = int(h * cos + w * sin)
+        M[0, 2] += (nw - w) / 2.0
+        M[1, 2] += (nh - h) / 2.0
+        rot = cv2.warpAffine(
+            arr, M, (nw, nh),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
+        inv = cv2.invertAffineTransform(M)
+        if with_forward:
+            return Image.fromarray(rot), inv, M
+        return Image.fromarray(rot), inv
+
+    def _stacked_deviation_read(
+        self, crop: Image.Image, res: dict[str, Any]
+    ) -> str | None:
+        """
+        Re-read a levelled callout as ``value upper/lower``, or ``None``.
+
+        A fit callout carries its two deviations stacked beside the value, and
+        flat reading order interleaves them (``Ø18H10 +0.070/0`` comes back as
+        ``1+0.07018H100``). One finer detection pass inside the crop separates
+        the parts, and their geometry says which is which. Only the narrow
+        stacked pattern with confidently-read parts is accepted, and the result
+        is composed and classified like any other read, so ``None`` simply
+        leaves the recogniser's own text in place.
+        """
+        from image_preprocess import cad_ink_to_gray
+        from segment_quality import is_segment_worthy
+        from stacked_tolerance import stacked_deviation_text
+
+        parts = self._paddle_det_boxes(cad_ink_to_gray(crop).convert("RGB"))
+        raw = stacked_deviation_text(parts)
+        if not raw:
+            return None
+        symbols = DetectedSymbols(**(res.get("symbols_detected") or {}))
+        composed = compose_engineering_dimension(raw, crop, symbols)
+        text = (composed.text or "").strip()
+        if not text or not is_segment_worthy(text):
+            return None
+        res["text"] = text
+        res["type"] = composed.kind
+        feature = classify_feature(text, symbols=res.get("symbols_detected") or {})
+        res["category"], res["subtype"], res["label"] = (
+            feature.category, feature.subtype, feature.label,
+        )
+        return text
+
+    @staticmethod
+    def _text_scale(boxes: list[dict[str, Any]]) -> float:
+        """
+        Median short side of the line-shaped detection boxes (≈ one line height).
+
+        Near-square boxes (diagonal text, symbol frames) are excluded: their
+        short side says nothing about the line height. Returns 0.0 when fewer
+        than two line-shaped boxes exist, and callers then skip scale checks.
+        """
+        shorts = sorted(
+            min(b["w"], b["h"])
+            for b in boxes
+            if max(b["w"], b["h"]) >= 1.5 * max(min(b["w"], b["h"]), 1.0)
+        )
+        if len(shorts) < 2:
+            return 0.0
+        return float(shorts[len(shorts) // 2])
+
     def segment(
         self,
         image: Image.Image,
@@ -2762,6 +3644,18 @@ class OcrPipeline:
         )
         regions = self._complete_angle_regions(image, regions)
         regions = dedupe_regions(regions)
+
+        # Recover slanted callouts (chamfers, angled fits) the upright/90°
+        # detector misses — the branch's detection only ever levels by a
+        # quarter-turn, so text drawn along a leader line goes unread. Gated on
+        # slant presence, so non-diagonal sheets pay only a single Hough call.
+        # Added AFTER the base set is deduped and treated as authoritative:
+        # angled reads only ADD values not already present, never displace a
+        # clean upright region.
+        regions.extend(self._detect_angled_regions(image, regions, det_boxes=boxes))
+        # A base region the angled pass resolved into its separate callouts is
+        # dropped here (it was flagged while those reads were being placed).
+        regions = [r for r in regions if not r.pop("superseded", False)]
         recognized_count = len(regions)
         filtered_regions: list[dict[str, Any]] = []
         candidate_outcomes: list[dict[str, Any]] = []
