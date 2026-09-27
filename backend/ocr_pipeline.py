@@ -1797,7 +1797,34 @@ class OcrPipeline:
 
         if not keywords:
             return []
-        return extract_title_fields(self.detect_regions(image), keywords)
+
+        def _read(region: Image.Image, dx: int, dy: int) -> list[dict[str, Any]]:
+            """Recognise a region and return its boxes in page coordinates."""
+            boxes = self._detect_regions_ocr(region)
+            for box in boxes:
+                box["x"] = float(box["x"]) + dx
+                box["y"] = float(box["y"]) + dy
+            return boxes
+
+        # detect_regions is DETECTOR-ONLY on this pipeline: it returns geometry
+        # with empty text, so matching a keyword against it can never succeed.
+        # Recognition is required here, and it is run on the bottom-right
+        # corner first — the title block's labels are small, and reading just
+        # that corner resolves them far better than one pass over the sheet.
+        width, height = image.size
+        corner_x = int(width * 0.45)
+        corner_y = int(height * 0.70)
+        fields = extract_title_fields(
+            _read(image.crop((corner_x, corner_y, width, height)), corner_x, corner_y),
+            keywords,
+        )
+        if any(field["value"] for field in fields):
+            return fields
+
+        # Nothing in the corner: the sheet may place its title block elsewhere,
+        # or the caller may have handed us a crop of the block itself.
+        whole = extract_title_fields(_read(image, 0, 0), keywords)
+        return whole if any(field["value"] for field in whole) else fields
 
     @staticmethod
     def _lines_from_boxes(
@@ -3197,6 +3224,39 @@ class OcrPipeline:
             return 0.0
         return float(shorts[len(shorts) // 2])
 
+    def _notes_region(
+        self,
+        image: Image.Image,
+        *,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+    ) -> dict[str, Any] | None:
+        """
+        Detect the NOTES paragraph and read it as one region.
+
+        Deliberately runs its own recognition pass: detect_regions on this
+        pipeline is DETECTOR-ONLY and returns geometry with empty text, so the
+        numbered-point markers this looks for are simply not there. With
+        recognised boxes the same detector reads all five notes on a real
+        sheet; without them it finds nothing and the note lines leak into
+        neighbouring dimension clusters, which is how a balloon came out as
+        "AN.2WTOOPING.".
+        """
+        try:
+            boxes = self._detect_regions_ocr(image)
+        except Exception:
+            return None
+        region, _ = self._detect_notes_block(boxes)
+        if region is None:
+            return None
+        bounds = region.pop("_bounds", None)
+        line_h = region.pop("_line_h", 0.0)
+        if bounds is not None:
+            better = self._reread_notes_block(image, bounds, line_h)
+            if better:
+                region["text"] = "\n".join(better)
+        return region
+
     def segment(
         self,
         image: Image.Image,
@@ -3352,11 +3412,26 @@ class OcrPipeline:
         # The NOTES paragraph is lifted out BEFORE clustering: its lines are not
         # dimensions (they would all be dropped downstream), and leaving them in
         # lets a note line bridge into a neighbouring callout's cluster. The
-        # region is added back untouched just before returning.
-        notes_region, notes_idx = self._detect_notes_block(boxes)
-        if notes_idx:
-            consumed = set(notes_idx)
-            boxes = [b for i, b in enumerate(boxes) if i not in consumed]
+        # region is added back untouched just before returning. Boxes are
+        # excluded by geometry because the notes pass runs its own recognition
+        # and its box list does not index into this one.
+        notes_region = self._notes_region(
+            image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
+        )
+        if notes_region is not None:
+            nb = notes_region["bbox"]
+            nx0, ny0 = nb["x"], nb["y"]
+            nx1, ny1 = nx0 + nb["width"], ny0 + nb["height"]
+            boxes = [
+                b
+                for b in boxes
+                if not (
+                    b["x"] + b["w"] > nx0
+                    and b["x"] < nx1
+                    and b["y"] + b["h"] > ny0
+                    and b["y"] < ny1
+                )
+            ]
         report(
             stage="detecting",
             message=f"Detected {len(boxes)} region proposals",
@@ -3742,12 +3817,6 @@ class OcrPipeline:
         # values, never discard or reshape the notes block. Re-read from an
         # enlarged crop when that resolves the paragraph more cleanly.
         if notes_region is not None:
-            bounds = notes_region.pop("_bounds", None)
-            block_line_h = notes_region.pop("_line_h", 0.0)
-            if bounds is not None:
-                better = self._reread_notes_block(image, bounds, block_line_h)
-                if better:
-                    notes_region["text"] = "\n".join(better)
             regions.append(notes_region)
 
         excluded_count = recognized_count - len(regions)
@@ -4940,6 +5009,16 @@ class OcrPipeline:
         if angled_regions:
             regions.extend(angled_regions)
             detected_count += len(angled_regions)
+
+        # The NOTES paragraph, read as one region rather than left to leak into
+        # neighbouring clusters as fragments. Same accounting as the angled
+        # pass, so the state invariant below still balances.
+        notes_region = self._notes_region(
+            image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
+        )
+        if notes_region is not None:
+            regions.append(notes_region)
+            detected_count += 1
 
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
