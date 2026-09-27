@@ -44,6 +44,7 @@ from paddle_parse import (
 from symbol_normalize import fix_engineering_symbols_light
 from symbol_regions import enlarge_zone, split_symbol_zones
 from symbol_vision import (
+    DetectedSymbols,
     detect_prefix_from_ocr_text,
     detect_symbols,
     merge_symbol_scores,
@@ -1948,6 +1949,11 @@ class OcrPipeline:
         # character the recogniser emits for a stroke it cannot resolve). A
         # line of a paragraph always carries several letters; a point marker is
         # kept whatever follows it.
+        # NOTE: the section route's is_segment_worthy / has_dimension_value
+        # gates were tried here twice and measurably hurt both times, before
+        # and after the review-policy fix (56103-0182B 16/24 -> 11/24,
+        # BS1801006.020 9/12 -> 7/12). The page route has its own value
+        # grammar in page_value_filters; these two do not belong on top of it.
         from segment_quality import strip_foreign_glyphs
 
         cleaned: list[str] = []
@@ -3828,7 +3834,11 @@ class OcrPipeline:
             needs_expanded_filter_context,
             normalize_page_value_text,
         )
-        from segment_quality import strip_foreign_glyphs
+        from segment_quality import (
+            has_dimension_value,
+            is_segment_worthy,
+            strip_foreign_glyphs,
+        )
 
         def report(
             *,
@@ -4613,6 +4623,7 @@ class OcrPipeline:
             review_reason = str(result.get("review_reason") or "").strip()
             if decision.rule_name in hard_exclusion_rules:
                 return "excluded", decision.reason
+
 
             if not record["recognized"]:
                 return (
