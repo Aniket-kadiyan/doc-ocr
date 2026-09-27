@@ -9,7 +9,7 @@
  * Auto-Segment is disabled for now, everywhere (dev and prod). Flip this back
  * to `process.env.NODE_ENV !== "production"` to restore the dev-only behavior.
  */
-export const AUTO_SEGMENT_ENABLED = false;
+export const AUTO_SEGMENT_ENABLED = process.env.NODE_ENV !== "production";
 
 /**
  * OCR Debug dump is disabled for now, everywhere (dev and prod). The button

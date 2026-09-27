@@ -13,8 +13,12 @@ interface SidebarProps {
   onDelete: (id: string) => void;
   /** Start drawing a value box that binds one-to-one to this label. */
   onAddValue: (labelId: string) => void;
-  /** Open the edit modal for a label and all the values associated with it. */
-  onEditLabel: (labelId: string) => void;
+  /**
+   * Open the edit modal. Pass a label id to edit it with its value, or a value
+   * id to edit that value on its own — which is how an auto-segmented value
+   * gets a category, tolerance, method and tool.
+   */
+  onEditLabel: (annotationId: string) => void;
 }
 
 const isDimension = (a: Annotation) => (a.kind ?? "dimension") === "dimension";
@@ -203,16 +207,29 @@ export function Sidebar({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(ann.id);
-          }}
-          className="mt-0.5 w-full text-center text-[10px] text-red-500 hover:underline"
-        >
-          Remove
-        </button>
+        <div className="mt-0.5 flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(ann.id);
+              onEditLabel(ann.id);
+            }}
+            className="text-[10px] font-medium text-blue-600 hover:underline"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(ann.id);
+            }}
+            className="text-[10px] text-red-500 hover:underline"
+          >
+            Remove
+          </button>
+        </div>
       </li>
     );
   };

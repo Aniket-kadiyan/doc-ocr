@@ -1,4 +1,12 @@
-"""Normalize PaddleOCR output across v2/v3 and det=True/det=False."""
+"""
+Normalize PaddleOCR output across v2/v3 and det=True/det=False.
+
+The detector returns a *quadrilateral* per text line, not a rectangle: for text
+drawn along a leader line its corners follow the text, so the quad carries the
+text's own angle. That angle is kept here (``quad``) instead of being collapsed
+into an axis-aligned box, because re-deriving it downstream (a sheet-wide Hough
+vote) is both expensive and scale-dependent.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +35,26 @@ def _is_box(obj: Any) -> bool:
     if len(obj) == 4 and all(isinstance(v, Real) for v in obj):
         return True
     return False
+
+
+def _box_points(box: Any) -> list[tuple[float, float]] | None:
+    """
+    Corner points of a detection box, or ``None`` when it carries no shape.
+
+    Returns points only for a genuine polygon. The ``(x0, y0, x1, y1)`` form is
+    already axis-aligned and says nothing about orientation, so it yields
+    ``None`` rather than four synthetic corners that would claim an angle of 0.
+    """
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    if not isinstance(box, (list, tuple)):
+        return None
+    if len(box) == 4 and all(isinstance(v, Real) for v in box):
+        return None
+    points = [
+        (float(p[0]), float(p[1])) for p in box if _is_point_pair(p)
+    ]
+    return points if len(points) >= 4 else None
 
 
 def _box_to_rect(box: Any) -> tuple[float, float, float, float]:
@@ -99,9 +127,27 @@ def _unwrap_result(obj: Any) -> Any:
     return obj
 
 
-def _yield_from_dict_page(
-    page: dict[str, Any],
-) -> Iterator[tuple[str, float, float, float, float, float]]:
+def _record(
+    text: str, conf: float, box: Any = None
+) -> dict[str, Any]:
+    if box is None:
+        x = y = w = h = 0.0
+        quad = None
+    else:
+        x, y, w, h = _box_to_rect(box)
+        quad = _box_points(box)
+    return {
+        "text": str(text),
+        "x": x,
+        "y": y,
+        "width": w,
+        "height": h,
+        "confidence": float(conf),
+        "quad": quad,
+    }
+
+
+def _yield_from_dict_page(page: dict[str, Any]) -> Iterator[dict[str, Any]]:
     texts = _as_list(_first_present(page, "rec_texts", "rec_text"))
     scores = _as_list(_first_present(page, "rec_scores", "rec_score"))
     # rec_polys aligns with the confidence-filtered recognition arrays.
@@ -109,15 +155,12 @@ def _yield_from_dict_page(
 
     for i, text in enumerate(texts):
         conf = float(scores[i]) if i < len(scores) else 0.0
-        if i < len(polys) and _is_box(polys[i]):
-            x, y, w, h = _box_to_rect(polys[i])
-        else:
-            x, y, w, h = 0.0, 0.0, 0.0, 0.0
+        box = polys[i] if i < len(polys) and _is_box(polys[i]) else None
         if str(text).strip():
-            yield str(text), x, y, w, h, conf
+            yield _record(text, conf, box)
 
 
-def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, float, float]]:
+def _yield_from_line(line: Any) -> Iterator[dict[str, Any]]:
     if line is None:
         return
 
@@ -135,7 +178,7 @@ def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, floa
     if len(line) == 2 and isinstance(line[0], str) and not _is_box(line[0]):
         text, conf = _parse_recognition(line)
         if text.strip():
-            yield text, 0.0, 0.0, 0.0, 0.0, conf
+            yield _record(text, conf)
         return
 
     # Sometimes: [box, text, score]
@@ -143,18 +186,14 @@ def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, floa
         text = line[1]
         conf = float(line[2])
         if text.strip():
-            x, y, w, h = _box_to_rect(line[0])
-            yield text, x, y, w, h, conf
+            yield _record(text, conf, line[0])
         return
 
     # Classic: [box, (text, score)]
     if len(line) >= 2 and _is_box(line[0]):
-        box = line[0]
-        rec = line[1]
-        text, conf = _parse_recognition(rec)
+        text, conf = _parse_recognition(line[1])
         if text.strip():
-            x, y, w, h = _box_to_rect(box)
-            yield text, x, y, w, h, conf
+            yield _record(text, conf, line[0])
         return
 
 
@@ -168,9 +207,7 @@ def _looks_like_recognition_line(obj: Any) -> bool:
     return len(obj) >= 2 and _is_box(obj[0])
 
 
-def _walk_result(
-    obj: Any,
-) -> Iterator[tuple[str, float, float, float, float, float]]:
+def _walk_result(obj: Any) -> Iterator[dict[str, Any]]:
     """Recursively walk v2 nested lists and v3 Result objects."""
     obj = _unwrap_result(obj)
     if obj is None:
@@ -189,8 +226,22 @@ def _walk_result(
             yield from _walk_result(child)
 
 
+def extract_paddle_records(result: Any) -> list[dict[str, Any]]:
+    """
+    Every recognized line as ``{text, x, y, width, height, confidence, quad}``.
+
+    ``quad`` holds the detector's four corner points when it reported them, so
+    callers can read the text's own angle; it is ``None`` for results that carry
+    no polygon (``det=False``, or an axis-aligned ``(x0, y0, x1, y1)`` box).
+    """
+    return list(_walk_result(result))
+
+
 def extract_paddle_lines(
     result: Any,
 ) -> list[tuple[str, float, float, float, float, float]]:
     """Returns list of (text, x, y, width, height, confidence)."""
-    return list(_walk_result(result))
+    return [
+        (r["text"], r["x"], r["y"], r["width"], r["height"], r["confidence"])
+        for r in extract_paddle_records(result)
+    ]

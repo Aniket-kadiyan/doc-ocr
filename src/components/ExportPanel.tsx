@@ -6,8 +6,16 @@ import {
   exportInspectionCSV,
   exportInspectionJSON,
   exportXML,
+  downloadBlob,
   downloadFile,
 } from "@/lib/export";
+import {
+  canvasToPngBlob,
+  collectBalloonedPages,
+  pagesToExport,
+  renderBalloonedCanvas,
+} from "@/lib/ballooned";
+import { buildBalloonedPdf } from "@/lib/balloonedPdf";
 import { saveChecksheetTemplate } from "@/lib/checksheetClient";
 import {
   buildVerificationPayload,
@@ -25,8 +33,10 @@ export function ExportPanel() {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
+  const currentPage = useAnnotationStore((s) => s.currentPage);
+  const pageCanvasProvider = useAnnotationStore((s) => s.pageCanvasProvider);
   const [actionStatus, setActionStatus] = useState<{
-    kind: "idle" | "saving" | "sending" | "ok" | "error";
+    kind: "idle" | "saving" | "sending" | "rendering" | "ok" | "error";
     message: string;
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
@@ -35,8 +45,15 @@ export function ExportPanel() {
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
   const empty = annotations.length === 0;
   const busy =
-    actionStatus.kind === "saving" || actionStatus.kind === "sending";
-  const busyLabel = actionStatus.kind === "saving" ? "Saving…" : "Sending…";
+    actionStatus.kind === "saving" ||
+    actionStatus.kind === "sending" ||
+    actionStatus.kind === "rendering";
+  const busyLabel =
+    actionStatus.kind === "saving"
+      ? "Saving…"
+      : actionStatus.kind === "rendering"
+        ? "Rendering…"
+        : "Sending…";
 
   // Close the Export dropdown when clicking elsewhere.
   useEffect(() => {
@@ -162,11 +179,102 @@ export function ExportPanel() {
     );
   };
 
+  // Share the finished job as one PDF: the drawing pages with their balloons
+  // drawn over them, then the inspection table. The recipient opens it in any
+  // PDF viewer, or prints it as-is — no app, no server, no separate image and
+  // spreadsheet to keep together.
+  const handleBalloonedPdf = async () => {
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
+
+    setActionStatus({ kind: "rendering", message: "Rendering pages…" });
+    try {
+      const pages = await collectBalloonedPages(
+        pageCanvasProvider,
+        annotations,
+        pagesToExport(annotations, currentPage)
+      );
+      if (pages.length === 0) {
+        throw new Error("Could not render the drawing pages.");
+      }
+      const pdf = await buildBalloonedPdf({
+        projectName,
+        pages,
+        annotations,
+        extraColumns,
+      });
+      downloadBlob(pdf, `${base}_ballooned.pdf`);
+      setActionStatus({
+        kind: "ok",
+        message: `Saved ${base}_ballooned.pdf (${pages.length} drawing page${
+          pages.length === 1 ? "" : "s"
+        } + inspection table).`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to build the ballooned drawing.",
+      });
+    }
+  };
+
+  // Flat image of the page on screen with its balloons burned in — for pasting
+  // into a report or a chat where an .html attachment won't do.
+  const handleBalloonedPng = async () => {
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    setActionStatus({ kind: "rendering", message: "Rendering page…" });
+    try {
+      const source = await pageCanvasProvider(currentPage);
+      if (!source) throw new Error("Could not render this page.");
+      const canvas = renderBalloonedCanvas(
+        source,
+        annotations.filter((a) => a.page === currentPage)
+      );
+      downloadBlob(
+        await canvasToPngBlob(canvas),
+        `${base}_ballooned_p${currentPage}.png`
+      );
+      setActionStatus({
+        kind: "ok",
+        message: `Saved page ${currentPage} as PNG.`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to render the ballooned page.",
+      });
+    }
+  };
+
   const handleXML = () => {
     setMenuOpen(false);
+    // Same prompt as CSV/JSON so all three exports carry identical columns.
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
     downloadFile(
-      exportXML(annotations),
-      `${base}_annotations.xml`,
+      exportXML(annotations, extraColumns),
+      `${base}_inspection.xml`,
       "application/xml"
     );
   };
@@ -219,7 +327,7 @@ export function ExportPanel() {
       </button>
 
       {menuOpen && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+        <div className="absolute left-0 top-full z-20 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           <button
             type="button"
             onClick={() => void handleWebView()}
@@ -252,12 +360,32 @@ export function ExportPanel() {
           </button>
           <button
             type="button"
+            onClick={() => void handleBalloonedPdf()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PDF)</span>
+            <span className="block text-[11px] text-slate-400">
+              Drawing + balloons + values in one printable file
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBalloonedPng()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PNG)</span>
+            <span className="block text-[11px] text-slate-400">
+              This page as an image with balloons burned in
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={handleXML}
             className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
           >
             <span className="font-medium">XML</span>
             <span className="block text-[11px] text-slate-400">
-              Annotations as a .xml file
+              Same table as CSV/JSON, as a .xml file
             </span>
           </button>
           <button

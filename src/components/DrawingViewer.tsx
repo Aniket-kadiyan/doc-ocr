@@ -12,7 +12,12 @@ import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
-import { runOCR, runSegment, preloadOcr } from "@/lib/clientOcr";
+import {
+  runOCR,
+  runSegment,
+  runPageTitleFields,
+  preloadOcr,
+} from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { suggestLabel } from "@/lib/labelSuggestions";
 import { useClientOcr } from "@/hooks/useClientOcr";
@@ -41,7 +46,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { LabelEditor } from "@/components/LabelEditor";
-import type { Annotation, BBox } from "@/types/annotation";
+import type { Annotation, BBox, DimensionType } from "@/types/annotation";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_BOX = 8;
@@ -99,6 +104,9 @@ export function DrawingViewer() {
   const setProjectName = useAnnotationStore((s) => s.setProjectName);
   const projectName = useAnnotationStore((s) => s.projectName);
   const setStoreProjectId = useAnnotationStore((s) => s.setProjectId);
+  const setPageCanvasProvider = useAnnotationStore(
+    (s) => s.setPageCanvasProvider
+  );
 
   const pageAnnotations = annotations.filter((a) => a.page === currentPage);
 
@@ -163,6 +171,27 @@ export function DrawingViewer() {
     }, 500);
     return () => clearTimeout(t);
   }, [annotations, projectId]);
+
+  // Rasterize any page of the open drawing at the base resolution, clean (no
+  // balloons). The ballooned exports in the Export menu need pages the viewer
+  // isn't currently showing, so hand this to the store rather than exposing the
+  // PDF document itself.
+  const renderPageCanvas = useCallback(
+    async (page: number): Promise<HTMLCanvasElement | null> => {
+      if (pdfDoc) {
+        const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
+        return canvas;
+      }
+      // Single-page image: only page 1 exists, and it's already rendered.
+      return page === 1 ? sourceCanvasRef.current : null;
+    },
+    [pdfDoc]
+  );
+
+  useEffect(() => {
+    setPageCanvasProvider(konvaImage ? renderPageCanvas : null);
+    return () => setPageCanvasProvider(null);
+  }, [konvaImage, renderPageCanvas, setPageCanvasProvider]);
 
   // Expose the current project id to the store so the Export menu can hand it to
   // the checksheet web view (which opens in a separate browser tab).
@@ -496,17 +525,22 @@ export function DrawingViewer() {
         const newAnnotations: Annotation[] = regions
           .filter((r) => r.text.trim())
           .map((r) => {
-            const type = classifyDimension(r.text);
+            // Prefer the backend rule-engine category/label (it also sees
+            // detected symbols + geometry); fall back to local text-only rules.
+            const type = ((r.category as DimensionType) ||
+              classifyDimension(r.text)) as DimensionType;
+            const label = r.label?.trim() || suggestLabel(type, r.text);
             return {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
-              label: suggestLabel(type, r.text),
+              label,
               value: r.text.trim(),
               type,
               confidence: r.confidence,
               bbox: r.valueBox,
               rotation: r.rotation,
+              orientedBox: r.orientedBox,
               page: currentPage,
               createdAt: now,
               needsReview: r.needsReview,
@@ -516,6 +550,41 @@ export function DrawingViewer() {
           setSelectionError("Detected regions but read no text — try a tighter box.");
           return;
         }
+
+        // Title-block fields are read from the WHOLE page, not this selection:
+        // the title block sits at a fixed spot on the sheet, so which fields
+        // were found used to depend on where the box was drawn. Fields already
+        // present are not added twice, so re-running Auto-Segment is safe.
+        const existingFields = new Set(
+          useAnnotationStore
+            .getState()
+            .annotations.filter((a) => a.type === "Title Block")
+            .map((a) => a.label.trim().toUpperCase())
+        );
+        try {
+          const fields = await runPageTitleFields(source);
+          const fieldAnnotations: Annotation[] = fields
+            .filter((f) => f.value.trim() && f.bbox)
+            .filter((f) => !existingFields.has(f.label.trim().toUpperCase()))
+            .map((f) => ({
+              id: uuidv4(),
+              number: 0,
+              label: f.label,
+              value: f.value.trim(),
+              type: "Title Block" as DimensionType,
+              confidence: f.confidence,
+              bbox: f.bbox as BBox,
+              rotation: 0,
+              page: currentPage,
+              createdAt: now,
+            }));
+          newAnnotations.push(...fieldAnnotations);
+        } catch {
+          // The dimensions are the point of Auto-Segment; a failed title-block
+          // read must not throw them away. The export still lists every
+          // configured keyword, with an empty value to fill in by hand.
+        }
+
         addAnnotations(newAnnotations);
       } catch (err) {
         const message =
@@ -764,13 +833,19 @@ export function DrawingViewer() {
                         : isLabel
                           ? "#7c3aed"
                           : "#dc2626";
+                      // Slanted callouts carry a tight rotated rectangle; draw
+                      // that (Konva rotates about x,y clockwise) instead of the
+                      // loose axis-aligned bbox so the box hugs the diagonal text.
+                      const box = ann.orientedBox ?? ann.bbox;
+                      const boxRotation = ann.orientedBox?.rotation ?? 0;
                       return (
                         <Rect
                           key={ann.id}
-                          x={ann.bbox.x}
-                          y={ann.bbox.y}
-                          width={ann.bbox.width}
-                          height={ann.bbox.height}
+                          x={box.x}
+                          y={box.y}
+                          width={box.width}
+                          height={box.height}
+                          rotation={boxRotation}
                           stroke={stroke}
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.
@@ -806,6 +881,10 @@ export function DrawingViewer() {
                         dimmed={!!selectedId && !relatedIds.has(ann.id)}
                         listening={!drawingActive}
                         onSelect={handleSelect}
+                        onOpen={(id) => {
+                          handleSelect(id);
+                          setEditingLabelId(id);
+                        }}
                       />
                     ))}
                   </Layer>
@@ -837,15 +916,18 @@ export function DrawingViewer() {
       <AnnotationPopup />
 
       {(() => {
-        const editingLabel = annotations.find(
-          (a) => a.id === editingLabelId && a.kind === "label"
-        );
+        // The editor opens on a label or, for an auto-segmented value with no
+        // label, on the value itself.
+        const editingLabel = annotations.find((a) => a.id === editingLabelId);
         if (!editingLabel) return null;
-        const editingValue = annotations.find(
-          (a) =>
-            (a.kind ?? "dimension") === "dimension" &&
-            a.labelId === editingLabel.id
-        );
+        const editingValue =
+          editingLabel.kind === "label"
+            ? annotations.find(
+                (a) =>
+                  (a.kind ?? "dimension") === "dimension" &&
+                  a.labelId === editingLabel.id
+              )
+            : undefined;
         return (
           <LabelEditor
             label={editingLabel}

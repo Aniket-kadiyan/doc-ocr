@@ -1,6 +1,7 @@
 import type { BBox, OCRResult } from "@/types/annotation";
 import { cropRegion, CROP_PAD_PX } from "@/lib/canvasUtils";
 import { fixEngineeringSymbols } from "@/lib/engineeringSymbols";
+import { getTitleKeywords } from "@/lib/titleKeywords";
 import { isOcrDebugDumpEnabled, isOcrDebugDumpForce } from "@/lib/ocrDebugDump";
 import { mergeSymbolHints } from "@/lib/visualSymbols";
 
@@ -121,11 +122,21 @@ export interface SegmentRegion {
   text: string;
   confidence: number;
   type?: string;
+  /** Feature category from the backend GD&T rule engine (e.g. "Hole"). */
+  category?: string;
+  /** Suggested balloon label from the rule engine (e.g. "4X Through Hole"). */
+  label?: string;
   orientation: "horizontal" | "vertical" | "rotated";
   rotation: number;
   needsReview: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
+  /**
+   * Tight rotated rectangle (source-canvas coords) for a slanted callout: the
+   * axis-aligned {@link valueBox} is loose for diagonal text, so this carries a
+   * Konva-drawable box (top-left corner + size + clockwise rotation degrees).
+   */
+  orientedBox?: BBox & { rotation: number };
 }
 
 interface ApiSegmentResponse {
@@ -135,9 +146,18 @@ interface ApiSegmentResponse {
     text: string;
     confidence: number;
     type?: string;
+    category?: string;
+    label?: string;
     orientation?: "horizontal" | "vertical" | "rotated";
     rotation?: number;
     needs_review?: boolean;
+    oriented_box?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      rotation: number;
+    };
   }>;
 }
 
@@ -148,6 +168,11 @@ interface ApiSegmentResponse {
  * returned region's box (received-crop pixels) back into source-canvas coords
  * using the same arithmetic as the single-value valueBox mapping below.
  */
+/** A notes paragraph region, flagged as such by the backend rule engine. */
+function isNoteRegion(r: { type?: string; category?: string }): boolean {
+  return r.category === "General Note" || r.type === "General Note";
+}
+
 export async function runSegmentOcr(
   sourceCanvas: HTMLCanvasElement,
   bbox: BBox,
@@ -220,16 +245,84 @@ export async function runSegmentOcr(
         }
       : mapped;
 
+    // Map the oriented rectangle (angled callouts only) the same way — its
+    // top-left corner translates + scales like any point; rotation is invariant.
+    const orientedBox = r.oriented_box
+      ? {
+          x: bbox.x + (r.oriented_box.x - CROP_PAD_PX) / displayScale,
+          y: bbox.y + (r.oriented_box.y - CROP_PAD_PX) / displayScale,
+          width: r.oriented_box.width / displayScale,
+          height: r.oriented_box.height / displayScale,
+          rotation: r.oriented_box.rotation,
+        }
+      : undefined;
+
     return {
-      text: fixEngineeringSymbols(r.text ?? ""),
+      // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
+      // newlines. A notes paragraph needs neither: its line breaks are what
+      // let the sheet split it back into numbered points, and "fixing" prose
+      // only risks turning letters into engineering symbols.
+      text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
       confidence: r.confidence ?? 0,
       type: r.type,
+      category: r.category,
+      label: r.label,
       orientation: r.orientation ?? "horizontal",
       rotation: r.rotation ?? 0,
       needsReview: r.needs_review ?? false,
       valueBox,
+      orientedBox,
     };
   });
+}
+
+/** One title-block field read off the sheet for a configured keyword. */
+export interface TitleField {
+  keyword: string;
+  label: string;
+  /** "" when the keyword was not found — the sheet still gets a row for it. */
+  value: string;
+  confidence: number;
+  /** Null when not found, so there is nothing to place a balloon on. */
+  bbox: BBox | null;
+}
+
+/**
+ * Read the configured title-block keywords from a WHOLE page.
+ *
+ * Runs against the full page canvas rather than an Auto-Segment selection: the
+ * title block sits at a fixed place on the sheet, so scanning only the drawn
+ * rectangle made the result depend on where that box landed (a selection over
+ * the upper sheet found the revision table's REV and missed DWG NO. at the
+ * bottom). Coordinates come back in page space, so no crop mapping is needed.
+ */
+export async function runTitleFields(
+  pageCanvas: HTMLCanvasElement,
+  keywords: string[] = getTitleKeywords()
+): Promise<TitleField[]> {
+  if (keywords.length === 0) return [];
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    pageCanvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error("Failed to encode page"));
+    }, "image/png");
+  });
+
+  const form = new FormData();
+  form.append("file", blob, "page.png");
+  form.append("keywords", keywords.join(","));
+
+  const res = await fetch(`${getOcrApiUrl()}/ocr/title-fields`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`Title fields API error: ${res.status}`);
+  }
+
+  const data = (await res.json()) as { fields?: TitleField[] };
+  return data.fields ?? [];
 }
 
 export async function runPaddleOcr(

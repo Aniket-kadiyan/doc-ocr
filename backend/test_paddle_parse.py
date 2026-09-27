@@ -49,8 +49,56 @@ def test_paddle_2_recognition_only_result() -> None:
     assert parsed == [("8.00", 0.0, 0.0, 0.0, 0.0, 0.94)], parsed
 
 
+def test_quad_is_preserved_for_slanted_text():
+    """The detector's corners carry the text's angle; they must survive parsing."""
+    from paddle_parse import extract_paddle_records
+
+    # Corners PaddleOCR returned for the GPD 18T "Ø18H10 +0.070" fit callout.
+    slanted = [[475, 530], [930, 192], [1029, 322], [574, 661]]
+
+    class Slanted:
+        @property
+        def json(self):
+            return {
+                "res": {
+                    "rec_texts": ["18H10 +0.070"],
+                    "rec_scores": [0.94],
+                    "rec_polys": [slanted],
+                }
+            }
+
+    record = extract_paddle_records([Slanted()])[0]
+    assert record["quad"] == [(475.0, 530.0), (930.0, 192.0), (1029.0, 322.0), (574.0, 661.0)]
+    # The axis-aligned box is still the hull of those corners.
+    assert (record["x"], record["y"], record["width"], record["height"]) == (475.0, 192.0, 554.0, 469.0)
+
+
+def test_axis_aligned_box_reports_no_quad() -> None:
+    """An (x0, y0, x1, y1) box says nothing about orientation."""
+    from paddle_parse import extract_paddle_records
+
+    class Rect:
+        @property
+        def json(self):
+            return {"res": {"rec_texts": ["12.5"], "rec_scores": [0.9], "rec_polys": [[1, 2, 21, 10]]}}
+
+    record = extract_paddle_records([Rect()])[0]
+    assert record["quad"] is None
+    assert (record["x"], record["y"], record["width"], record["height"]) == (1.0, 2.0, 20.0, 8.0)
+
+
+def test_recognition_only_result_has_no_quad() -> None:
+    from paddle_parse import extract_paddle_records
+
+    record = extract_paddle_records([[("8.00", 0.94)]])[0]
+    assert record["quad"] is None
+
+
 if __name__ == "__main__":
     test_paddle_3_result_object()
     test_paddle_2_nested_result()
     test_paddle_2_recognition_only_result()
+    test_quad_is_preserved_for_slanted_text()
+    test_axis_aligned_box_reports_no_quad()
+    test_recognition_only_result_has_no_quad()
     print("OK")

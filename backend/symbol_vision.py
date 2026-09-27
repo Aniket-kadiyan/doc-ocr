@@ -116,6 +116,14 @@ def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
 
     oriented = primary_oriented(image)
     merged.degree = _detect_degree(oriented)
+    if not merged.degree:
+        # A chamfer "0.5×45°" runs along a diagonal leader; its ° ring is not in
+        # the upright top band. Check the deskewed view when one exists.
+        from image_preprocess import deskew_to_horizontal
+
+        deskewed = deskew_to_horizontal(oriented)
+        if deskewed is not None:
+            merged.degree = _detect_degree(deskewed)
     zones = split_symbol_zones(
         oriented,
         from_vertical_rotated=vertical,
@@ -151,8 +159,10 @@ def detect_prefix_from_ocr_text(prefix_ocr: str) -> DetectedSymbols:
     elif re.match(r"^[Rr](?=\d)", t):
         out.radius = True
     elif re.match(r"^[O0Q©¢C]$", t):
-        # Single-char prefix OCR of Ø
-        out.diameter_score = 0.55
+        # Single-char prefix OCR of Ø. Kept below the vision-only compose bar
+        # (a bare "0" in the strip is more often the first digit than a Ø) —
+        # it corroborates a stripped leading glyph, it does not decide alone.
+        out.diameter_score = 0.4
     if "±" in t or "+/-" in t:
         out.plus_minus = True
     if re.search(r"°|˚|⁰", t):

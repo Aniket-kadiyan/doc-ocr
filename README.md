@@ -100,6 +100,22 @@ macOS and Linux (they use `scripts/run-ocr.mjs`, which selects
 
 ---
 
+## Sharing a ballooned drawing
+
+**Export ▾** carries two options that package the drawing *and* its readings
+together, so a recipient sees exactly what the annotator saw:
+
+| Option | File | What's in it |
+| --- | --- | --- |
+| Ballooned Drawing (HTML) | `<name>_ballooned.html` | Every annotated page with its balloons, plus the inspection table. Images are inlined, so the single file opens offline in any browser — click a balloon or a row and the pair highlights, like the app. Ctrl/Cmd + P saves it as a PDF. |
+| Ballooned Drawing (PNG) | `<name>_ballooned_p<N>.png` | The page on screen as a flat image with the balloons burned in — for pasting into a report or a chat. |
+
+Both ask for the same optional extra columns as the CSV/JSON exports (blank
+columns for measured readings). They are read-only views: **Save Project**
+(`.docbox.json`) is still what you send to someone who needs to keep editing.
+
+---
+
 ## Tips for Ø and ±
 
 1. Include the **full symbol** in the box (slightly left of digits for Ø).  

@@ -1,10 +1,55 @@
+/**
+ * Feature category assigned by the GD&T rule engine (GDTOCR spec). The string
+ * values are the single source of truth shared with the backend
+ * (backend/feature_dictionary.py CAT_* constants). Keep the two in sync.
+ */
+export const DIMENSION_TYPES = [
+  "Diameter",
+  "Radius",
+  "Chamfer",
+  "Angle",
+  "Taper",
+  "Linear",
+  "Tolerance",
+  "Thread",
+  "Hole",
+  "GD&T",
+  "Datum",
+  "Surface Finish",
+  "Weld",
+  "Material",
+  "Heat Treatment",
+  "Coating",
+  "General Note",
+  "Reference",
+  "Basic",
+  "Note",
+  "Title Block",
+  "Unknown",
+] as const;
+
 export type DimensionType =
   | "Diameter"
   | "Radius"
+  | "Chamfer"
   | "Angle"
-  | "Tolerance"
+  | "Taper"
   | "Linear"
+  | "Tolerance"
+  | "Thread"
+  | "Hole"
+  | "GD&T"
+  | "Datum"
+  | "Surface Finish"
+  | "Weld"
+  | "Material"
+  | "Heat Treatment"
+  | "Coating"
+  | "General Note"
+  | "Reference"
+  | "Basic"
   | "Note"
+  | "Title Block"
   | "Unknown";
 
 export interface BBox {
@@ -45,6 +90,10 @@ export interface Annotation {
   confidence: number;
   bbox: BBox;
   rotation: number;
+  /** Tight rotated rectangle for slanted callouts (source coords + clockwise
+   * degrees). When present the drawing renders this instead of the loose
+   * axis-aligned {@link bbox}, which is oversized for diagonal text. */
+  orientedBox?: BBox & { rotation: number };
   page: number;
   createdAt: number;
   /** "dimension" (default) or "label". Drives color + numbering sequence. */

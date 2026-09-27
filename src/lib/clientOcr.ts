@@ -8,6 +8,7 @@ import {
   checkOcrApiHealth,
   runPaddleOcr,
   runSegmentOcr,
+  runTitleFields,
   type OcrApiHealth,
   type OcrEngine,
   type SegmentRegion,
@@ -78,6 +79,23 @@ export async function runSegment(
 
   activeEngine = "paddleocr";
   return runSegmentOcr(sourceCanvas, bbox, displayScale);
+}
+
+/**
+ * Read the configured title-block keywords from the whole page.
+ *
+ * Kept beside {@link runSegment} so both share the API health check, but it is
+ * a separate request: the title block's position on the sheet has nothing to do
+ * with the rectangle drawn for Auto-Segment.
+ */
+export async function runPageTitleFields(pageCanvas: HTMLCanvasElement) {
+  apiHealth = await checkOcrApiHealth();
+  if (!apiHealth.available) {
+    throw new Error(
+      "PaddleOCR API is not running. Start it with: uvicorn main:app --reload --port 8000"
+    );
+  }
+  return runTitleFields(pageCanvas);
 }
 
 export async function terminateOCR(): Promise<void> {

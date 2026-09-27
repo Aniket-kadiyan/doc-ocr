@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { TOOL_OPTIONS, type Annotation } from "@/types/annotation";
 import { db, loadAnnotations, saveAnnotations } from "@/lib/db";
-import { inspectionSheetCSV } from "@/lib/export";
+import { downloadFile, inspectionSheetCSV } from "@/lib/export";
 import { buildInspectionSheet } from "@/lib/project";
 
 const CHANNEL = "doc-ocr-box:checksheet";
@@ -150,15 +150,14 @@ export default function ChecksheetPage() {
 
   const handleExportCsv = useCallback(() => {
     const sheet = buildInspectionSheet(annos, columns);
-    const blob = new Blob([inspectionSheetCSV(sheet)], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${
-      projectName.replace(/\s+/g, "_").toLowerCase() || "drawing"
-    }_checksheet.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const base =
+      projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
+    // Shared helper so this CSV gets the same UTF-8 BOM as the other exports.
+    downloadFile(
+      inspectionSheetCSV(sheet),
+      `${base}_checksheet.csv`,
+      "text/csv"
+    );
   }, [annos, columns, projectName]);
 
   const cell =

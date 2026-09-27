@@ -54,6 +54,19 @@ _DMS_RE = re.compile(
     r"(?:(\d{1,2}(?:\.\d+)?)\s*\"?)?)?\s*$"  # seconds "
 )
 
+# PaddleOCR routinely drops the ' and " ticks altogether, reading 32°20'40" as
+# "32°20 40" (often with a trailing "|" / "1" from the extension line it sits
+# on). When the degree mark IS present, two following 1–2 digit groups can only
+# be minutes/seconds, so recover them without ticks.
+_DMS_TICKLESS_RE = re.compile(
+    r"^\s*(\d{1,3})\s*(?:°|˚|⁰)\s*"
+    r"(\d{1,2})\s*'?\s*"
+    r"(?:(\d{1,2})\s*\"?)?\s*$"
+)
+# Stray stroke glyphs OCR appends when an extension/leader line touches the
+# end of the text: 1 l I | and a stray bullet / dot.
+_TRAILING_STROKE_RE = re.compile(r"[\s1lI|●•·.]{1,2}$")
+
 # Decimal degrees: 45.5° / 90°
 _DEC_DEG_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d+)?)\s*(?:°|˚|⁰)\s*$")
 
@@ -86,6 +99,13 @@ def parse_dms(text: str, require_marks: bool = True) -> str | None:
         return None
 
     m = _DMS_RE.match(t)
+    if not m and re.search(r"°|˚|⁰", t):
+        m = _DMS_TICKLESS_RE.match(t)
+        if not m:
+            # Retry once with a trailing stray stroke removed ("32°20 40|").
+            t2 = _TRAILING_STROKE_RE.sub("", t)
+            if t2 != t and re.search(r"\d\s*$", t2):
+                m = _DMS_RE.match(t2) or _DMS_TICKLESS_RE.match(t2)
     if not m:
         return None
 
@@ -102,3 +122,23 @@ def parse_dms(text: str, require_marks: bool = True) -> str | None:
         if seconds is not None:
             out += f'{seconds}"'
     return out
+
+
+# An angle with an optional ± tolerance, e.g. 12°±3°, 45.5°, 120°.
+_ANGLE_TOL_RE = re.compile(
+    r"^(\d{1,3}(?:\.\d+)?°(?:\s*±\s*\d{1,2}(?:\.\d+)?°)?)"
+    r"\s*[1lI|●•·.,:;2]{1,2}\s*$"
+)
+
+
+def strip_angle_tail(text: str) -> str:
+    """
+    Drop stray stroke glyphs after a complete angle: ``12°±3°1`` → ``12°±3°``.
+
+    A digit or bar after a closing ° is never part of the value; it is the
+    leader/extension line that touches the end of the text read as a "1"/"|".
+    Only the angle-with-optional-tolerance shape is touched, so ``32°20'40"``
+    and any non-angle text pass through unchanged.
+    """
+    m = _ANGLE_TOL_RE.match(text or "")
+    return m.group(1) if m else text

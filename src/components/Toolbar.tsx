@@ -8,6 +8,7 @@ import { AUTO_SEGMENT_ENABLED, DEBUG_DUMP_ENABLED } from "@/lib/featureFlags";
 import { useEffect, useRef, useState } from "react";
 import type { LabelInputMode } from "@/types/annotation";
 import { ExportPanel } from "@/components/ExportPanel";
+import { KeywordSettings } from "@/components/KeywordSettings";
 
 interface ToolbarProps {
   isSegmenting: boolean;
@@ -119,6 +120,8 @@ export function Toolbar({
       </button>
 
       <ExportPanel />
+
+      <KeywordSettings />
 
       <div className="mx-1 h-6 w-px bg-slate-200" />
 

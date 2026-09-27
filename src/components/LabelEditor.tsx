@@ -3,9 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { SPECIAL_SYMBOLS, deriveRange } from "@/lib/valueFields";
-import { TOOL_OPTIONS, type Annotation } from "@/types/annotation";
+import {
+  DIMENSION_TYPES,
+  TOOL_OPTIONS,
+  type Annotation,
+  type DimensionType,
+} from "@/types/annotation";
 
 interface LabelEditorProps {
+  /**
+   * The annotation the editor was opened on. Usually a label, but an
+   * auto-segmented value has no label to hang off, so it opens on itself and
+   * is edited in place.
+   */
   label: Annotation;
   /** The value bound one-to-one to this label, if one has been added. */
   value: Annotation | undefined;
@@ -29,23 +39,38 @@ export function LabelEditor({
   onAddValue,
   onClose,
 }: LabelEditorProps) {
-  const [labelText, setLabelText] = useState(label.value);
-  const [val, setVal] = useState(value?.value ?? "");
-  const [range, setRange] = useState(value?.range ?? "");
-  const [method, setMethod] = useState(value?.method ?? "");
-  const [tool, setTool] = useState(value?.tool ?? "");
+  // A label-kind annotation keeps its text in `value` and owns a separate
+  // value annotation. A value opened on its own is both at once: its `label`
+  // is the characteristic name and its `value` is the reading.
+  const isLabelKind = (label.kind ?? "dimension") === "label";
+  const target = isLabelKind ? value : label;
+  const [labelText, setLabelText] = useState(
+    isLabelKind ? label.value : label.label
+  );
+  const [val, setVal] = useState(target?.value ?? "");
+  const [range, setRange] = useState(target?.range ?? "");
+  const [method, setMethod] = useState(target?.method ?? "");
+  const [tool, setTool] = useState(target?.tool ?? "");
+  // The rule engine assigns a category; the user can overrule it. Once they
+  // pick one by hand we stop re-deriving it from the value on every save.
+  const [category, setCategory] = useState<DimensionType | "">(
+    target?.type ?? ""
+  );
+  const categoryEditedRef = useRef(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
   const rangeEditedRef = useRef(false);
 
   // Re-seed the form whenever a different label is opened.
   useEffect(() => {
-    setLabelText(label.value);
-    setVal(value?.value ?? "");
-    setRange(value?.range ?? "");
-    setMethod(value?.method ?? "");
-    setTool(value?.tool ?? "");
+    setLabelText(isLabelKind ? label.value : label.label);
+    setVal(target?.value ?? "");
+    setRange(target?.range ?? "");
+    setMethod(target?.method ?? "");
+    setTool(target?.tool ?? "");
+    setCategory(target?.type ?? "");
     rangeEditedRef.current = false;
-  }, [label.id, value?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    categoryEditedRef.current = false;
+  }, [label.id, target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep range synced to the value's ± tolerance until the user hand-edits it.
   useEffect(() => {
@@ -70,16 +95,24 @@ export function LabelEditor({
   };
 
   const handleSave = () => {
-    onUpdate(label.id, { value: labelText.trim() });
-    if (value) {
-      onUpdate(value.id, {
-        value: val.trim(),
-        type: classifyDimension(val),
-        range: range.trim() || undefined,
-        method: method.trim() || undefined,
-        tool: tool || undefined,
-        label: labelText.trim(),
-      });
+    const patch = {
+      value: val.trim(),
+      type:
+        categoryEditedRef.current && category
+          ? category
+          : classifyDimension(val),
+      range: range.trim() || undefined,
+      method: method.trim() || undefined,
+      tool: tool || undefined,
+      label: labelText.trim(),
+    };
+    if (isLabelKind) {
+      onUpdate(label.id, { value: labelText.trim() });
+      if (target) onUpdate(target.id, patch);
+    } else {
+      // Editing a value on its own: label text, category and readings all
+      // live on the one annotation.
+      onUpdate(label.id, patch);
     }
     onClose();
   };
@@ -100,17 +133,19 @@ export function LabelEditor({
             id="label-editor-title"
             className="text-lg font-semibold text-slate-900"
           >
-            Edit label
+            {isLabelKind ? "Edit label" : "Edit value"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Edit the label and every value associated with it.
+            {isLabelKind
+              ? "Edit the label and every value associated with it."
+              : "Set the category, tolerance, method and tool for this value."}
           </p>
         </div>
 
         <div className="space-y-4 px-5 py-4">
           <div>
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
-              Label text
+              {isLabelKind ? "Label text" : "Label"}
             </label>
             <input
               type="text"
@@ -121,8 +156,37 @@ export function LabelEditor({
             />
           </div>
 
-          {value ? (
+          {target ? (
             <>
+              <div>
+                <label
+                  className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500"
+                  htmlFor="label-editor-category"
+                >
+                  Category
+                </label>
+                <select
+                  id="label-editor-category"
+                  value={category}
+                  onChange={(e) => {
+                    categoryEditedRef.current = true;
+                    setCategory(e.target.value as DimensionType);
+                  }}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  {DIMENSION_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-400">
+                  {categoryEditedRef.current
+                    ? "Set by you. It will not be reassigned."
+                    : "Assigned by the rule engine. Change it to override."}
+                </p>
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
                   Value
@@ -200,12 +264,12 @@ export function LabelEditor({
               <button
                 type="button"
                 onClick={() => {
-                  onDeleteValue(value.id);
+                  onDeleteValue(target.id);
                   onClose();
                 }}
                 className="text-xs font-medium text-red-500 hover:underline"
               >
-                Remove value
+                {isLabelKind ? "Remove value" : "Remove"}
               </button>
             </>
           ) : (

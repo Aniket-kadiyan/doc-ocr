@@ -12,7 +12,7 @@ import re
 from enum import Enum
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -222,6 +222,13 @@ async def segment_region(
     ),
     x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
     x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+    keywords: str = Form(
+        "",
+        description=(
+            "Comma-separated title-block labels to look for "
+            "(the client's 'Keywords to look for' setting), e.g. 'DWG,REV'"
+        ),
+    ),
 ) -> dict[str, Any]:
     """Auto-segment a multi-value selection into per-dimension OCR results."""
     raw = await file.read()
@@ -231,10 +238,13 @@ async def segment_region(
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = debug_dump_force or (x_debug_dump_force or "").strip().lower() in truthy
 
+    title_keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+
     seg = pipeline.segment(
         image,
         debug_dump=req_dump,
         debug_dump_force=req_force,
+        title_keywords=title_keywords,
     )
 
     regions = []
@@ -248,6 +258,51 @@ async def segment_region(
         )
 
     return {"count": len(regions), "regions": regions}
+
+
+@app.post("/ocr/title-fields")
+async def read_title_fields(
+    file: UploadFile = File(...),
+    keywords: str = Form(
+        "",
+        description="Comma-separated title-block labels, e.g. 'DWG,REV'",
+    ),
+) -> dict[str, Any]:
+    """
+    Read the title block of a WHOLE sheet for the configured keywords.
+
+    Separate from /ocr/segment because the title block's position does not
+    depend on whatever rectangle the user drew for Auto-Segment.
+    """
+    wanted = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not wanted:
+        return {"fields": []}
+
+    raw = await file.read()
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    fields = get_pipeline().title_fields(image, wanted)
+
+    return {
+        "fields": [
+            {
+                "keyword": f["keyword"],
+                "label": f["label"],
+                "value": f["value"],
+                "confidence": f["confidence"],
+                "bbox": (
+                    {
+                        "x": round(f["bbox"]["x"], 1),
+                        "y": round(f["bbox"]["y"], 1),
+                        "width": round(f["bbox"]["w"], 1),
+                        "height": round(f["bbox"]["h"], 1),
+                    }
+                    if f["bbox"]
+                    else None
+                ),
+            }
+            for f in fields
+        ]
+    }
 
 
 @app.post("/training/export-labels")

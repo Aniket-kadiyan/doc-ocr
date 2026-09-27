@@ -99,15 +99,42 @@ def _should_merge(a: Box, b: Box, margin_ratio: float) -> bool:
         if gap > char * 1.65:
             return False
 
+        # Perpendicular-offset guard: fragments of ONE value share a row
+        # (horizontal text) or a column (vertical text). A large offset *across*
+        # the reading axis means these are separate close-proximity dimensions —
+        # two stacked callouts like ``1.28 [32.51]`` over ``1.10 [27.94]`` — that
+        # inflation would otherwise fuse. Scale by the taller/wider box (the line
+        # height) so same-row fragments of unequal size still merge.
+        line_scale = max(min(a["w"], a["h"]), min(b["w"], b["h"]))
+        if oa == "horizontal":
+            ca = a["y"] + a["h"] / 2.0
+            cb = b["y"] + b["h"] / 2.0
+        else:
+            ca = a["x"] + a["w"] / 2.0
+            cb = b["x"] + b["w"] / 2.0
+        if abs(ca - cb) > line_scale * 0.7:
+            return False
+
+    if oa != ob and "square" in (oa, ob):
+        # A square box (a datum "B", a Ø / ° glyph, a tolerance stack) joins
+        # a line of text only when it sits ON that line: its centre must lie
+        # within the line's perpendicular extent. A datum letter below a
+        # feature-control frame, or a symbol from the row beneath, is off-line
+        # and stays separate even though inflation would reach it.
+        line, sq = (a, b) if ob == "square" else (b, a)
+        axis = _reading_axis(line)
+        if axis == "horizontal":
+            lo, hi = line["y"], line["y"] + line["h"]
+            c = sq["y"] + sq["h"] / 2.0
+            tol = max(line["h"], sq["h"]) * 0.35
+        else:
+            lo, hi = line["x"], line["x"] + line["w"]
+            c = sq["x"] + sq["w"] / 2.0
+            tol = max(line["w"], sq["w"]) * 0.35
+        if c < lo - tol or c > hi + tol:
+            return False
+
     return _overlap(_inflate(a, margin_ratio), _inflate(b, margin_ratio))
-
-
-def _union_size(a: Box, b: Box) -> tuple[float, float]:
-    x0 = min(a["x"], b["x"])
-    y0 = min(a["y"], b["y"])
-    x1 = max(a["x"] + a["w"], b["x"] + b["w"])
-    y1 = max(a["y"] + a["h"], b["y"] + b["h"])
-    return x1 - x0, y1 - y0
 
 
 def drop_bridge_boxes(boxes: list[Box]) -> list[Box]:
@@ -167,6 +194,12 @@ def cluster_boxes(
         return []
 
     parent = list(range(n))
+    # Track each root's running cluster bbox so the size cap applies to the whole
+    # cluster, not just the pair being merged (see below).
+    rx0 = [b["x"] for b in boxes]
+    ry0 = [b["y"] for b in boxes]
+    rx1 = [b["x"] + b["w"] for b in boxes]
+    ry1 = [b["y"] + b["h"] for b in boxes]
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -174,23 +207,45 @@ def cluster_boxes(
             i = parent[i]
         return i
 
-    def union(i: int, j: int) -> None:
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+    def union(ri: int, rj: int) -> None:
+        parent[ri] = rj
+        rx0[rj] = min(rx0[ri], rx0[rj])
+        ry0[rj] = min(ry0[ri], ry0[rj])
+        rx1[rj] = max(rx1[ri], rx1[rj])
+        ry1[rj] = max(ry1[ri], ry1[rj])
 
     max_w = img_w * 0.34 if img_w else 0.0
     max_h = img_h * 0.42 if img_h else 0.0
+
+    # Scale-invariant cap: bound a cluster to a small multiple of the median
+    # detection-box size. The image-fraction caps above scale with the *crop*, so
+    # on a zoomed-out selection (part detail small within a wide crop) 0.34·w is
+    # large enough to chain several distinct callouts. A single dimension is only
+    # a few character-boxes across, so cap by the typical box size too.
+    longs = sorted(max(b["w"], b["h"]) for b in boxes)
+    if longs:
+        median_long = longs[len(longs) // 2]
+        abs_cap = median_long * 3.0
+        max_w = min(max_w, abs_cap) if max_w else abs_cap
+        max_h = min(max_h, abs_cap) if max_h else abs_cap
 
     for i in range(n):
         for j in range(i + 1, n):
             if not _should_merge(boxes[i], boxes[j], margin_ratio):
                 continue
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            # Cap the *transitive* cluster size, not just this pair's union: a
+            # chain of individually-close boxes (a linear dim → its GD&T frames →
+            # a neighbouring dim) would otherwise fuse into one oversized cluster
+            # far wider than any single dimension.
             if max_w and max_h:
-                uw, uh = _union_size(boxes[i], boxes[j])
+                uw = max(rx1[ri], rx1[rj]) - min(rx0[ri], rx0[rj])
+                uh = max(ry1[ri], ry1[rj]) - min(ry0[ri], ry0[rj])
                 if uw > max_w or uh > max_h:
                     continue
-            union(i, j)
+            union(ri, rj)
 
     groups: dict[int, list[Box]] = {}
     for i, box in enumerate(boxes):
@@ -334,21 +389,39 @@ def _ubbox_overlap_frac(a: dict[str, float], b: dict[str, float]) -> float:
     return inter / min(area_a, area_b)
 
 
+def _is_complete(cluster: list[Box]) -> bool:
+    """A cluster already holding a full value by its own detection text."""
+    from segment_quality import is_segment_worthy
+
+    return any(is_segment_worthy(b.get("text", "")) for b in cluster)
+
+
 def merge_overlapping_clusters(
-    clusters: list[list[Box]], *, min_overlap: float = 0.1
+    clusters: list[list[Box]],
+    *,
+    min_overlap: float = 0.25,
+    complete_overlap: float = 0.6,
 ) -> list[list[Box]]:
     """
     Union clusters whose bounding boxes overlap — fragments of one dimension.
 
-    Distinct dimensions occupy separate columns/rows and never overlap, so any
-    meaningful bbox overlap means the pieces belong together. This re-joins a
-    value that ``split_mixed_clusters`` broke onto a perpendicular axis (e.g. a
-    vertical ``Ø175,32`` and its wider ``REF.`` tag) so it is read as one box.
+    A value split onto a perpendicular axis (a vertical ``Ø175,32`` and its wider
+    ``REF.`` tag) overlaps substantially, so re-joins here. The threshold is set
+    above a marginal sliver: two distinct parallel columns whose tight boxes graze
+    each other (e.g. ``Ø28₋₀.₁₅`` beside ``Ø20.5``) overlap only ~10% and must NOT
+    fuse — a lower bar re-merged what ``cluster_boxes`` correctly kept apart.
+
+    Two clusters that are each already a complete value (their detection text
+    is a worthy read on its own) are separate callouts, not fragments; their
+    axis-aligned boxes overlap heavily when the text is diagonal (``Ø20H10``
+    and ``Ø18H10`` on 45° leaders). Those need ``complete_overlap`` — near
+    containment — before they fuse.
     """
     n = len(clusters)
     if n <= 1:
         return clusters
     boxes = [union_bbox(c) for c in clusters]
+    complete = [_is_complete(c) for c in clusters]
     parent = list(range(n))
 
     def find(i: int) -> int:
@@ -359,7 +432,8 @@ def merge_overlapping_clusters(
 
     for i in range(n):
         for j in range(i + 1, n):
-            if _ubbox_overlap_frac(boxes[i], boxes[j]) >= min_overlap:
+            need = complete_overlap if (complete[i] and complete[j]) else min_overlap
+            if _ubbox_overlap_frac(boxes[i], boxes[j]) >= need:
                 ri, rj = find(i), find(j)
                 if ri != rj:
                     parent[ri] = rj

@@ -1,0 +1,799 @@
+{
+  "source": "TS2 32224 CUP TURNING DRAWING.pdf",
+  "pages": 1,
+  "total_dimensions": 34,
+  "results": [
+    {
+      "page": 1,
+      "size": [
+        2924,
+        2068
+      ],
+      "count": 34,
+      "regions": [
+        {
+          "bbox": {
+            "x": 2320.0,
+            "y": 29.0,
+            "width": 560.0,
+            "height": 642.0
+          },
+          "text": "BEARING NO①T5232224ACCURACIES AAY ROUNDNESS(2PT./180)50µm MAX.ROUNDNESS(3PT./120)50m MAX.TAPER50m MAX.SQUARENESS WITH FACE50μm MAX.ROUNDNESS(2PT./180)50μm MAX.ROUNDNESS(3PT./120)50μm MAX.TAPER50μm MAX.0ECCENTRICITY WITH500m MAX.L AE AYS UAEAC50m MAX.50um MAX.W IDTH VARIATION SURFACE ROUGHNESS ON6.3Ra µm O.D.,FACES.RACEW AY SURFACE ROUGHNESS ON3.2Ra µm CORNER LEADS&RADII",
+          "confidence": 0.9156263944430229,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 0.333,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.997,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 58.0,
+            "y": 130.0,
+            "width": 103.0,
+            "height": 97.0
+          },
+          "text": "R5.00",
+          "confidence": 0.9366567730903625,
+          "type": "radius",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": true
+          }
+        },
+        {
+          "bbox": {
+            "x": 297.0,
+            "y": 160.0,
+            "width": 250.0,
+            "height": 126.0
+          },
+          "text": "Ø5.27±0,5015°±3°",
+          "confidence": 0.9684609174728394,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1331.0,
+            "y": 135.0,
+            "width": 139.0,
+            "height": 42.0
+          },
+          "text": "3,41±0.30",
+          "confidence": 0.9580273032188416,
+          "type": "tolerance",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.109,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1587.0,
+            "y": 115.0,
+            "width": 102.0,
+            "height": 97.0
+          },
+          "text": "R1,50",
+          "confidence": 0.9683588147163391,
+          "type": "radius",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.071,
+            "plus_minus": false,
+            "degree": false,
+            "radius": true
+          }
+        },
+        {
+          "bbox": {
+            "x": 2011.0,
+            "y": 94.0,
+            "width": 104.0,
+            "height": 72.0
+          },
+          "text": "50,30NOM.",
+          "confidence": 0.9684437811374664,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.143,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 847.0,
+            "y": 251.0,
+            "width": 159.0,
+            "height": 43.0
+          },
+          "text": "Ø50,22±0.05",
+          "confidence": 0.9532541036605835,
+          "type": "diameter",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1226.0,
+            "y": 233.0,
+            "width": 107.0,
+            "height": 57.0
+          },
+          "text": "12°±3",
+          "confidence": 0.9014908075332642,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 0.333,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": true,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 64.0,
+            "y": 349.0,
+            "width": 44.0,
+            "height": 143.0
+          },
+          "text": "Ø3.81±0.20",
+          "confidence": 0.9571988582611084,
+          "type": "diameter",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1395.0,
+            "y": 378.0,
+            "width": 106.0,
+            "height": 53.0
+          },
+          "text": "30°±3°",
+          "confidence": 0.9775829911231995,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": true,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1676.0,
+            "y": 348.0,
+            "width": 43.0,
+            "height": 144.0
+          },
+          "text": "Ø2.25±0.20",
+          "confidence": 0.9527085423469543,
+          "type": "diameter",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 214.0,
+            "y": 431.0,
+            "width": 108.0,
+            "height": 51.0
+          },
+          "text": "30°±3°",
+          "confidence": 0.9931665062904358,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.115,
+            "plus_minus": true,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1817.0,
+            "y": 381.0,
+            "width": 154.0,
+            "height": 142.0
+          },
+          "text": "174,22215,59NOM.NOM.",
+          "confidence": 0.9781962931156158,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.085,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 2159.0,
+            "y": 380.0,
+            "width": 81.0,
+            "height": 144.0
+          },
+          "text": "203.39NOM.",
+          "confidence": 0.9766374826431274,
+          "type": "linear",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1591.0,
+            "y": 709.0,
+            "width": 128.0,
+            "height": 70.0
+          },
+          "text": "45°",
+          "confidence": 0.9664757251739502,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": false,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 2321.0,
+            "y": 711.0,
+            "width": 559.0,
+            "height": 156.0
+          },
+          "text": "MATERIAL SAE52100/SUJ2(H.T.TUBE/FORGED/RING)FORGED RING NO TM-1850HARDNES5①Rc58~63(AFTER H/T)2",
+          "confidence": 0.9921942949295044,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 1.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 60.0,
+            "y": 852.0,
+            "width": 42.0,
+            "height": 142.0
+          },
+          "text": "Ø2.02±0.15",
+          "confidence": 0.9830138683319092,
+          "type": "diameter",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 250.0,
+            "y": 826.0,
+            "width": 105.0,
+            "height": 105.0
+          },
+          "text": "R3.00",
+          "confidence": 0.9939233660697937,
+          "type": "radius",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": true
+          }
+        },
+        {
+          "bbox": {
+            "x": 813.0,
+            "y": 896.0,
+            "width": 81.0,
+            "height": 139.0
+          },
+          "text": "175.32REF.",
+          "confidence": 0.9702072143554688,
+          "type": "linear",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1404.0,
+            "y": 915.0,
+            "width": 281.0,
+            "height": 261.0
+          },
+          "text": "Ø1,25±0.201.7720DETAIL0SCALE2:1",
+          "confidence": 0.8997247616449991,
+          "type": "diameter",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 0.333,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 2318.0,
+            "y": 900.0,
+            "width": 556.0,
+            "height": 185.0
+          },
+          "text": "GRINDING EXPANSION1(AFTER H/T DIM.TRACK(ID)0.5000.170000.6000.215SURFACEA0.1500.038SURFACEB0.2000.038",
+          "confidence": 0.9605805906984541,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.98,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 509.0,
+            "y": 959.0,
+            "width": 47.0,
+            "height": 285.0
+          },
+          "text": "W215.37±0.05",
+          "confidence": 0.9797269105911255,
+          "type": "tolerance",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 641.0,
+            "y": 960.0,
+            "width": 42.0,
+            "height": 204.0
+          },
+          "text": "Ø174.07±0.05",
+          "confidence": 0.9642748236656189,
+          "type": "diameter",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 2143.0,
+            "y": 1022.0,
+            "width": 101.0,
+            "height": 47.0
+          },
+          "text": "3,245",
+          "confidence": 0.9993842840194702,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 906.0,
+            "y": 1125.0,
+            "width": 157.0,
+            "height": 46.0
+          },
+          "text": "32°204011",
+          "confidence": 0.9114335775375366,
+          "type": "angle",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 0.667,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.076,
+            "plus_minus": false,
+            "degree": true,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1181.0,
+            "y": 1053.0,
+            "width": 47.0,
+            "height": 144.0
+          },
+          "text": "Ø203.20",
+          "confidence": 0.9980108737945557,
+          "type": "diameter",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1729.0,
+            "y": 1093.9,
+            "width": 119.3,
+            "height": 446.1
+          },
+          "text": "REVISION DRAWN PRE723456",
+          "confidence": 0.910458935631646,
+          "type": "radius",
+          "orientation": "vertical",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 0.333,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 1.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 233.0,
+            "y": 1152.0,
+            "width": 145.0,
+            "height": 47.0
+          },
+          "text": "2.16±0.15",
+          "confidence": 0.9515454173088074,
+          "type": "tolerance",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.153,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1851.3,
+            "y": 1315.1,
+            "width": 498.9,
+            "height": 38.7
+          },
+          "text": "HRC MODIFIED AS PER ECN18980",
+          "confidence": 0.9918096661567688,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 2508.8,
+            "y": 1313.1,
+            "width": 316.4,
+            "height": 226.1
+          },
+          "text": "Ø15.07.2024RKS15.02.24RKS DATE SIGN SUPERSEDED BY",
+          "confidence": 0.9999705776572227,
+          "type": "diameter",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 1.0,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1847.3,
+            "y": 1367.6,
+            "width": 653.6,
+            "height": 45.6
+          },
+          "text": "PART NO.&HRC MODIFIED AS PER ECN18691",
+          "confidence": 0.9994825720787048,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1760.0,
+            "y": 1719.0,
+            "width": 1163.0,
+            "height": 343.0
+          },
+          "text": "TE07.08.2020RT NUMBER T5232224①OUTER RING(S.CUP)AW ING NUMBER NEIC00052001REV.02nbc NATIONAL ENGINEERING INDUSTRIES LTD,JAIPUR2095-03131PM Drin",
+          "confidence": 0.9818487580005939,
+          "type": "linear",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": true,
+          "agreement": 1.0,
+          "engine": "paddleocr",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": false,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 992.0,
+            "y": 1933.0,
+            "width": 103.0,
+            "height": 96.0
+          },
+          "text": "RADIUS±0.2",
+          "confidence": 0.999672532081604,
+          "type": "radius",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": false,
+            "diameter_score": 0.071,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        },
+        {
+          "bbox": {
+            "x": 1167.0,
+            "y": 1937.0,
+            "width": 495.0,
+            "height": 111.0
+          },
+          "text": "LINEAR DIMENSIONS UP TO66T030ABOVE30±0.10±0.20±0.30",
+          "confidence": 0.9885644742420742,
+          "type": "tolerance",
+          "orientation": "horizontal",
+          "rotation": 0,
+          "needs_review": false,
+          "agreement": 1.0,
+          "engine": "paddleocr+compose",
+          "symbols_detected": {
+            "diameter": true,
+            "diameter_score": 0.9,
+            "plus_minus": true,
+            "degree": false,
+            "radius": false
+          }
+        }
+      ]
+    }
+  ]
+}

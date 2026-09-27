@@ -150,3 +150,29 @@ def test_drop_bridge_keeps_fragment_of_one_dimension():
     ref = _box(150, 120, 50, 20)     # REF. tag, overlaps only this column
     kept = drop_bridge_boxes([value, ref])
     assert value in kept and ref in kept
+
+
+def test_square_box_off_row_does_not_join_line():
+    """A datum 'B' below a feature-control frame stays separate."""
+    frame = _box(86, 97, 178, 56, "L 0.03 A")
+    datum = _box(192, 182, 36, 42, "B")
+    clusters = cluster_boxes([frame, datum], margin_ratio=0.72, img_w=900, img_h=800)
+    assert len(clusters) == 2
+
+
+def test_square_box_on_row_joins_line():
+    """A tolerance stack centred on its value's row still merges."""
+    value = _box(100, 100, 60, 30, "23")
+    stack = _box(166, 92, 40, 44, "0 -0.1")
+    clusters = cluster_boxes([value, stack], margin_ratio=0.72, img_w=900, img_h=800)
+    assert len(clusters) == 1
+
+
+def test_overlapping_complete_clusters_stay_separate():
+    """Two complete diagonal callouts with overlapping AABBs are not fused."""
+    a = [_box(175, 77, 179, 178, "20H10")]
+    b = [_box(246, 167, 192, 153, "18H10")]
+    assert len(merge_overlapping_clusters([a, b])) == 2
+    # A fragment (unworthy text) overlapping a complete value still re-joins.
+    frag = [_box(250, 170, 100, 60, "REF.")]
+    assert len(merge_overlapping_clusters([b, frag])) == 1

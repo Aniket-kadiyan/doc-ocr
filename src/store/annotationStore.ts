@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { PageCanvasProvider } from "@/lib/ballooned";
 import type {
   Annotation,
   AnnotationKind,
@@ -28,6 +29,10 @@ interface AnnotationState {
   projectName: string;
   /** id of the open project in IndexedDB — shared with the checksheet web view. */
   projectId: string;
+  /** Renders a clean page of the open drawing. The viewer owns the PDF/canvas,
+   * so it registers this here and the Export menu uses it to build the
+   * ballooned drawing exports. null when no drawing is open. */
+  pageCanvasProvider: PageCanvasProvider | null;
 
   setAnnotations: (annotations: Annotation[]) => void;
   addAnnotation: (annotation: Annotation) => void;
@@ -46,6 +51,7 @@ interface AnnotationState {
   setIsProcessing: (processing: boolean) => void;
   setProjectName: (name: string) => void;
   setProjectId: (id: string) => void;
+  setPageCanvasProvider: (provider: PageCanvasProvider | null) => void;
   /** Next sequence number within a kind, so dimensions and labels each count 1,2,3… */
   getNextNumber: (kind?: AnnotationKind) => number;
 }
@@ -64,6 +70,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   isProcessing: false,
   projectName: "Untitled Drawing",
   projectId: "",
+  pageCanvasProvider: null,
 
   setAnnotations: (annotations) => set({ annotations }),
 
@@ -131,6 +138,8 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   setProjectName: (projectName) => set({ projectName }),
 
   setProjectId: (projectId) => set({ projectId }),
+
+  setPageCanvasProvider: (pageCanvasProvider) => set({ pageCanvasProvider }),
 
   getNextNumber: (kind = "dimension") => {
     const nums = get()
