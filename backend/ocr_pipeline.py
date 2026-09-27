@@ -52,6 +52,9 @@ from symbol_vision import (
 )
 
 LINE_THRESHOLD = 15
+# A single callout is wider than it is tall; a stacked pair is not. Used to
+# spot a fused read whose text collapsed to one value and hid the second.
+_PAGE_SPLIT_LINE_RATIO = 0.35
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
@@ -1981,7 +1984,10 @@ class OcrPipeline:
         # and after the review-policy fix (56103-0182B 16/24 -> 11/24,
         # BS1801006.020 9/12 -> 7/12). The page route has its own value
         # grammar in page_value_filters; these two do not belong on top of it.
-        from segment_quality import strip_foreign_glyphs
+        from segment_quality import (
+            count_dimension_values,
+            strip_foreign_glyphs,
+        )
 
         cleaned: list[str] = []
         for line in lines:
@@ -3300,6 +3306,7 @@ class OcrPipeline:
         from page_scan import overlaps_existing_value
         from page_value_filters import (
             PageValueCandidate,
+            is_complete_engineering_value,
             evaluate_scan_value,
             normalize_page_value_text,
         )
@@ -3900,13 +3907,13 @@ class OcrPipeline:
         )
         from page_value_filters import (
             PageValueCandidate,
+            is_complete_engineering_value,
             evaluate_page_value,
             needs_expanded_filter_context,
             normalize_page_value_text,
         )
         from segment_quality import (
-            has_dimension_value,
-            is_segment_worthy,
+            count_dimension_values,
             strip_foreign_glyphs,
         )
 
@@ -4989,6 +4996,52 @@ class OcrPipeline:
                     "rule": decision.rule_name,
                 }
             )
+
+        # Two callouts stacked one above the other read back as a single
+        # garbled string here — "Ø0.620 / 0.612" came out as "0.020D0.612" and
+        # "8.00[203.20] / 9.00[228.60]" as "8.007oo" — because this route
+        # recognises each detected object once and never looks inside a fused
+        # one. The section route has always re-segmented such a read; the same
+        # pass runs here, replacing a region only when the finer look actually
+        # resolves two or more worthy values.
+        split_regions: list[dict[str, Any]] = []
+        for region in regions:
+            text = str(region.get("text") or "")
+            box = region["bbox"]
+            tall = box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(
+                box["width"], 1.0
+            )
+            if count_dimension_values(text) < 2 and not tall:
+                split_regions.append(region)
+                continue
+            margin = 6
+            coords = (
+                max(0, int(box["x"] - margin)),
+                max(0, int(box["y"] - margin)),
+                min(image.width, int(box["x"] + box["width"] + margin)),
+                min(image.height, int(box["y"] + box["height"] + margin)),
+            )
+            try:
+                pieces = self._split_stacked_cluster(image, coords)
+            except Exception:
+                pieces = None
+            # Splitting a garbled read just yields garbled pieces, so the
+            # finer look is only taken when every piece it produced is itself
+            # a complete engineering value. That keeps the recovered
+            # "8.00[203.20]" / "9.00[228.60]" pair and discards the fragments
+            # a failed split leaves behind.
+            usable = bool(pieces) and len(pieces) >= 2 and all(
+                is_complete_engineering_value(
+                    normalize_page_value_text(str(piece.get("text") or ""))
+                )
+                for piece in pieces
+            )
+            if usable:
+                split_regions.extend(pieces)
+                detected_count += len(pieces) - 1
+            else:
+                split_regions.append(region)
+        regions = split_regions
 
         # Slanted callouts (chamfers, angled fits) that this route cannot read:
         # its detection only ever levels by a quarter turn, so text drawn along
