@@ -179,6 +179,7 @@ def cluster_boxes(
     *,
     img_w: float = 0.0,
     img_h: float = 0.0,
+    text_scale: float = 0.0,
 ) -> list[list[Box]]:
     """
     Group ``boxes`` into clusters via union-find on inflated rectangles.
@@ -186,6 +187,10 @@ def cluster_boxes(
     ``margin_ratio`` controls how aggressively neighbouring fragments merge:
     larger = fewer, bigger clusters. 0.6 reliably joins the stacked pieces of
     one vertical dimension while keeping adjacent columns separate.
+
+    ``text_scale`` is the caller's own measured line height. Supply it when the
+    caller has a better estimate than the median below can produce — see the
+    absolute cap for why that matters.
 
     Returns a list of clusters (each a list of the original box dicts).
     """
@@ -222,10 +227,24 @@ def cluster_boxes(
     # on a zoomed-out selection (part detail small within a wide crop) 0.34·w is
     # large enough to chain several distinct callouts. A single dimension is only
     # a few character-boxes across, so cap by the typical box size too.
-    longs = sorted(max(b["w"], b["h"]) for b in boxes)
-    if longs:
-        median_long = longs[len(longs) // 2]
-        abs_cap = median_long * 3.0
+    # The median is taken over every box, including near-square specks — an
+    # arrowhead, a bit of part geometry, a stray tick. On a mixed whole-drawing
+    # box population that is the safer estimate, but on a small set dominated by
+    # one callout a few specks drag the median BELOW the width of a single text
+    # line, and then no merge can satisfy the cap: the clustering step silently
+    # becomes a no-op. That is how a slanted value ended up balloonned apart
+    # from its own deviation stack. A caller that has measured the line height
+    # properly passes it in and is capped against that instead.
+    abs_cap = 0.0
+    if text_scale > 0:
+        # Matched to the union-size gate the angled pass applies right after, so
+        # the two caps cannot contradict each other.
+        abs_cap = text_scale * 12.0
+    else:
+        longs = sorted(max(b["w"], b["h"]) for b in boxes)
+        if longs:
+            abs_cap = longs[len(longs) // 2] * 3.0
+    if abs_cap:
         max_w = min(max_w, abs_cap) if max_w else abs_cap
         max_h = min(max_h, abs_cap) if max_h else abs_cap
 

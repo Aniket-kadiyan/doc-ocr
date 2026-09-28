@@ -35,6 +35,7 @@ from ocr_runtime import (
     validate_configured_device,
 )
 from paddle_parse import (
+    PaddleLine,
     extract_paddle_detection_boxes,
     extract_paddle_detection_regions,
     extract_paddle_lines,
@@ -71,9 +72,9 @@ GROUPING_MAX_REFINEMENTS = 8
 
 
 def sort_reading_order(
-    items: list[tuple[str, float, float, float, float, float]],
+    items: list[PaddleLine],
     vertical: bool,
-) -> list[tuple[str, float, float, float, float, float]]:
+) -> list[PaddleLine]:
     if vertical:
         return sorted(items, key=lambda x: x[2])
     return sorted(
@@ -97,8 +98,19 @@ def assemble_paddle_lines(
     ordered = sort_reading_order(parsed, vertical)
 
     words = [
-        {"text": t, "x": x, "y": y, "width": w, "height": h, "confidence": c}
-        for t, x, y, w, h, c in ordered
+        {
+            "text": t,
+            "x": x,
+            "y": y,
+            "width": w,
+            "height": h,
+            "confidence": c,
+            # The detector's four corners. They carry the line's angle, which
+            # the rect above cannot, and the angled-callout pass groups a
+            # slanted value with its deviation using them.
+            "polygon": poly,
+        }
+        for t, x, y, w, h, c, poly in ordered
     ]
 
     raw = (
@@ -2686,7 +2698,11 @@ class OcrPipeline:
                     boxes = upright_here
             # Tight merge only: join split fragments of one callout, never span
             # separate callouts. Cap the union so nothing balloons.
-            clusters = cluster_boxes(boxes, margin_ratio=0.3, img_w=rw, img_h=rh)
+            # Pass the measured line height: this box set is one or two callouts
+            # plus specks, where cluster_boxes' own median is unreliable.
+            clusters = cluster_boxes(
+                boxes, margin_ratio=0.3, img_w=rw, img_h=rh, text_scale=scale
+            )
 
             margin = 6
             for cluster in clusters:
