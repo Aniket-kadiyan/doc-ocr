@@ -35,6 +35,18 @@ describe("tolerance export validation", () => {
       findMalformedToleranceAnnotations(annotations).map(({ id }) => id)
     ).toEqual(["bad-field", "bad-value"]);
   });
+
+  it("accepts embedded one-sided tolerances and fit designations", () => {
+    const annotations = [
+      makeAnnotation({ id: "radius-lower", value: "R0.6-0", range: undefined }),
+      makeAnnotation({ id: "linear-upper", value: "0.1+0.1", range: undefined }),
+      makeAnnotation({ id: "radius-upper", value: "R0.3+0.05", range: undefined }),
+      makeAnnotation({ id: "linear-lower", value: "65-0.01", range: undefined }),
+      makeAnnotation({ id: "fit", value: "2N9", range: "0" }),
+    ];
+
+    expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);
+  });
 });
 
 describe("values-only exports", () => {
@@ -97,5 +109,28 @@ describe("values-only exports", () => {
     const xml = exportXML(oneSided);
     expect(xml).toContain("<range>+0.1, -0</range>");
     expect(xml).toContain("<range>+0, -.5</range>");
+  });
+
+  it("derives export tolerances from embedded one-sided values", () => {
+    const embedded = [
+      makeAnnotation({ id: "radius-lower", number: 1, value: "R0.6-0", range: undefined }),
+      makeAnnotation({ id: "linear-upper", number: 2, value: "0.1+0.1", range: undefined }),
+      makeAnnotation({ id: "radius-upper", number: 3, value: "R0.3+0.05", range: undefined }),
+      makeAnnotation({ id: "linear-lower", number: 4, value: "65-0.01", range: undefined }),
+    ];
+
+    const json = JSON.parse(exportInspectionJSON(embedded));
+    expect(json.data.map((row: { Value: string }) => row.Value)).toEqual([
+      "R0.6-0",
+      "0.1+0.1",
+      "R0.3+0.05",
+      "65-0.01",
+    ]);
+    expect(json.data.map((row: { Tolerance: string }) => row.Tolerance)).toEqual([
+      "+0, -0",
+      "+0.1, -0",
+      "+0.05, -0",
+      "+0, -0.01",
+    ]);
   });
 });

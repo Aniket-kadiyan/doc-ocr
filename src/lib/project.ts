@@ -74,7 +74,10 @@ const SINGLE_LOWER_TOLERANCE = new RegExp(
  * editable annotation. Existing zero, symmetric, and two-sided tolerances are
  * returned unchanged.
  */
-export function toleranceForExport(tolerance?: string): string {
+export function toleranceForExport(
+  tolerance?: string,
+  value?: string
+): string {
   const original = tolerance ?? "";
   const trimmed = original.trim();
 
@@ -83,6 +86,23 @@ export function toleranceForExport(tolerance?: string): string {
 
   const lower = SINGLE_LOWER_TOLERANCE.exec(trimmed);
   if (lower) return `+0, -${lower[1]}`;
+
+  // An explicit range always wins. Only inspect Value when Range is empty.
+  if (trimmed) return original;
+
+  const embedded = new RegExp(
+    String.raw`([+-])\s*(${EXPORT_TOLERANCE_NUMBER})\s*$`
+  ).exec(value?.trim() ?? "");
+  if (embedded && embedded.index != null) {
+    const specification = (value ?? "").slice(0, embedded.index);
+    // The sign must follow an existing numeric specification. This prevents a
+    // negative nominal such as R-5 from being mistaken for a tolerance.
+    if (/\d\s*$/.test(specification)) {
+      return embedded[1] === "+"
+        ? `+${embedded[2]}, -0`
+        : `+0, -${embedded[2]}`;
+    }
+  }
 
   return original;
 }
@@ -170,7 +190,7 @@ export function buildInspectionSheet(
       String(a.number),
       a.label ?? "",
       a.value,
-      toleranceForExport(a.range),
+      toleranceForExport(a.range, a.value),
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),
       a.method ?? "",
       a.tool ?? "",
@@ -213,7 +233,7 @@ export function buildVerificationPayload(
       kind: "dimension",
       method: a.method ?? "",
       tool: a.tool ?? "",
-      range: toleranceForExport(a.range),
+      range: toleranceForExport(a.range, a.value),
       labelId: "",
       page: a.page,
       confidence: a.confidence,

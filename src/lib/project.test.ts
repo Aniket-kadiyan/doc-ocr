@@ -116,6 +116,12 @@ describe("project and integration exports", () => {
     expect(toleranceForExport(upperOnly.range)).toBe("+0.1, -0");
     expect(toleranceForExport(lowerOnly.range)).toBe("+0, -.5");
     expect(toleranceForExport("+0.1, -0.2")).toBe("+0.1, -0.2");
+    expect(toleranceForExport(undefined, "R0.6-0")).toBe("+0, -0");
+    expect(toleranceForExport(undefined, "0.1+0.1")).toBe("+0.1, -0");
+    expect(toleranceForExport(undefined, "R0.3+0.05")).toBe("+0.05, -0");
+    expect(toleranceForExport(undefined, "65-0.01")).toBe("+0, -0.01");
+    expect(toleranceForExport("0", "2N9")).toBe("0");
+    expect(toleranceForExport(undefined, "R-5")).toBe("");
 
     const sheet = buildInspectionSheet([upperOnly, lowerOnly]);
     expect(sheet.rows[0][3]).toBe("+0.1, -0");
@@ -199,5 +205,15 @@ describe("project and integration exports", () => {
     );
 
     expect(payload.items[0].range).toBe("+.25, -0");
+  });
+
+  it("completes embedded one-sided tolerances in verification exports", () => {
+    const payload = buildVerificationPayload(
+      [makeAnnotation({ id: "embedded", value: "R0.3+0.05", range: undefined })],
+      "Test drawing"
+    );
+
+    expect(payload.items[0].value).toBe("R0.3+0.05");
+    expect(payload.items[0].range).toBe("+0.05, -0");
   });
 });
