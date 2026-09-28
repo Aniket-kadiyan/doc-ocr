@@ -403,6 +403,25 @@ def _map_section_result_to_page(
             }
         )
 
+    # Review candidates carry geometry too. They were always empty while the
+    # section scan used the light pipeline, so passing them through untouched
+    # was harmless; the page pipeline produces real ones and they would
+    # otherwise reach the client still in section coordinates.
+    mapped_reviews: list[dict[str, Any]] = []
+    for candidate in list(seg.get("review_candidates", [])):
+        local = dict(candidate.get("bbox", {}))
+        mapped_reviews.append(
+            {
+                **candidate,
+                "bbox": {
+                    "x": round(origin_x + float(local.get("x", 0.0)), 1),
+                    "y": round(origin_y + float(local.get("y", 0.0)), 1),
+                    "width": round(float(local.get("width", 0.0)), 1),
+                    "height": round(float(local.get("height", 0.0)), 1),
+                },
+            }
+        )
+
     return (
         {
             **seg,
@@ -411,6 +430,7 @@ def _map_section_result_to_page(
             "coordinate_space": "page",
             "regions": mapped_regions,
             "candidate_outcomes": mapped_outcomes,
+            "review_candidates": mapped_reviews,
         },
         overlay_candidates,
     )
@@ -595,7 +615,14 @@ async def create_scan_job(
                     percent=max(10, 10 + int(raw_percent * 0.88)),
                 )
 
-            seg = pipeline.segment(
+            # Both scopes run the same pipeline. Measured on the benchmark
+            # drawings at fixture resolution, the page route reads far more of
+            # the same sheet than the light section route does — 16/19 against
+            # 11/19 on 47630, 16/24 against 10/24 on 56103-0182B, 11/12 against
+            # 8/12 on BS1801006.020 — and it is the route that now matches or
+            # beats the pre-merge pipeline. A section scan is the same problem
+            # on a smaller image, so it gets the same treatment.
+            seg = pipeline.segment_page(
                 section_image,
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
