@@ -21,6 +21,7 @@ const python = existsSync(virtualenvPython)
 const fastTests = [
   "backend/test_angle_utils.py",
   "backend/test_checksheet_converter.py",
+  "backend/test_checksheet_storage.py",
   "backend/test_detection_passes.py",
   "backend/test_page_layout.py",
   "backend/test_page_candidate_recovery.py",

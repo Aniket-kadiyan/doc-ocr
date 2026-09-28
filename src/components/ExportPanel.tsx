@@ -21,6 +21,7 @@ import {
   verificationEndpoint,
 } from "@/lib/project";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useDocumentMetadataStore } from "@/store/documentMetadataStore";
 import {
   CreateChecksheetDialog,
   type CreateChecksheetValues,
@@ -40,6 +41,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
+  const metadata = useDocumentMetadataStore((s) => s.metadata);
   const [actionStatus, setActionStatus] = useState<{
     kind: "idle" | "saving" | "exporting" | "sending" | "ok" | "error";
     message: string;
@@ -159,6 +161,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         projectId,
         projectName,
         project,
+        metadata,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(

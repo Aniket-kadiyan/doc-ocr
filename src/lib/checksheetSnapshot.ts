@@ -3,6 +3,10 @@ import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
 import { valueAnnotations } from "@/lib/project";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetSnapshotPayload } from "@/types/checksheet";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 interface BuildChecksheetSnapshotArgs {
   checksheetName: string;
@@ -11,6 +15,7 @@ interface BuildChecksheetSnapshotArgs {
   projectId: string;
   projectName: string;
   project: ProjectRecord;
+  metadata: DocumentMetadata;
 }
 
 export interface ChecksheetCreationSnapshot {
@@ -26,6 +31,7 @@ export function buildChecksheetCreationSnapshot({
   projectId,
   projectName,
   project,
+  metadata,
 }: BuildChecksheetSnapshotArgs): ChecksheetCreationSnapshot {
   if (!project.fileBlob) {
     throw new Error(
@@ -57,6 +63,7 @@ export function buildChecksheetCreationSnapshot({
       source_project_id: projectId,
       source_file_type: project.fileType,
       pdf_render_scale: PDF_RENDER_SCALE,
+      metadata: normalizeDocumentMetadata(metadata),
       reading_columns: columns,
       items: values.map((annotation) => ({
         annotation_id: annotation.id,

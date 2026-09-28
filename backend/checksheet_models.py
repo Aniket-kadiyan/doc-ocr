@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChecksheetBBox(BaseModel):
@@ -28,12 +28,36 @@ class ChecksheetSnapshotItem(BaseModel):
     dimension_type: str = Field(default="Unknown", max_length=100)
 
 
+class ChecksheetMetadata(BaseModel):
+    """Drawing metadata snapshotted with one checksheet revision."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    part_name: str = Field(default="", alias="partName", max_length=500)
+    document_number: str = Field(
+        default="",
+        alias="documentNumber",
+        max_length=500,
+    )
+    revision_number: str = Field(
+        default="",
+        alias="revisionNumber",
+        max_length=500,
+    )
+
+    @field_validator("part_name", "document_number", "revision_number")
+    @classmethod
+    def strip_optional_text(cls, value: str) -> str:
+        return value.strip()
+
+
 class ChecksheetSnapshot(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     drawing_name: str = Field(min_length=1, max_length=255)
     source_project_id: str | None = Field(default=None, max_length=128)
     source_file_type: Literal["pdf", "image"]
     pdf_render_scale: float = Field(default=1.5, gt=0, le=10)
+    metadata: ChecksheetMetadata = Field(default_factory=ChecksheetMetadata)
     reading_columns: list[str] = Field(min_length=1, max_length=20)
     items: list[ChecksheetSnapshotItem] = Field(min_length=1, max_length=5000)
 
