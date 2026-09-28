@@ -1819,10 +1819,40 @@ class OcrPipeline:
         width, height = image.size
         corner_x = int(width * 0.45)
         corner_y = int(height * 0.70)
-        fields = extract_title_fields(
-            _read(image.crop((corner_x, corner_y, width, height)), corner_x, corner_y),
-            keywords,
-        )
+        corner = image.crop((corner_x, corner_y, width, height))
+        fields = extract_title_fields(_read(corner, corner_x, corner_y), keywords)
+
+        # Some title-block labels are printed small enough that the detector
+        # fuses them with their own value and the keyword has nothing to match
+        # — "REV" over its number is the usual one. Re-read the corner enlarged
+        # and fill in only the fields still blank, so a keyword that already
+        # resolved is never second-guessed. Capped to stay inside the
+        # detector's 4000px side limit.
+        if any(not field["value"] for field in fields):
+            limit = 4000 / max(corner.width, corner.height, 1)
+            factor = min(2.5, max(limit, 1.0))
+            if factor > 1.05:
+                enlarged = corner.resize(
+                    (int(corner.width * factor), int(corner.height * factor)),
+                    Image.LANCZOS,
+                )
+                boxes = self._detect_regions_ocr(enlarged)
+                for box in boxes:
+                    box["x"] = float(box["x"]) / factor + corner_x
+                    box["y"] = float(box["y"]) / factor + corner_y
+                    box["w"] = float(box["w"]) / factor
+                    box["h"] = float(box["h"]) / factor
+                retry = {
+                    field["keyword"]: field
+                    for field in extract_title_fields(boxes, keywords)
+                }
+                fields = [
+                    retry.get(field["keyword"], field)
+                    if not field["value"] and retry.get(field["keyword"], {}).get("value")
+                    else field
+                    for field in fields
+                ]
+
         if any(field["value"] for field in fields):
             return fields
 

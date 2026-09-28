@@ -174,6 +174,31 @@ def test_a_single_value_cell_is_unaffected():
     assert extract_title_fields(cell, ["REV"])[0]["value"] == "2"
 
 
+def test_rev_cell_does_not_take_the_row_below_it():
+    # 47630.pdf: REV sits directly over its number, and the SCALE cell sits
+    # under that. Following the column too far returned "N.T.S." as the
+    # revision, so the walk now stops when the next box stops looking like
+    # another row of the same column.
+    title_block = [
+        _b("REV", 791, 357, 32, 19),
+        _b("2", 791, 374, 33, 39),
+        _b("SCALE: N.T.S.", 697, 419, 105, 24),
+        _b("SIZE", 637, 416, 39, 19),
+    ]
+    assert extract_title_fields(title_block, ["REV"])[0]["value"] == "2"
+
+
+def test_label_chrome_is_not_taken_as_the_value():
+    # At some scales "DWG NO." arrives as two boxes. Without a guard the "NO."
+    # beside "DWG" was published as the drawing number.
+    split_label = [
+        _b("DWG", 170, 155, 29, 14),
+        _b("NO.", 200, 155, 20, 14),
+        _b("47630", 232, 157, 57, 24),
+    ]
+    assert extract_title_fields(split_label, ["DWG"])[0]["value"] == "47630"
+
+
 
 if __name__ == "__main__":
     passed = 0

@@ -60,6 +60,11 @@ def _is_value_like(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
+    # The label's own chrome is not its value. "DWG NO." splits into separate
+    # boxes at some scales, and without this the "NO." box sitting beside "DWG"
+    # was read as the drawing number.
+    if not _LABEL_CHROME.sub("", t).strip(" .:-"):
+        return False
     return not _LOOKS_LIKE_LABEL.match(t)
 
 
@@ -160,14 +165,23 @@ def _value_below(
         return None
 
     column.sort(key=lambda pair: pair[0])
-    # Follow the column down while the entries keep their regular spacing, so a
-    # stack of revision rows is recognised but an unrelated cell further away is
-    # not pulled in.
+    # Follow the column down only while the entries look like more rows of the
+    # SAME column: stacked under the first value, and of comparable width. A
+    # revision table's "1" over "2" qualifies; the "SCALE: N.T.S." cell sitting
+    # under a title block's REV cell does not, and following it there returned
+    # the scale as the revision.
+    first = column[0][1]
     run = [column[0]]
     for gap, b in column[1:]:
         previous = run[-1][1]
         step = b["y"] - (previous["y"] + previous["h"])
         if step < -0.25 * label["h"] or step > 2.5 * label["h"]:
+            break
+        if _horizontal_overlap(first, b) < 0.6:
+            break
+        wider = max(b["w"], first["w"])
+        narrower = max(min(b["w"], first["w"]), 1.0)
+        if wider / narrower > 2.0:
             break
         run.append((gap, b))
 
