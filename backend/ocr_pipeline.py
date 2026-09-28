@@ -2736,6 +2736,18 @@ class OcrPipeline:
                 m_tail = re.match(r"^(.*\d°)\s*[Rr]\d[\d.]*$", text)
                 if m_tail:
                     text = m_tail.group(1)
+                # A fit class and a chamfer are never the same callout: "Ø18H10"
+                # tolerances a bore, "0.5×45°" breaks an edge. Both in one
+                # levelled read means this crop bridged two callouts on
+                # neighbouring leaders and ran their text together
+                # ("115H10.5×45°"). count_dimension_values scores that as one
+                # value because it is a single unbroken token, so it needs its
+                # own guard. The per-leader passes read each callout properly,
+                # so the fusion is dropped rather than balloonned.
+                if re.search(r"\d\s*[Hh]\d", text) and re.search(
+                    r"[xX×]\s*\d{1,3}\s*°", text
+                ):
+                    continue
                 if not text or not is_segment_worthy(text):
                     continue
                 if not has_dimension_value(text):
@@ -2977,9 +2989,21 @@ class OcrPipeline:
                 if blocked:
                     continue
                 swap_for = accounted
+            # A base region the swap logic just accounted for as a FRAGMENT of
+            # this callout is not a re-read of it. ``same_value`` is a containment
+            # test, so a value's own deviation stack ("+0.0700" sits inside
+            # "Ø18H10+0.070/0") reads as the same value twice — and treating it
+            # that way dropped the levelled read and published the fragment on
+            # its own, which is the upright pass's failure, not a fix for it.
+            # An exact digit match is still a genuine re-read and stays on the
+            # enrich path below, which keeps the base region's own identity.
+            fragments = {
+                id(b) for b in swap_for if digits(b.get("text", "")) != d
+            }
             dup = [
                 b for b in base_regions
-                if overlaps(r, b) and same_value(d, digits(b.get("text", "")))
+                if id(b) not in fragments
+                and overlaps(r, b) and same_value(d, digits(b.get("text", "")))
             ]
             if dup:
                 # The upright read of a slanted callout keeps its digits but
@@ -5165,6 +5189,15 @@ class OcrPipeline:
         if angled_regions:
             regions.extend(angled_regions)
             detected_count += len(angled_regions)
+        # A base region the levelled read stood in for — the value's deviation
+        # stack read on its own, or a garbled fragment of it — is dropped here.
+        # The section route has always done this; this one did not, so both the
+        # whole callout and the fragment it replaced were balloonned, leaving
+        # "Ø20H10+0.084/0" next to a second balloon reading just "+0.0840".
+        # detected_count drops with them so the state invariant still balances.
+        before_supersede = len(regions)
+        regions = [r for r in regions if not r.pop("superseded", False)]
+        detected_count -= before_supersede - len(regions)
 
         # The NOTES paragraph, read as one region rather than left to leak into
         # neighbouring clusters as fragments. Same accounting as the angled
