@@ -1400,6 +1400,9 @@ class OcrPipeline:
         _, _, words = self._run_paddle(paddle_input, det=True)
         out: list[dict[str, Any]] = []
         for w in words:
+            # paddle_parse names a word's corners "polygon" on this pipeline;
+            # this method was written against "quad". Same four points.
+            quad = w.get("quad") or w.get("polygon")
             out.append(
                 {
                     "x": w["x"] / factor - pad,
@@ -1408,6 +1411,16 @@ class OcrPipeline:
                     "h": w["height"] / factor,
                     "text": w.get("text", ""),
                     "conf": float(w.get("confidence", 0.0)),
+                    # The detector's own corners, back in this image's pixels.
+                    # They carry the text's angle; the axis-aligned box above
+                    # does not. The angled pass groups a slanted value with its
+                    # deviation using them, so without this "Ø18H10 +0.070"
+                    # comes back as two separate balloons.
+                    "quad": (
+                        [(px / factor - pad, py / factor - pad) for px, py in quad]
+                        if quad
+                        else None
+                    ),
                 }
             )
         return out
