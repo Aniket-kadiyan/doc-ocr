@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  exportInspectionCSV,
   exportInspectionJSON,
   exportXML,
   downloadFile,
   findMalformedToleranceAnnotations,
 } from "@/lib/export";
+import {
+  downloadInspectionWorkbook,
+  type ExcelExportOptions,
+} from "@/lib/excelExport";
+import { renderBalloonedPages } from "@/lib/balloonedPageExport";
 import { createChecksheet } from "@/lib/checksheetClient";
 import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
 import { getProject } from "@/lib/db";
@@ -21,28 +25,42 @@ import {
   CreateChecksheetDialog,
   type CreateChecksheetValues,
 } from "@/components/CreateChecksheetDialog";
+import {
+  ExcelExportDialog,
+  type ExcelExportValues,
+} from "@/components/ExcelExportDialog";
+import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 
 interface ExportPanelProps {
   disabled?: boolean;
 }
 
 export function ExportPanel({ disabled = false }: ExportPanelProps) {
+  const { style: balloonStyle, artworkImage } = useBalloonStyle();
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
   const [actionStatus, setActionStatus] = useState<{
-    kind: "idle" | "saving" | "sending" | "ok" | "error";
+    kind: "idle" | "saving" | "exporting" | "sending" | "ok" | "error";
     message: string;
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [excelDialogOpen, setExcelDialogOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
   const empty = annotations.length === 0;
   const busy =
-    actionStatus.kind === "saving" || actionStatus.kind === "sending";
-  const busyLabel = actionStatus.kind === "saving" ? "Saving…" : "Sending…";
+    actionStatus.kind === "saving" ||
+    actionStatus.kind === "exporting" ||
+    actionStatus.kind === "sending";
+  const busyLabel =
+    actionStatus.kind === "saving"
+      ? "Saving…"
+      : actionStatus.kind === "exporting"
+        ? "Generating…"
+        : "Sending…";
 
   // Close the Export dropdown when clicking elsewhere.
   useEffect(() => {
@@ -181,16 +199,67 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     );
   };
 
-  const handleInspectionCSV = () => {
+  const handleExcelDialog = () => {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
-    const extraColumns = askExtraColumns();
-    if (extraColumns === null) return;
-    downloadFile(
-      exportInspectionCSV(annotations, extraColumns),
-      `${base}_inspection.csv`,
-      "text/csv"
-    );
+    setActionStatus({ kind: "idle", message: "" });
+    setExcelDialogOpen(true);
+  };
+
+  const handleExcelExport = async ({
+    partCount,
+    fileName,
+    companyName,
+  }: ExcelExportValues) => {
+    setActionStatus({
+      kind: "exporting",
+      message: "Rendering ballooned pages and generating Excel…",
+    });
+    try {
+      if (!projectId) {
+        throw new Error("The current drawing has no project identity.");
+      }
+      const project = await getProject(projectId);
+      if (!project) {
+        throw new Error(
+          "The original drawing is unavailable. Reopen it before exporting to Excel."
+        );
+      }
+      const pages = await renderBalloonedPages({
+        project,
+        annotations,
+        style: balloonStyle,
+        artworkImage,
+      });
+      const options: ExcelExportOptions = {
+        partCount,
+        fileName,
+        companyName,
+        metadata: {
+          partName: "",
+          drawingNumber: "",
+          revisionNumber: "",
+        },
+      };
+      const downloadedFile = await downloadInspectionWorkbook({
+        annotations,
+        pages,
+        options,
+      });
+      setActionStatus({
+        kind: "ok",
+        message: `Downloaded ${downloadedFile}.`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to generate the Excel file.",
+      });
+      throw error;
+    }
   };
 
   const handleXML = () => {
@@ -275,12 +344,12 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           </button>
           <button
             type="button"
-            onClick={handleInspectionCSV}
+            onClick={handleExcelDialog}
             className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
           >
-            <span className="font-medium">CSV</span>
+            <span className="font-medium">Excel</span>
             <span className="block text-[11px] text-slate-400">
-              Inspection sheet with your extra columns
+              Formatted checksheet with ballooned page images
             </span>
           </button>
           <button
@@ -323,6 +392,13 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         defaultName={`${projectName || "Drawing"} Checksheet`}
         onClose={() => setCreateDialogOpen(false)}
         onCreate={handleCreateChecksheet}
+      />
+
+      <ExcelExportDialog
+        open={excelDialogOpen}
+        defaultFileName={projectName || "Drawing"}
+        onClose={() => setExcelDialogOpen(false)}
+        onExport={handleExcelExport}
       />
     </div>
   );
