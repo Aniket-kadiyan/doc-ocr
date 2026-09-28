@@ -2018,6 +2018,7 @@ class OcrPipeline:
         # grammar in page_value_filters; these two do not belong on top of it.
         from segment_quality import (
             count_dimension_values,
+            dedupe_regions,
             strip_foreign_glyphs,
         )
 
@@ -3964,6 +3965,7 @@ class OcrPipeline:
         )
         from segment_quality import (
             count_dimension_values,
+            dedupe_regions,
             strip_foreign_glyphs,
         )
 
@@ -5144,6 +5146,15 @@ class OcrPipeline:
         if notes_region is not None:
             regions.append(notes_region)
             detected_count += 1
+
+        # Two detection passes can resolve the same callout and both survive to
+        # publication, which puts a second balloon exactly on top of the first:
+        # on a real sheet "Ø30-0.2" came out twice with an identical box. The
+        # section route has always deduped its regions; this route did not.
+        # detected_count drops with them so the state invariant still balances.
+        before_dedupe = len(regions)
+        regions = dedupe_regions(regions)
+        detected_count -= before_dedupe - len(regions)
 
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
