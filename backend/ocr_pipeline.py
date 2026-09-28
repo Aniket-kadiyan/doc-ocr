@@ -58,6 +58,18 @@ LINE_THRESHOLD = 15
 _PAGE_SPLIT_LINE_RATIO = 0.35
 # Long edge a slanted-callout neighbourhood is enlarged to before it is read.
 _ANGLED_MIN_EDGE = 700
+# A whole-image angled pass (one slant vote over everything) is what a zoomed-in
+# section crop needs; on a page-sized image the vote is diluted by the rest of
+# the drawing and the levelled full sheet is expensive to re-detect, so above
+# this edge only the per-callout neighbourhoods are read.
+_ANGLED_WHOLE_IMAGE_MAX_EDGE = 1400
+# Each per-callout neighbourhood is grown to at least this edge so the levelled
+# view keeps its surroundings and the free enlargement stays moderate: a 2.3x
+# upscale of a tight crop broke "Ø20H10" into pieces, 1.4-1.6x read it cleanly.
+_ANGLED_ROI_MIN_EDGE = 450
+# Voting-recogniser passes per crop in the page route's authoritative reread:
+# the three upright variants. See OcrPipeline._authoritative_attempts.
+_PAGE_REREAD_MAX_PREDICTIONS = 3
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
@@ -133,6 +145,10 @@ _NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]\s*[A-Za-z]")
 # The block's own heading. PaddleOCR reads the CAD "O" as a zero often enough
 # on these sheets that both spellings are accepted.
 _NOTES_HEADING_RE = re.compile(r"^\s*N[O0]TES?\s*[:.\-]?\s*$", re.I)
+# The heading with whatever the detector ran it together with ("NOTES: 1.").
+_NOTES_ANCHOR_RE = re.compile(r"^\s*N[O0]TES?\s*[:.\-]?(\s|$)", re.I)
+# The column of point markers read as one object ("12345", "1.2.3.4.").
+_NOTE_COLUMN_RE = re.compile(r"^\s*(?:\d\s*[.)]?\s*){3,}$")
 
 # Words that belong to the title block or the revision table, never to the prose
 # of a general note. On a real sheet the title block starts TEN PIXELS under the
@@ -157,6 +173,148 @@ def _covers_digits(whole: str, part: str) -> bool:
         return False
     it = iter(whole)
     return all(c in it for c in part)
+
+
+# One row of a limit dimension: an optional diameter mark and a decimal value.
+_LIMIT_PART_RE = re.compile(r"^\s*([Øø⌀φ∅]?)\s*(\d*\.\d+)\s*$")
+# A limit dimension read flat, both rows in one string: "Ø0.620φ0.612",
+# "0.620/0.612", "Ø0.620 0.612". The separator is whatever the recogniser
+# made of the row break (or of the Ø that sits between the rows).
+_LIMIT_WHOLE_RE = re.compile(
+    r"^\s*([Øø⌀φ∅]?)\s*(\d*\.\d+)\s*[Øø⌀φ∅/|\\ ]?\s*(\d*\.\d+)\s*$"
+)
+_DIAMETER_MARKS = "Øø⌀φ∅"
+
+
+def parse_limit_pair(upper: str, lower: str) -> str | None:
+    """
+    Join the two rows of a limit dimension into one value, or ``None``.
+
+    A limit dimension is drawn as its upper limit over its lower limit —
+    ``Ø0.620`` over ``0.612`` — and is ONE callout, not two. Detection cuts
+    the stack in every way but the right one (two columns, one row plus a
+    stray, the whole read flat), so the rows are recognised as text and joined
+    by this rule: two plain decimals of the same precision, no brackets or
+    tolerance of their own, differing by a few percent at most. That last
+    condition is what keeps a pair of independent stacked callouts apart —
+    ``8.00`` over ``9.00`` on the same sheet is two lengths, and ``0.20`` over
+    ``0.25`` two more.
+
+    Returns ``"Ø0.620/0.612"``: upper limit first, exactly as printed.
+    """
+    m_up = _LIMIT_PART_RE.match(upper or "")
+    m_lo = _LIMIT_PART_RE.match(lower or "")
+    if not m_up or not m_lo:
+        return None
+    up_text, lo_text = m_up.group(2), m_lo.group(2)
+    if len(up_text.split(".")[1]) != len(lo_text.split(".")[1]):
+        return None
+    try:
+        up_val, lo_val = float(up_text), float(lo_text)
+    except ValueError:
+        return None
+    if up_val == lo_val:
+        return None
+    spread = abs(up_val - lo_val)
+    if spread > max(0.06 * max(up_val, lo_val), 0.02):
+        return None
+    symbol = "Ø" if (m_up.group(1) or m_lo.group(1)) else ""
+    return f"{symbol}{up_text}/{lo_text}"
+
+
+def limit_pair_from_read(text: str) -> str | None:
+    """``"Ø0.620φ0.612"`` (a limit stack read flat) → ``"Ø0.620/0.612"``."""
+    m = _LIMIT_WHOLE_RE.match(text or "")
+    if not m:
+        return None
+    return parse_limit_pair(f"{m.group(1)}{m.group(2)}", m.group(3))
+
+
+_LIMIT_VALUE_RE = re.compile(r"^([Øø⌀φ∅]?)(\d*\.\d+)/(\d*\.\d+)$")
+_METRIC_LIMIT_RE = re.compile(r"^\[?(\d*\.\d+)/(\d*\.\d+)\]?$")
+
+
+def join_dual_unit_limits(
+    regions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    ``Ø0.620/0.612`` beside ``[15.75/15.54]`` → ``Ø0.620/0.612[15.75/15.54]``.
+
+    On a dual-unit sheet a limit dimension carries its metric limits in
+    brackets alongside, drawn as a second two-row stack. Each stack is read
+    as one value by :meth:`OcrPipeline._read_limit_pair`; this joins the two
+    when the right-hand one is the left one in millimetres (×25.4, within the
+    rounding band the dual-unit repair uses), sits on the same rows, and is
+    little further away than the stack is tall (the bracket sits in that gap).
+    The bracketed half is removed.
+
+    Returns ``(regions, removed)``.
+    """
+    from dual_unit import _tol
+
+    out = list(regions)
+    removed: list[dict[str, Any]] = []
+    joined = True
+    while joined:
+        joined = False
+        for i, left in enumerate(out):
+            ml = _LIMIT_VALUE_RE.match(str(left.get("text") or "").strip())
+            if not ml:
+                continue
+            lb = left["bbox"]
+            for j, right in enumerate(out):
+                if i == j:
+                    continue
+                mr = _METRIC_LIMIT_RE.match(str(right.get("text") or "").strip())
+                if not mr:
+                    continue
+                rb = right["bbox"]
+                gap = float(rb["x"]) - (float(lb["x"]) + float(lb["width"]))
+                if gap < -0.2 * float(lb["height"]) or gap > 1.2 * float(lb["height"]):
+                    continue
+                y_overlap = min(
+                    float(lb["y"]) + float(lb["height"]), float(rb["y"]) + float(rb["height"])
+                ) - max(float(lb["y"]), float(rb["y"]))
+                if y_overlap < 0.6 * min(float(lb["height"]), float(rb["height"])):
+                    continue
+                try:
+                    metric = all(
+                        abs(float(inch) * 25.4 - float(mm)) <= _tol(float(mm))
+                        for inch, mm in (
+                            (ml.group(2), mr.group(1)),
+                            (ml.group(3), mr.group(2)),
+                        )
+                    )
+                except ValueError:
+                    continue
+                if not metric:
+                    continue
+                x0 = min(float(lb["x"]), float(rb["x"]))
+                y0 = min(float(lb["y"]), float(rb["y"]))
+                x1 = max(float(lb["x"]) + float(lb["width"]), float(rb["x"]) + float(rb["width"]))
+                y1 = max(float(lb["y"]) + float(lb["height"]), float(rb["y"]) + float(rb["height"]))
+                left["text"] = (
+                    f"{ml.group(1)}{ml.group(2)}/{ml.group(3)}[{mr.group(1)}/{mr.group(2)}]"
+                )
+                left["bbox"] = {
+                    "x": round(x0, 1),
+                    "y": round(y0, 1),
+                    "width": round(x1 - x0, 1),
+                    "height": round(y1 - y0, 1),
+                }
+                left["confidence"] = round(
+                    min(float(left.get("confidence") or 0.0), float(right.get("confidence") or 0.0)), 4
+                )
+                # The joined text is a new value, so its category and balloon
+                # label are re-derived rather than left on the inch half's.
+                if "category" in left or "label" in left:
+                    OcrPipeline._apply_feature_labels(left)
+                removed.append(out.pop(j))
+                joined = True
+                break
+            if joined:
+                break
+    return out, removed
 
 
 class OcrPipeline:
@@ -738,9 +896,14 @@ class OcrPipeline:
                 g["count"] += 1
                 g["corrected"] = g["corrected"] or corrected
 
+                # Deskew variants read text in a rotated frame, so their word
+                # boxes must not become the group's boxes (they'd misplace the
+                # balloon). They still vote on the text value; bbox falls back.
+                is_deskew = _name.startswith("dsk")
                 if conf > g["conf"]:
                     g["conf"] = conf
-                    g["words"] = words
+                    if not is_deskew:
+                        g["words"] = words
 
                 candidates_log.append(
                     {
@@ -762,7 +925,10 @@ class OcrPipeline:
                         "det": det,
                         "text": normalized,
                         "confidence": conf,
-                        "words": words,
+                        # Same rule as the vote: a deskewed read's boxes are
+                        # in the levelled frame, so hand back none and let the
+                        # text-bbox fallback locate the value in the crop.
+                        "words": [] if is_deskew else words,
                         "corrected": corrected,
                     }
                     break
@@ -1997,6 +2163,11 @@ class OcrPipeline:
         factor = 3.0 if line_h <= 0 else max(1.0, min(4.0, 36.0 / line_h))
         limit = 4000 / max(crop.width, crop.height, 1)
         factor = min(factor, max(limit, 1.0))
+        # Nothing to gain at sheet resolution: the lines in hand were read at
+        # this size already, and a second pass at the same size only trades
+        # one recogniser's slips for another's ("MATERIAL:C", "ARIIIN").
+        if factor < 1.2:
+            return []
         if factor > 1.01:
             crop = crop.resize(
                 (int(crop.width * factor), int(crop.height * factor)),
@@ -2004,7 +2175,10 @@ class OcrPipeline:
             )
 
         try:
-            boxes = self.detect_regions(crop.convert("RGB"))
+            # A recognising pass: detect_regions on this pipeline is
+            # detector-only and returns boxes with no text, so it could never
+            # produce lines to compare with the ones already in hand.
+            boxes = self._detect_regions_ocr(crop.convert("RGB"))
         except Exception:
             # A failed re-read must never lose the notes already in hand.
             return []
@@ -2330,6 +2504,7 @@ class OcrPipeline:
         *,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
+        max_paddle_predictions: int | None = None,
     ) -> list[dict[str, Any]] | None:
         """
         Re-segment one cluster that read back as multiple stacked values.
@@ -2356,7 +2531,12 @@ class OcrPipeline:
 
         cx0, cy0, cx1, cy1 = coords
         sub = image.crop((cx0, cy0, cx1, cy1))
-        sub_boxes = self.detect_regions(sub)
+        # The quick proposer: one recognising detection pass over the crop,
+        # which is what this split was written against. The adaptive cascade
+        # (morphology, several passes, local retries) costs seconds per crop
+        # and returns boxes without text, which also silences the
+        # detection-text fallback below.
+        sub_boxes = self.detect_regions(sub, thorough=False)
         if len(sub_boxes) < 2:
             return None
 
@@ -2389,6 +2569,7 @@ class OcrPipeline:
                 debug_dump=debug_dump,
                 debug_dump_force=debug_dump_force,
                 compute_text_bbox=False,
+                max_paddle_predictions=max_paddle_predictions,
             )
             t = strip_foreign_glyphs((res.get("text") or "").strip())
             t = self._prefer_detection_text(c, res, t)
@@ -2405,6 +2586,263 @@ class OcrPipeline:
             out.append(self._region_from_result(res, bbox, t))
 
         return out if len(out) >= 2 else None
+
+    @staticmethod
+    def _limit_group_bbox(
+        bbox: dict[str, float],
+        records: list[dict[str, Any]],
+        line_h: float,
+    ) -> dict[str, float]:
+        """
+        The whole callout a tall page object is a piece of.
+
+        The page detector cuts a limit stack every way at once — the whole
+        thing, each column, the top row — and dedupe keeps several of those as
+        distinct objects. Whichever survived to publication, the stack is only
+        readable as a whole, so the box is grown over every detected object
+        that overlaps it or abuts it on the same rows. Boxes much larger than
+        the seed are left out: they are a neighbour's fused read, not this
+        stack.
+        """
+        x0, y0 = float(bbox["x"]), float(bbox["y"])
+        x1, y1 = x0 + float(bbox["width"]), y0 + float(bbox["height"])
+        seed_w, seed_h = x1 - x0, y1 - y0
+        gap = 0.25 * max(line_h, 1.0)
+        for _ in range(2):
+            for record in records:
+                if record.get("table_excluded"):
+                    continue
+                rb = record.get("bbox") or {}
+                try:
+                    rx0, ry0 = float(rb["x"]), float(rb["y"])
+                    rx1, ry1 = rx0 + float(rb["width"]), ry0 + float(rb["height"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if ry1 - ry0 > 1.3 * seed_h or rx1 - rx0 > 3.0 * max(seed_w, seed_h):
+                    continue
+                y_overlap = min(y1, ry1) - max(y0, ry0)
+                if y_overlap < 0.7 * min(y1 - y0, ry1 - ry0):
+                    continue
+                x_overlap = min(x1, rx1) - max(x0, rx0)
+                if x_overlap < -gap:
+                    continue
+                x0, y0 = min(x0, rx0), min(y0, ry0)
+                x1, y1 = max(x1, rx1), max(y1, ry1)
+        return {
+            "x": round(x0, 1),
+            "y": round(y0, 1),
+            "width": round(x1 - x0, 1),
+            "height": round(y1 - y0, 1),
+        }
+
+    def _read_limit_pair(
+        self,
+        image: Image.Image,
+        bbox: dict[str, float],
+        *,
+        max_paddle_predictions: int | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Read a two-row limit dimension as ONE value, or ``None``.
+
+        ``Ø0.620`` over ``0.612`` is one callout. Read flat it comes back as
+        ``6200.612±0.7`` or ``Ø0.620φ0.612``; cut by the detector it comes back
+        as columns (``620612``, ``Ø1.00``). The rows are separated here on the
+        ink itself: glyphs that span both rows — the Ø drawn centred between
+        them, the brackets of a dual-unit stack — are set aside, the remaining
+        glyph rows give the two bands, and each band is recognised on its own
+        with the tall glyphs blanked out so half a Ø is not read as a digit.
+        The two reads are then joined by :func:`parse_limit_pair`, which is
+        strict enough that two independent stacked callouts never merge.
+        """
+        try:
+            import cv2
+        except ImportError:
+            return None
+        import numpy as np
+
+        from image_preprocess import _suppress_long_lines, cad_ink_to_gray
+        from segment_quality import strip_foreign_glyphs
+
+        # A little wider than the detector's box: the bracket of a dual-unit
+        # stack is thin and often just outside it.
+        m = max(6, min(16, int(0.14 * float(bbox["height"]))))
+        cx0 = max(0, int(bbox["x"] - m))
+        cy0 = max(0, int(bbox["y"] - 6))
+        cx1 = min(image.width, int(bbox["x"] + bbox["width"] + m))
+        cy1 = min(image.height, int(bbox["y"] + bbox["height"] + 6))
+        if cx1 - cx0 < 12 or cy1 - cy0 < 12:
+            return None
+        crop = image.crop((cx0, cy0, cx1, cy1)).convert("RGB")
+        gray = np.asarray(cad_ink_to_gray(crop).convert("L"))
+        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = _suppress_long_lines(mask)
+        count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        comps = [
+            tuple(int(v) for v in stats[i][:4])
+            for i in range(1, count)
+            if stats[i][cv2.CC_STAT_HEIGHT] >= 4 and stats[i][cv2.CC_STAT_AREA] >= 6
+        ]
+        if len(comps) < 4:
+            return None
+        heights = sorted(h for _x, _y, _w, h in comps)
+        glyph_h = float(heights[len(heights) // 2])
+        if glyph_h < 6:
+            return None
+        # Digits: glyph-sized. Points and commas are smaller; a bracket that
+        # spans both rows is taller.
+        tall = [c for c in comps if c[3] >= 1.6 * glyph_h]
+        digits = [c for c in comps if 0.6 * glyph_h <= c[3] < 1.6 * glyph_h]
+        if len(digits) < 4:
+            return None
+
+        # Two rows: the upper row's centre is the median of the highest
+        # digit centres, the lower row's of the lowest. (Not the widest gap
+        # between centres: the Ø drawn centred BETWEEN the rows sits in that
+        # gap and halves it.) A glyph well away from both centres straddles
+        # the rows and is read with neither.
+        centres = sorted(y + h / 2.0 for _x, y, _w, h in digits)
+        edge = max(1, int(0.4 * len(centres) + 0.999))
+        upper_c, lower_c = centres[:edge], centres[-edge:]
+        row_centres = (
+            upper_c[len(upper_c) // 2],
+            lower_c[len(lower_c) // 2],
+        )
+        if row_centres[1] - row_centres[0] < 0.9 * glyph_h:
+            return None
+        rows: list[list[tuple[int, int, int, int]]] = [[], []]
+        straddlers: list[tuple[int, int, int, int]] = list(tall)
+        for c in digits:
+            cy = c[1] + c[3] / 2.0
+            distances = [abs(cy - rc) for rc in row_centres]
+            nearest = min(range(2), key=lambda i: distances[i])
+            if distances[nearest] > 0.35 * glyph_h:
+                straddlers.append(c)
+            else:
+                rows[nearest].append(c)
+        if any(len(row) < 2 for row in rows):
+            return None
+        bands = [
+            (min(c[1] for c in row), max(c[1] + c[3] for c in row)) for row in rows
+        ]
+        if bands[0][1] > bands[1][0]:
+            return None
+        short = rows[0] + rows[1]
+        tall = straddlers
+
+        text_left = min(x for x, _y, _w, _h in short)
+        text_right = max(x + w for x, _y, w, _h in short)
+        clean = np.array(crop)
+        for x, y, w, h in tall:
+            clean[max(0, y - 1) : y + h + 1, max(0, x - 1) : x + w + 1] = 255
+        clean_img = Image.fromarray(clean)
+        pad = max(3, int(0.2 * glyph_h))
+        reads: list[tuple[str, float, dict[str, Any]]] = []
+        for top, bottom in bands:
+            row_crop = clean_img.crop(
+                (
+                    max(0, text_left - pad),
+                    max(0, top - pad),
+                    min(crop.width, text_right + pad),
+                    min(crop.height, bottom + pad),
+                )
+            )
+            res = self.recognize(
+                row_crop,
+                compute_text_bbox=False,
+                max_paddle_predictions=max_paddle_predictions,
+            )
+            text = strip_foreign_glyphs(str(res.get("text") or "")).strip()
+            reads.append((text, float(res.get("confidence") or 0.0), res))
+        pair = parse_limit_pair(reads[0][0], reads[1][0])
+        if pair is None:
+            return None
+
+        # What the tall glyphs are: a ring at the reading start is the Ø, a
+        # thin stroke at either end is a bracket of a dual-unit stack.
+        ring = any(
+            x + w <= text_left + 0.3 * glyph_h and 0.5 <= w / max(h, 1) <= 1.4
+            for x, _y, w, h in tall
+        )
+        left_bracket = any(
+            x + w <= text_left + 0.2 * glyph_h and w < 0.4 * h for x, _y, w, h in tall
+        )
+        right_bracket = any(
+            x >= text_right - 0.2 * glyph_h and w < 0.4 * h for x, _y, w, h in tall
+        )
+        if ring and not pair.startswith("Ø"):
+            pair = "Ø" + pair
+        if left_bracket and right_bracket:
+            pair = f"[{pair}]"
+
+        # The box is the value's own glyphs: the rows, plus the Ø and the
+        # brackets that were credited to it. Not every straddler — the wider
+        # crop may hold the bracket of the callout next door.
+        parts = list(short) + [
+            c for c in tall
+            if (c[0] + c[2] <= text_left + 0.3 * glyph_h)
+            or (left_bracket and right_bracket and c[0] >= text_right - 0.2 * glyph_h)
+        ]
+        ex0 = min(c[0] for c in parts)
+        ey0 = min(c[1] for c in parts)
+        ex1 = max(c[0] + c[2] for c in parts)
+        ey1 = max(c[1] + c[3] for c in parts)
+        out_bbox = {
+            "x": round(cx0 + ex0 - 2, 1),
+            "y": round(cy0 + ey0 - 2, 1),
+            "width": round(ex1 - ex0 + 4, 1),
+            "height": round(ey1 - ey0 + 4, 1),
+        }
+        return {
+            "text": pair,
+            "bbox": out_bbox,
+            "type": "diameter" if "Ø" in pair else "linear",
+            "confidence": round(min(reads[0][1], reads[1][1]), 4),
+            "result": reads[0][2],
+        }
+
+    @staticmethod
+    def _apply_feature_labels(region: dict[str, Any]) -> dict[str, Any]:
+        """
+        Attach the rule engine's category, subtype and balloon label in place.
+
+        The section route has always published these; the page route did not,
+        so every page balloon reached the UI with no category and an empty
+        label — the checksheet's Label column showed a dash for the whole
+        sheet and the frontend fell back to its text-only classifier, losing
+        every rule that reads the detected symbols. Classified from the
+        PUBLISHED text, which is not always the recogniser's own (a review
+        object's text is blanked, a limit stack is rewritten after the read).
+        """
+        feature = classify_feature(
+            str(region.get("text") or ""),
+            symbols=region.get("symbols_detected") or {},
+        )
+        region["category"] = feature.category
+        region["subtype"] = feature.subtype
+        region["label"] = feature.label
+        return region
+
+    @staticmethod
+    def _ink_at_left_edge(
+        image: Image.Image, x0: int, y0: int, y1: int, scale: float
+    ) -> bool:
+        """Whether ink touches the left edge of a levelled cluster box."""
+        import numpy as np
+
+        from image_preprocess import cad_ink_to_gray
+
+        band = max(2, int(0.15 * scale))
+        left = max(0, x0 - band)
+        if x0 - left < 1 or y1 - y0 < 2:
+            return False
+        strip = np.asarray(
+            cad_ink_to_gray(image.crop((left, y0, x0, y1))).convert("L")
+        )
+        # Ink is bright after cad_ink_to_gray; a glyph sliver fills a good
+        # part of the strip's height, a stray speck does not.
+        rows_with_ink = (strip > 128).any(axis=1)
+        return float(rows_with_ink.mean()) >= 0.25
 
     @staticmethod
     def _oriented_box_from_rot(
@@ -2580,6 +3018,180 @@ class OcrPipeline:
                 break
         return angles
 
+    def _levelled_det_boxes(self, image: Image.Image) -> list[dict[str, Any]]:
+        """
+        Text boxes for a levelled crop, detector-only when the standalone
+        detector is loaded.
+
+        The levelled pass only needs geometry (the boxes are read by
+        ``recognize`` afterwards), and the standalone detector is several times
+        cheaper than the full pipeline that ``_paddle_det_boxes`` runs. The
+        stacked-deviation reader keeps the full pipeline: it needs each part's
+        text and confidence.
+        """
+        if getattr(self, "_text_detector_available", False):
+            try:
+                return self._detector_only_boxes(image, target_long_edge=1100)
+            except Exception:
+                pass
+        return self._paddle_det_boxes(image)
+
+    def _fast_has_digit(self, crops: list[Image.Image]) -> list[bool]:
+        """
+        One batch of the fast recogniser over ``crops``: does each read a digit?
+
+        A levelled neighbourhood yields many clusters that are not callouts —
+        note words, specks, pieces of the part — and each one put through the
+        full ``recognize`` costs about a second. The batch recogniser answers
+        "is there a number here" in a few hundredths of a second per crop.
+        Anything it cannot read at all is kept for the full read, which is the
+        better of the two on small or faint text.
+        """
+        if not crops or not getattr(self, "_page_batch_recognition_available", False):
+            return [True] * len(crops)
+        try:
+            fast = self._recognize_page_batch(crops, batch_size=16)
+        except Exception:
+            return [True] * len(crops)
+        flags: list[bool] = []
+        for result in fast:
+            raw = str(result.get("raw_ocr") or result.get("text") or "")
+            flags.append((not raw.strip()) or any(c.isdigit() for c in raw))
+        return flags
+
+    @staticmethod
+    def _join_same_line(
+        clusters: list[list[dict[str, Any]]],
+        scale: float,
+    ) -> list[list[dict[str, Any]]]:
+        """
+        Join clusters that sit on one text line with less than a character
+        between them.
+
+        The levelled detector sometimes breaks a value inside a word — at one
+        crop scale "Ø20H10" came back as "Ø20H1" and "0", the "0" then read
+        together with the deviation stack. The tight cluster margin does not
+        close that gap, so it is closed here on the line's own geometry: the
+        two boxes overlap by most of their height and the gap is under a
+        character. A callout and its trailing radius ("0.2-0.3×45°" then "R1")
+        join too, which the tail rule downstream already separates.
+        """
+        from region_cluster import union_bbox
+
+        if scale <= 0 or len(clusters) < 2:
+            return clusters
+        changed = True
+        while changed:
+            changed = False
+            boxes = [union_bbox(c) for c in clusters]
+            order = sorted(range(len(boxes)), key=lambda k: boxes[k]["x"])
+            for i_pos in range(len(order) - 1):
+                i, j = order[i_pos], order[i_pos + 1]
+                a, b = boxes[i], boxes[j]
+                gap = b["x"] - (a["x"] + a["width"])
+                top = max(a["y"], b["y"])
+                bottom = min(a["y"] + a["height"], b["y"] + b["height"])
+                overlap = bottom - top
+                if (
+                    -0.3 * scale <= gap <= 0.9 * scale
+                    and overlap >= 0.6 * min(a["height"], b["height"])
+                    and max(a["height"], b["height"]) <= 1.6 * scale
+                    and (a["width"] + gap + b["width"]) <= 12.0 * scale
+                ):
+                    clusters[i] = clusters[i] + clusters[j]
+                    del clusters[j]
+                    changed = True
+                    break
+        return clusters
+
+    @staticmethod
+    def _adjoin_deviation_stacks(
+        clusters: list[list[dict[str, Any]]],
+        scale: float,
+    ) -> list[list[dict[str, Any]]]:
+        """
+        Join a value cluster with the deviation stack drawn just after it.
+
+        A fit callout is one value followed by two smaller numbers stacked to
+        its right. Whether the levelled detector returns that as one box or as
+        a value box plus a stack box depends on the crop's scale, and the two
+        outcomes used to go different ways: the single box was split correctly
+        by the stacked-deviation reader, the pair was published as a bare
+        ``Ø18H10`` with its tolerances lost. Joining the pair here sends both
+        shapes down the same path. The stack is narrower than its value, sits
+        within about a line height of the value's end and shares its rows.
+        """
+        from region_cluster import union_bbox
+
+        if scale <= 0 or len(clusters) < 2:
+            return clusters
+        boxes = [union_bbox(c) for c in clusters]
+        merged_into: dict[int, int] = {}
+
+        def is_deviation_of(a: dict[str, float], b: dict[str, float]) -> bool:
+            a_right = a["x"] + a["width"]
+            # (i) One deviation line: a short, narrow box in the right part of
+            # the value's row band. The detector often fuses the value with
+            # its UPPER deviation, so the lower one then sits inside the value
+            # box's own x-range and must be allowed there.
+            if (
+                b["height"] <= 0.85 * a["height"]
+                and b["width"] <= 0.6 * a["width"]
+                and b["x"] + b["width"] / 2.0 > a["x"] + 0.55 * a["width"]
+                and b["x"] <= a_right + 2.0 * scale
+            ):
+                top = max(a["y"] - 0.5 * a["height"], b["y"])
+                bottom = min(a["y"] + 1.5 * a["height"], b["y"] + b["height"])
+                if bottom - top > 0:
+                    return True
+            # (ii) The whole stack as one box: starts where the value ends, up
+            # to two lines tall. It may be about as wide as the value when the
+            # detector broke the value inside a word and glued its last digit
+            # to the stack ("Ø20H1" + "0 +0.084/0"); the fused-read guards
+            # downstream reject a genuine neighbour that slips through.
+            if (
+                a_right - 0.5 * scale <= b["x"] <= a_right + 2.0 * scale
+                and b["height"] <= 2.2 * a["height"]
+                and b["width"] <= 1.2 * a["width"]
+            ):
+                top = max(a["y"] - 0.6 * a["height"], b["y"])
+                bottom = min(a["y"] + 1.6 * a["height"], b["y"] + b["height"])
+                if bottom - top > 0:
+                    return True
+            return False
+
+        # Widest first: the value is the long box, its deviations the short
+        # ones, and a lower deviation that two values could both claim goes
+        # to the wider (nearer, fused) one.
+        for i in sorted(range(len(boxes)), key=lambda k: boxes[k]["width"], reverse=True):
+            if i in merged_into:
+                continue
+            a = boxes[i]
+            if a["width"] < 1.5 * scale:
+                continue  # a fragment, not a value
+            a_right = a["x"] + a["width"]
+            members = sorted(
+                (
+                    j
+                    for j, b in enumerate(boxes)
+                    if j != i and j not in merged_into and is_deviation_of(a, b)
+                ),
+                key=lambda j: abs(boxes[j]["x"] - a_right),
+            )[:3]
+            # Members join one at a time, nearest the value's end first, and
+            # only while the union stays about two lines tall: anything taller
+            # has swept up a neighbour still slanted at this angle. Rejecting
+            # the whole set for one such box lost the stack that belonged.
+            joined = list(clusters[i])
+            for j in members:
+                candidate = joined + list(clusters[j])
+                if union_bbox(candidate)["height"] > 2.6 * scale:
+                    continue
+                joined = candidate
+                merged_into[j] = i
+            clusters[i] = joined
+        return [c for k, c in enumerate(clusters) if k not in merged_into]
+
     def _angled_in_roi(
         self,
         image: Image.Image,
@@ -2588,6 +3200,9 @@ class OcrPipeline:
         max_magnitudes: int = 1,
         weight_floor: float | None = None,
         fallback_angles: list[float] | None = None,
+        seed_box: tuple[float, float, float, float] | None = None,
+        max_angles: int = 4,
+        line_height: float | None = None,
     ) -> list[dict[str, Any]]:
         """
         Read the diagonal callouts in one image, levelling it by its own slant.
@@ -2600,11 +3215,15 @@ class OcrPipeline:
         magnitude must clear to be worth trying, which is safe once the caller
         has established that this region really does hold diagonal text.
 
-        ``fallback_angles`` is used only when the vote finds nothing at all —
-        the angles of the leader lines running through this region. Measuring a
-        long straight stroke works at any scale, so it covers regions where the
-        vote over text strokes is too weak to name an angle. It does not
-        override the vote, which measured better wherever both had an opinion.
+        ``fallback_angles`` are tried BEFORE the vote's: the angles of the
+        leader lines running through this region and the detector's own quad
+        angle. A leader's angle is measured off the line the text sits on, so
+        it is exact where the vote is a 1°-bucket estimate over ink.
+
+        ``seed_box`` (x, y, w, h in this image's pixels) is the slanted text
+        this neighbourhood was built around. Once an angle has produced a
+        confident read over it, the remaining angles are skipped: they can only
+        re-read the same ink, and every angle costs a detection and a read.
         """
         import re
 
@@ -2649,7 +3268,7 @@ class OcrPipeline:
         for candidate in list(fallback_angles or []) + voted:
             if all(abs(candidate - kept) > 6.0 for kept in angles):
                 angles.append(candidate)
-        angles = angles[:4]
+        angles = angles[: max(1, max_angles)]
         if not angles:
             return []
 
@@ -2664,6 +3283,39 @@ class OcrPipeline:
             else min(3.0, _ANGLED_MIN_EDGE / max(roi_edge, 1))
         )
 
+        def seed_read(region: dict[str, Any]) -> bool:
+            """
+            A confident, CLEAN read of the text this neighbourhood was built for.
+
+            Confidence alone is not enough to stop trying angles: at a
+            neighbour's angle the recogniser returned ``Ø10+0.0700`` at 0.99 —
+            a value crossed with the next callout's deviation stack. A clean
+            read has no stray letters, no deviation with four or more decimals
+            (two deviations run together), and a fit class carries its stack
+            as ``+0.084/0``.
+            """
+            if seed_box is None:
+                return False
+            if float(region.get("confidence") or 0.0) < 0.90:
+                return False
+            text = str(region.get("text") or "")
+            if any(c.isalpha() and c not in "HRXhrx" for c in text):
+                return False
+            if re.search(r"[+\-−]\s*\d*[.,]\d{4,}", text):
+                return False
+            if re.search(r"\d[Hh]\d", text) and "/" not in text:
+                return False
+            sx, sy, sw, sh = seed_box
+            b = region["bbox"]
+            x0 = max(sx, b["x"])
+            y0 = max(sy, b["y"])
+            x1 = min(sx + sw, b["x"] + b["width"])
+            y1 = min(sy + sh, b["y"] + b["height"])
+            if x1 <= x0 or y1 <= y0:
+                return False
+            smaller = max(1.0, min(sw * sh, b["width"] * b["height"]))
+            return (x1 - x0) * (y1 - y0) / smaller >= 0.3
+
         found: list[dict[str, Any]] = []
         for angle in angles:
             rimg, inv = self._rotate_expand(image, angle, scale=roi_scale)
@@ -2675,7 +3327,7 @@ class OcrPipeline:
             # value-plus-deviation grouping below work. (Do NOT reuse the full
             # detect_regions/cluster pipeline here — its 90° pass and aggressive
             # merge fuse the now-diagonal axis text into giant blobs.)
-            raw = self._paddle_det_boxes(cad_ink_to_gray(rimg).convert("RGB"))
+            raw = self._levelled_det_boxes(cad_ink_to_gray(rimg).convert("RGB"))
             if not raw:
                 continue
             boxes = [
@@ -2687,6 +3339,14 @@ class OcrPipeline:
             if not boxes:
                 continue
             scale = self._text_scale(boxes)
+            # The caller may know the text height (a leader corridor does):
+            # the median box height in a small crop is dragged down by the
+            # lower deviation and stray marks, and every size guard below is
+            # measured against it — "Ø18H10 +0.070/0" was rejected as a box
+            # too large for its text at a scale of 29 px when the writing was
+            # 55 px tall.
+            if line_height and line_height > 0:
+                scale = max(scale or 0.0, 0.8 * line_height * roi_scale)
             if scale:
                 # Keep only what reads as a single line at THIS angle. Text
                 # belonging to a different leader is still slanted here, so the
@@ -2703,8 +3363,11 @@ class OcrPipeline:
             clusters = cluster_boxes(
                 boxes, margin_ratio=0.3, img_w=rw, img_h=rh, text_scale=scale
             )
+            clusters = self._join_same_line(clusters, scale)
+            clusters = self._adjoin_deviation_stacks(clusters, scale)
 
             margin = 6
+            pending: list[tuple[list[dict[str, Any]], dict[str, float], tuple[int, int, int, int], Image.Image]] = []
             for cluster in clusters:
                 ub = union_bbox(cluster)
                 cx0 = max(0, int(ub["x"] - margin))
@@ -2724,13 +3387,81 @@ class OcrPipeline:
                     or max(ub["width"], ub["height"]) > scale * 12.0
                 ):
                     continue
-                sub = rimg.crop((cx0, cy0, cx1, cy1))
-                res = self.recognize(sub, compute_text_bbox=False)
+                # A single slanted callout is ONE line of text, optionally with
+                # its tolerance stacked above/below it: more rows than that is
+                # a piece of the drawing, not worth a read.
+                if self._cluster_row_count(cluster) > 3:
+                    continue
+                # A leader that runs into the first glyph makes the levelled
+                # detector start its box AFTER that glyph: "0.5×45°" came back
+                # as "1.5×45°" (the sliver of the 0 read as a 1) or "6.5×45°".
+                # When ink is cut at the reading start, the crop reaches back
+                # one text height, stopping short of any box to its left.
+                cut_start = False
+                if scale and self._ink_at_left_edge(rimg, cx0, cy0, cy1, scale):
+                    reach = int(cx0 - scale)
+                    for other in boxes:
+                        if other["x"] + other["w"] <= cx0 and (
+                            min(other["y"] + other["h"], cy1) - max(other["y"], cy0)
+                            > 0.3 * (cy1 - cy0)
+                        ):
+                            reach = max(reach, int(other["x"] + other["w"] + margin))
+                    if reach < cx0:
+                        cx0 = max(0, reach)
+                        cut_start = True
+                pending.append(
+                    (cluster, ub, (cx0, cy0, cx1, cy1), rimg.crop((cx0, cy0, cx1, cy1)), cut_start)
+                )
+
+            # Cheap first look: only clusters that read a digit get the full,
+            # voting recogniser.
+            keep_flags = self._fast_has_digit([item[3] for item in pending])
+            for (cluster, ub, (cx0, cy0, cx1, cy1), sub, cut_start), keep in zip(pending, keep_flags):
+                if not keep:
+                    continue
+                # The crop is already levelled, so the deskew variants inside
+                # recognize can add nothing here; three upright variants is
+                # the full vote.
+                res = self.recognize(
+                    sub, compute_text_bbox=False, max_paddle_predictions=3
+                )
+                if cut_start:
+                    # The recovered glyph has the leader through it, and on
+                    # the raw crop the recogniser reads the pair as one digit
+                    # ("6.5×45°"). On ink-normalised input it does not, so
+                    # that read is taken unless the raw one is more confident.
+                    alt = self.recognize(
+                        cad_ink_to_gray(sub).convert("RGB"),
+                        compute_text_bbox=False,
+                        max_paddle_predictions=3,
+                    )
+                    if float(alt.get("confidence") or 0.0) >= float(res.get("confidence") or 0.0):
+                        res = alt
                 text = strip_foreign_glyphs((res.get("text") or "").strip())
                 # A value with stacked deviations reads back interleaved. Only
-                # worth a finer pass when the text is long enough to hold one.
-                if sum(c.isdigit() for c in text) >= 5:
-                    text = self._stacked_deviation_read(sub, res) or text
+                # worth a finer pass when the text is long enough to hold one
+                # and looks like one: a fit class ("18H10") or two signed
+                # numbers. A chamfer "0.2-0.3×45°" has the digits but neither,
+                # and its re-detection cost a second on every neighbourhood.
+                if sum(c.isdigit() for c in text) >= 5 and (
+                    re.search(r"\d[A-Za-z]\d", text)
+                    or text.count("+") + text.count("-") + text.count("−") >= 2
+                ):
+                    members_in_crop = [
+                        {
+                            "x": float(b["x"]) - cx0,
+                            "y": float(b["y"]) - cy0,
+                            "w": float(b["w"]),
+                            "h": float(b["h"]),
+                        }
+                        for b in cluster
+                    ]
+                    text = (
+                        self._stacked_deviation_read(
+                            sub, res, member_boxes=members_in_crop
+                        )
+                        or text
+                    )
                 # "0.2-0.3×45°R1": a radius callout drawn right after the
                 # chamfer is a second value; keep the chamfer.
                 m_tail = re.match(r"^(.*\d°)\s*[Rr]\d[\d.]*$", text)
@@ -2773,14 +3504,10 @@ class OcrPipeline:
                     continue
                 if is_stray_line(sub, text):
                     continue
-                # A single slanted callout is ONE line of text, optionally with
-                # its tolerance stacked above/below it. Judge fusion by that
-                # structure — rows in the levelled frame — rather than by a raw
-                # digit count, which a legitimate fit callout
+                # Judge fusion by structure — rows in the levelled frame — rather
+                # than by a raw digit count, which a legitimate fit callout
                 # (``Ø20H10 +0.084/0``, 9 digits) trips.
                 if count_dimension_values(text) >= 2:
-                    continue
-                if self._cluster_row_count(cluster) > 3:
                     continue
                 if sum(c.isdigit() for c in text) > 14:
                     continue
@@ -2812,6 +3539,11 @@ class OcrPipeline:
                     box_x, box_y, box_w, box_h, inv
                 )
                 found.append(region)
+
+            # The text this neighbourhood exists for has been read confidently
+            # at this angle; the other candidate angles would only re-read it.
+            if any(seed_read(r) for r in found):
+                break
 
         return found
 
@@ -3083,6 +3815,267 @@ class OcrPipeline:
             superseded.add(id(base))
         return superseded
 
+    @staticmethod
+    def _quad_sides(quad: Any) -> tuple[float, float] | None:
+        """(long side, short side) of a four-point detection quad."""
+        import math
+
+        try:
+            pts = [(float(p[0]), float(p[1])) for p in quad][:4]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if len(pts) != 4:
+            return None
+        sides = [math.dist(pts[i], pts[(i + 1) % 4]) for i in range(4)]
+        return max(sides), min(sides)
+
+    def _callout_neighbourhoods(
+        self,
+        image: Image.Image,
+        det_boxes: list[dict[str, Any]],
+        *,
+        max_rois: int = 8,
+        with_quads: bool = False,
+    ) -> list[Any]:
+        """
+        One neighbourhood per slanted callout, from the detector's quads.
+
+        ``_slant_neighbourhoods`` grouped every slanted box whose padded extent
+        touched another's, with the padding taken from the box's axis-aligned
+        size. A 45° callout 350 px long has a 250 px square hull, so on a full
+        sheet the part view became ONE 1400 px neighbourhood that took two
+        minutes to level and read, and text on two different leaders was
+        levelled at one angle. Here each slanted quad is its own seed: the
+        padding is its text THICKNESS (so the deviation stack beside it is
+        included but the next callout is not), only boxes at the same angle
+        whose centre falls inside are absorbed, and the region is grown to a
+        minimum edge so the levelled view keeps some context.
+
+        Returns ``(roi, quad_angle, seed_box)`` per neighbourhood, largest text
+        first; ``seed_box`` is the seed's hull in ROI pixels.
+        """
+        iw, ih = image.size
+        seeds: list[dict[str, Any]] = []
+        for box in det_boxes or []:
+            quad = box.get("quad") or box.get("polygon")
+            angle = self._quad_angle(quad)
+            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
+                continue
+            if box.get("w", 0) <= 1 or box.get("h", 0) <= 1:
+                continue
+            sides = self._quad_sides(quad)
+            if sides is None:
+                continue
+            length, thickness = sides
+            # A speck or a square blob is not a line of text.
+            if thickness < 8.0 or length < 30.0 or length < 2.2 * thickness:
+                continue
+            seeds.append(
+                {
+                    **box,
+                    "angle": angle,
+                    "length": length,
+                    "thickness": thickness,
+                    "cx": box["x"] + box["w"] / 2.0,
+                    "cy": box["y"] + box["h"] / 2.0,
+                    "points": [(float(pt[0]), float(pt[1])) for pt in quad][:4],
+                }
+            )
+        if not seeds:
+            return []
+
+        def padded(b: dict[str, Any]) -> list[float]:
+            # Room for the deviation stack after the value (half its length)
+            # and about a line height around it. The thickness of a two-line
+            # quad ("0.5×45°" over "(BOTH SIDES)") is already two lines, so
+            # it is not doubled — that made a 900 px neighbourhood.
+            pad = max(1.2 * b["thickness"], 0.5 * b["length"], 40.0)
+            return [b["x"] - pad, b["y"] - pad, b["x"] + b["w"] + pad, b["y"] + b["h"] + pad]
+
+        seeds.sort(key=lambda b: b["length"], reverse=True)
+        used = [False] * len(seeds)
+        rois: list[tuple[float, tuple[int, int, int, int], float, tuple[float, float, float, float]]] = []
+        for i, seed in enumerate(seeds):
+            if used[i]:
+                continue
+            used[i] = True
+            extent = padded(seed)
+            weight = seed["length"]
+            for j, other in enumerate(seeds):
+                if used[j] or abs(other["angle"] - seed["angle"]) > 12.0:
+                    continue
+                if extent[0] <= other["cx"] <= extent[2] and extent[1] <= other["cy"] <= extent[3]:
+                    used[j] = True
+                    weight += other["length"]
+                    o = padded(other)
+                    extent = [
+                        min(extent[0], o[0]), min(extent[1], o[1]),
+                        max(extent[2], o[2]), max(extent[3], o[3]),
+                    ]
+            # Grow to a minimum edge, centred, so a short callout still gets a
+            # levelled view with context and only a moderate enlargement.
+            for axis in (0, 1):
+                size = extent[axis + 2] - extent[axis]
+                if size < _ANGLED_ROI_MIN_EDGE:
+                    grow = (_ANGLED_ROI_MIN_EDGE - size) / 2.0
+                    extent[axis] -= grow
+                    extent[axis + 2] += grow
+            x0 = max(0, int(extent[0]))
+            y0 = max(0, int(extent[1]))
+            x1 = min(iw, int(extent[2] + 0.999))
+            y1 = min(ih, int(extent[3] + 0.999))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            seed_box = (
+                float(seed["x"]) - x0,
+                float(seed["y"]) - y0,
+                float(seed["w"]),
+                float(seed["h"]),
+            )
+            rois.append((weight, (x0, y0, x1, y1), float(seed["angle"]), seed_box, seed["points"]))
+        rois.sort(key=lambda r: r[0], reverse=True)
+        if with_quads:
+            return [(roi, angle, seed_box, quad) for _w, roi, angle, seed_box, quad in rois[:max_rois]]
+        return [(roi, angle, seed_box) for _w, roi, angle, seed_box, _quad in rois[:max_rois]]
+
+    @staticmethod
+    def _leader_frame(line: dict[str, float]) -> tuple[float, float, float, float, float, float, float]:
+        """(x1, y1, dx, dy, nx, ny, length) with the start ordered along the reading direction."""
+        import math
+
+        x1, y1, x2, y2 = (float(line[k]) for k in ("x1", "y1", "x2", "y2"))
+        theta = math.radians(float(line["angle"]))
+        dx, dy = math.cos(theta), math.sin(theta)
+        if x2 * dx + y2 * dy < x1 * dx + y1 * dy:
+            x1, y1, x2, y2 = x2, y2, x1, y1
+        length = (x2 - x1) * dx + (y2 - y1) * dy
+        return x1, y1, dx, dy, -dy, dx, length
+
+    def _leader_text_side(
+        self, image: Image.Image, line: dict[str, float], line_h: float
+    ) -> float:
+        """
+        +1 or -1: which side of the leader its callout is written on.
+
+        The writing hugs the line — its baseline sits on it — so the ink in a
+        narrow band right against the line is the callout's own; a wider band
+        picks up the next leader's text as well and chose the wrong side on
+        the fit pair.
+        """
+        x1, y1, dx, dy, nx, ny, length = self._leader_frame(line)
+        iw, ih = image.size
+        corners = [
+            (x1 + t * dx + n * nx, y1 + t * dy + n * ny)
+            for t in (0.0, length + 1.5 * line_h)
+            for n in (-1.2 * line_h, 1.2 * line_h)
+        ]
+        bx0 = max(0, int(min(c[0] for c in corners)))
+        by0 = max(0, int(min(c[1] for c in corners)))
+        bx1 = min(iw, int(max(c[0] for c in corners)) + 1)
+        by1 = min(ih, int(max(c[1] for c in corners)) + 1)
+        if bx1 - bx0 < 2 or by1 - by0 < 2:
+            return 1.0
+        ys, xs = np.mgrid[by0:by1, bx0:bx1]
+        xs = xs.astype(np.float32) - x1
+        ys = ys.astype(np.float32) - y1
+        t = xs * dx + ys * dy
+        n = xs * nx + ys * ny
+        dark = np.asarray(image.crop((bx0, by0, bx1, by1)).convert("L")) < 128
+        band = dark & (t >= 0) & (t <= length + 1.5 * line_h) & (np.abs(n) >= 0.15 * line_h) & (np.abs(n) <= 1.1 * line_h)
+        return 1.0 if np.count_nonzero(band & (n > 0)) >= np.count_nonzero(band & (n < 0)) else -1.0
+
+    def _leader_corridor(
+        self,
+        image: Image.Image,
+        line: dict[str, float],
+        line_h: float,
+        other_lines: list[dict[str, float]] | None = None,
+        *,
+        side: float | None = None,
+        other_sides: list[float] | None = None,
+    ) -> tuple[tuple[int, int, int, int], Image.Image, list[tuple[float, float]]] | None:
+        """
+        The strip of drawing a callout written along ``line`` can occupy.
+
+        A slanted callout is lettered along its leader: the value sits just
+        above the line and its deviation stack right after the value. So the
+        text of ONE callout lies in a corridor along the leader, on the side
+        that carries ink, about two and a half lines deep. Where two leaders
+        run close together (the fit pair is 22° apart and shares an origin)
+        every pixel is given to the leader it is NEAREST, so the next leader's
+        text never enters this corridor. Returns the corridor's bounding box,
+        the crop with everything outside the corridor painted white, and the
+        corridor polygon in image pixels.
+        """
+        import math
+
+        iw, ih = image.size
+        x1, y1, x2, y2 = (float(line[k]) for k in ("x1", "y1", "x2", "y2"))
+        angle = float(line["angle"])
+        theta = math.radians(angle)
+        dx, dy = math.cos(theta), math.sin(theta)
+        nx, ny = -dy, dx
+        t1 = x1 * dx + y1 * dy
+        t2 = x2 * dx + y2 * dy
+        if t2 < t1:
+            x1, y1, x2, y2 = x2, y2, x1, y1
+            t1, t2 = t2, t1
+        length = t2 - t1
+        if length < 3.0 * line_h:
+            return None
+
+        def at(t: float, n: float) -> tuple[float, float]:
+            return (x1 + t * dx + n * nx, y1 + t * dy + n * ny)
+
+        t_lo, t_hi = -1.0 * line_h, length + 1.5 * line_h
+        n_far, n_near = 3.2 * line_h, 0.2 * line_h
+        corners = [at(t, n) for t in (t_lo, t_hi) for n in (-n_far, n_far)]
+        bx0 = max(0, int(min(c[0] for c in corners)) - 4)
+        by0 = max(0, int(min(c[1] for c in corners)) - 4)
+        bx1 = min(iw, int(max(c[0] for c in corners)) + 5)
+        by1 = min(ih, int(max(c[1] for c in corners)) + 5)
+        if bx1 - bx0 < 16 or by1 - by0 < 16:
+            return None
+
+        # Pixel geometry over the bounding box.
+        ys, xs = np.mgrid[by0:by1, bx0:bx1]
+        xs = xs.astype(np.float32) - x1
+        ys = ys.astype(np.float32) - y1
+        t = xs * dx + ys * dy
+        n = xs * nx + ys * ny
+        along = (t >= t_lo) & (t <= t_hi)
+        if side is None:
+            side = self._leader_text_side(image, line, line_h)
+        nearest = np.ones_like(t, dtype=bool)
+        for index, other in enumerate(other_lines or []):
+            ox1, oy1, odx, ody, onx, ony, olen = self._leader_frame(other)
+            o_side = (other_sides or [])[index] if other_sides and index < len(other_sides) else None
+            if o_side is None:
+                o_side = self._leader_text_side(image, other, line_h)
+            oxs = (xs + x1) - ox1
+            oys = (ys + y1) - oy1
+            ot = oxs * odx + oys * ody
+            on_signed = oxs * onx + oys * ony
+            # The other leader claims a pixel only on ITS text side, within its
+            # own extent (its text does not continue past its arrow), and only
+            # when clearly nearer. Distance alone is not enough: the upper
+            # deviation of the -34.5° fit is nearly equidistant from the -57°
+            # leader's tip — but it lies on the -57° leader's blank side.
+            o_along = (ot >= 0.0) & (ot <= olen)
+            nearest &= ~(o_along & (on_signed * o_side > 0) & (np.abs(on_signed) < 0.8 * np.abs(n)))
+
+        keep = along & nearest & (n * side >= -n_near) & (n * side <= n_far)
+
+        roi = np.asarray(image.crop((bx0, by0, bx1, by1)).convert("RGB")).copy()
+        roi[~keep] = 255
+        polygon = [
+            at(t_lo, -n_near * side),
+            at(t_hi, -n_near * side),
+            at(t_hi, n_far * side),
+            at(t_lo, n_far * side),
+        ]
+        return (bx0, by0, bx1, by1), Image.fromarray(roi), polygon
+
     def _detect_angled_regions(
         self,
         image: Image.Image,
@@ -3093,60 +4086,287 @@ class OcrPipeline:
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
         upright/90° detector misses.
 
-        Runs per diagonal *neighbourhood* rather than over the whole selection,
-        so the result no longer depends on how much of the drawing was selected —
+        Runs per callout *neighbourhood* rather than over the whole selection,
+        so the result does not depend on how much of the drawing was selected —
         the failure that left the two ``H10`` fit callouts unread on a full
         sheet while they read correctly on a zoomed crop. Each neighbourhood is
-        levelled by its own measured angle, re-detected, read, and mapped back.
-        Results are deduped against ``base_regions`` so a value already read
-        upright is not reported twice.
+        levelled by its own angles — the leader lines through it first, then
+        the detector's quad angle, then the slant vote — re-detected, read, and
+        mapped back. Results are deduped against ``base_regions`` so a value
+        already read upright is not reported twice.
         """
-        # First the whole selection, which is what a zoomed-in crop needs.
-        found = self._angled_in_roi(image)
-        # Then each diagonal neighbourhood, always — not only when the pass
-        # above came back empty. On a large selection the slant vote is diluted
-        # by the rest of the drawing and names one angle, so it recovers one
-        # leader's callout and misses its neighbour on the next leader. Working
-        # neighbourhood by neighbourhood picks up the rest; anything found
-        # twice is reconciled by the dedupe below.
         from region_detect import detect_leader_lines
 
-        leaders = detect_leader_lines(image)
-        for x0, y0, x1, y1 in self._slant_neighbourhoods(image, det_boxes or []):
-            sign = self._neighbourhood_sign(det_boxes or [], (x0, y0, x1, y1))
+        found: list[dict[str, Any]] = []
+        # The whole selection first, which is what a zoomed-in crop needs. A
+        # page-sized image gets no such pass: its vote names one angle for the
+        # whole sheet and levelling the full page costs more than every
+        # neighbourhood together.
+        if max(image.size) <= _ANGLED_WHOLE_IMAGE_MAX_EDGE:
+            found = self._angled_in_roi(image)
+
+        # The slanted quads at OTHER angles: text on a neighbouring leader. It
+        # is erased from each neighbourhood before levelling, because levelled
+        # for this callout it is still slanted and the detector fuses it with
+        # the callout's own text ("Ø20H10+0.0018H10+0.07") or crosses the two
+        # ("Ø10+0.0700"). It has a neighbourhood of its own.
+        slanted_quads: list[tuple[float, float, list[tuple[float, float]]]] = []
+        for box in det_boxes or []:
+            quad = box.get("quad") or box.get("polygon")
+            angle = self._quad_angle(quad)
+            if angle is None or abs(angle) < 8.0 or abs(angle) > 82.0:
+                continue
+            sides = self._quad_sides(quad)
+            try:
+                points = [(float(pt[0]), float(pt[1])) for pt in quad][:4]
+            except (TypeError, ValueError, IndexError):
+                continue
+            if len(points) == 4 and sides is not None:
+                slanted_quads.append((angle, sides[0], points))
+
+        def inside(poly: list[tuple[float, float]], pt: tuple[float, float]) -> bool:
+            x, y = pt
+            hit = False
+            for i in range(4):
+                ax, ay = poly[i]
+                bx, by = poly[(i + 1) % 4]
+                if (ay > y) != (by > y):
+                    cross = ax + (y - ay) * (bx - ax) / ((by - ay) or 1e-9)
+                    if x < cross:
+                        hit = not hit
+            return hit
+
+        def sample_points(poly: list[tuple[float, float]]) -> list[tuple[float, float]]:
+            # A 4x4 grid of interior points in the quad's own frame.
+            (ax, ay), (bx, by), (cx, cy), (dx, dy) = poly
+            pts = []
+            for u in (0.15, 0.4, 0.6, 0.85):
+                for v in (0.15, 0.4, 0.6, 0.85):
+                    top = (ax + (bx - ax) * u, ay + (by - ay) * u)
+                    bottom = (dx + (cx - dx) * u, dy + (cy - dy) * u)
+                    pts.append((top[0] + (bottom[0] - top[0]) * v, top[1] + (bottom[1] - top[1]) * v))
+            return pts
+
+        def share_ink(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> bool:
+            ab = sum(1 for pt in sample_points(a) if inside(b, pt)) / 16.0
+            ba = sum(1 for pt in sample_points(b) if inside(a, pt)) / 16.0
+            return max(ab, ba) >= 0.2
+
+        jobs: list[tuple[tuple[int, int, int, int], Image.Image, dict[str, Any]]] = []
+
+        # Leaders first. A leader's angle is exact and its position says where
+        # the callout's text is, which the detector's slanted quads do not:
+        # on the fit pair the value quad measured 8° off its leader and the
+        # stack quad 16°, and the longest "seed" quad was a box around the
+        # surface-finish triangles. Each leader gets one levelled pass over
+        # its own corridor, with the neighbouring leader's text painted out.
+        try:
+            page_leaders = detect_leader_lines(image)
+        except Exception:
+            page_leaders = []
+        # The sheet's slanted line height: the median thickness of quads that
+        # look like a line of writing (long, thin), never of every slanted
+        # speck — on a full sheet those dragged it to 35 px for 55 px text
+        # and the corridor was too shallow to hold the deviation stack. The
+        # upright text height is the floor: callouts are lettered at one size.
+        thicknesses = sorted(
+            sides[1]
+            for _angle, _length, points in slanted_quads
+            for sides in [self._quad_sides(points)]
+            if sides is not None
+            and sides[1] >= 8.0
+            and sides[0] >= 30.0
+            and sides[0] >= 2.2 * sides[1]
+        )
+        upright_heights = sorted(
+            float(b.get("h", 0))
+            for b in det_boxes or []
+            if float(b.get("w", 0)) >= 1.5 * float(b.get("h", 0)) > 0
+            and self._quad_angle(b.get("quad") or b.get("polygon")) is not None
+            and abs(self._quad_angle(b.get("quad") or b.get("polygon")) or 0.0) < 8.0
+        )
+        upright_h = upright_heights[len(upright_heights) // 2] if upright_heights else 0.0
+        slanted_h = thicknesses[len(thicknesses) // 2] if thicknesses else 0.0
+        line_h = max(slanted_h, upright_h, 30.0)
+        line_h = max(12.0, min(line_h, 160.0))
+        corridors: list[list[tuple[float, float]]] = []
+        page_leaders = page_leaders[:8]
+        leader_sides = [self._leader_text_side(image, line, line_h) for line in page_leaders]
+        for index, line in enumerate(page_leaders):
+            built = self._leader_corridor(
+                image,
+                line,
+                line_h,
+                other_lines=[o for k, o in enumerate(page_leaders) if k != index],
+                side=leader_sides[index],
+                other_sides=[sd for k, sd in enumerate(leader_sides) if k != index],
+            )
+            if built is None:
+                continue
+            (bx0, by0, bx1, by1), corridor_roi, polygon = built
+            corridors.append(polygon)
+            leader_angle = round(float(line["angle"]), 1)
+            jobs.append(
+                (
+                    (bx0, by0, bx1, by1),
+                    corridor_roi,
+                    {
+                        "sign": 1.0 if leader_angle >= 0 else -1.0,
+                        "max_magnitudes": 1,
+                        "weight_floor": 0.08,
+                        "fallback_angles": [leader_angle],
+                        "seed_box": None,
+                        "max_angles": 1,
+                        "line_height": line_h,
+                    },
+                )
+            )
+
+        def in_polygon(poly: list[tuple[float, float]], pt: tuple[float, float]) -> bool:
+            return inside(poly, pt)
+
+        for (x0, y0, x1, y1), quad_angle, seed_box, seed_quad in self._callout_neighbourhoods(
+            image, det_boxes or [], with_quads=True
+        ):
+            # A seed whose text lies in a leader's corridor was read there.
+            seed_centre = (
+                sum(px for px, _ in seed_quad) / 4.0,
+                sum(py for _, py in seed_quad) / 4.0,
+            )
+            if any(in_polygon(poly, seed_centre) for poly in corridors):
+                continue
             roi = image.crop((x0, y0, x1, y1))
-            leader_angles = self._leader_angles_for_roi(leaders, (x0, y0, x1, y1))
-            # Two zoom levels. Detection resolves a callout's parts at one
-            # zoom and its neighbour's at another — on the two fit callouts
-            # each is read cleanly at a different one — so gather both and
-            # let the quality ranking in ``_dedupe_angled`` choose.
-            for zoom in (1.0, 1.5):
-                if zoom == 1.0:
-                    view = roi
-                else:
-                    view = roi.resize(
-                        (int(roi.width * zoom), int(roi.height * zoom)),
-                        Image.Resampling.LANCZOS,
-                    )
-                for region in self._angled_in_roi(
-                    view,
-                    sign=sign,
-                    max_magnitudes=3,
-                    # Only consulted when no leader runs through the region:
-                    # this region is known to hold diagonal text, so a
-                    # magnitude needs less of the vote to be worth a try. At
-                    # sheet scale the correct angle is rarely the top bucket.
-                    weight_floor=0.08,
-                    fallback_angles=leader_angles,
-                ):
-                    for box in (region["bbox"], region.get("oriented_box")):
-                        if not box:
-                            continue
-                        box["x"] = round(box["x"] / zoom + x0, 1)
-                        box["y"] = round(box["y"] / zoom + y0, 1)
-                        box["width"] = round(box["width"] / zoom, 1)
-                        box["height"] = round(box["height"] / zoom, 1)
-                    found.append(region)
+            seed_length, seed_thickness = self._quad_sides(seed_quad) or (0.0, 1.0)
+            # Where a quad sits in the SEED'S OWN FRAME decides whether it is
+            # this callout's or a neighbour's. Reading runs along the seed's
+            # angle; its deviation stack sits ahead of the value's end and
+            # within about a line of its centre line. A quad elsewhere that is
+            # long enough to be a value, and shares no ink with the seed, is
+            # text on another leader. Quad angles are too noisy to use here:
+            # a stack's own quad came back 16° off its value, while the
+            # neighbouring leader was only 22° away.
+            import math
+
+            theta = math.radians(quad_angle)
+            direction = (math.cos(theta), math.sin(theta))
+            normal = (-direction[1], direction[0])
+            seed_t = [px * direction[0] + py * direction[1] for px, py in seed_quad]
+            seed_n = [px * normal[0] + py * normal[1] for px, py in seed_quad]
+            t_start, t_end = min(seed_t), max(seed_t)
+            n_mid = (min(seed_n) + max(seed_n)) / 2.0
+
+            def in_stack_zone(points: list[tuple[float, float]]) -> bool:
+                cx = sum(px for px, _ in points) / 4.0
+                cy = sum(py for _, py in points) / 4.0
+                t = cx * direction[0] + cy * direction[1]
+                n = cx * normal[0] + cy * normal[1]
+                return (
+                    t_start + 0.5 * (t_end - t_start) < t < t_end + 4.0 * seed_thickness
+                    and abs(n - n_mid) < 1.5 * seed_thickness
+                )
+
+            def is_second_line(angle: float, points: list[tuple[float, float]]) -> bool:
+                """
+                A parallel line of text directly above or below the seed.
+
+                "(BOTH SIDES)" under "0.5×45°" is the same callout, and so is
+                the value when the note line happened to be picked as the
+                seed. Blanking it as a neighbour erased the value itself, and
+                the neighbourhood then read only the note.
+                """
+                if abs(angle - quad_angle) > 10.0:
+                    return False
+                cx = sum(px for px, _ in points) / 4.0
+                cy = sum(py for _, py in points) / 4.0
+                t = cx * direction[0] + cy * direction[1]
+                n = cx * normal[0] + cy * normal[1]
+                return (
+                    t_start - seed_thickness < t < t_end + seed_thickness
+                    and abs(n - n_mid) <= 2.5 * seed_thickness
+                )
+
+            others = [
+                [(px - x0, py - y0) for px, py in points]
+                for angle, length, points in slanted_quads
+                if length >= 0.5 * seed_length
+                and not share_ink(points, seed_quad)
+                and not in_stack_zone(points)
+                and not is_second_line(angle, points)
+            ]
+            if others:
+                from PIL import ImageDraw
+
+                roi = roi.copy()
+                draw = ImageDraw.Draw(roi)
+                for polygon in others:
+                    # Grown by a few pixels so the strokes' anti-aliased edges go too.
+                    cx = sum(px for px, _ in polygon) / 4.0
+                    cy = sum(py for _, py in polygon) / 4.0
+                    grown = [
+                        (px + (4.0 if px > cx else -4.0), py + (4.0 if py > cy else -4.0))
+                        for px, py in polygon
+                    ]
+                    draw.polygon(grown, fill=(255, 255, 255))
+            sign = 1.0 if quad_angle >= 0 else -1.0
+            # Leaders are measured on the neighbourhood itself: cheap, and the
+            # lines found are the ones this text can sit on. Only those leaning
+            # the seed's way are candidates; the one nearest the quad's angle
+            # is tried first because it is almost certainly the seed's own.
+            try:
+                leaders = detect_leader_lines(roi)
+            except Exception:
+                leaders = []
+            leader_angles = [
+                a
+                for a in self._leader_angles_for_roi(
+                    leaders, (0, 0, x1 - x0, y1 - y0), max_angles=3
+                )
+                if (a >= 0) == (quad_angle >= 0)
+            ]
+            nearest = [a for a in leader_angles if abs(a - quad_angle) <= 8.0][:1]
+            others = [a for a in leader_angles if a not in nearest][:2]
+            candidate_angles = nearest + [round(quad_angle, 1)] + others
+            jobs.append(
+                (
+                    (x0, y0, x1, y1),
+                    roi,
+                    {
+                        "sign": sign,
+                        "max_magnitudes": 1,
+                        # This region is known to hold diagonal text, so a
+                        # magnitude needs less of the vote to be worth a try.
+                        "weight_floor": 0.08,
+                        "fallback_angles": candidate_angles,
+                        "seed_box": tuple(float(v) for v in seed_box),
+                        "max_angles": 3,
+                    },
+                )
+            )
+
+        # Each neighbourhood is independent, so they are dealt across the OCR
+        # workers when the server has them; otherwise read here, in order.
+        pool = self._worker_pool() if len(jobs) > 1 else None
+        if pool is not None:
+            from ocr_workers import image_to_png, run_task
+
+            payloads = [
+                {"png": image_to_png(roi), "kwargs": kwargs} for _box, roi, kwargs in jobs
+            ]
+            per_roi = pool.map(
+                "angled_roi",
+                payloads,
+                local=lambda payload: run_task(self, "angled_roi", payload),
+            )
+        else:
+            per_roi = [self._angled_in_roi(roi, **kwargs) for _box, roi, kwargs in jobs]
+        for ((x0, y0, _x1, _y1), _roi, _kwargs), regions_here in zip(jobs, per_roi):
+            for region in regions_here or []:
+                for box in (region["bbox"], region.get("oriented_box")):
+                    if not box:
+                        continue
+                    box["x"] = round(box["x"] + x0, 1)
+                    box["y"] = round(box["y"] + y0, 1)
+                found.append(region)
 
         superseded = self._supersede_fused_base(found, base_regions)
         return self._dedupe_angled(
@@ -3282,7 +4502,11 @@ class OcrPipeline:
         return Image.fromarray(rot), inv
 
     def _stacked_deviation_read(
-        self, crop: Image.Image, res: dict[str, Any]
+        self,
+        crop: Image.Image,
+        res: dict[str, Any],
+        *,
+        member_boxes: list[dict[str, Any]] | None = None,
     ) -> str | None:
         """
         Re-read a levelled callout as ``value upper/lower``, or ``None``.
@@ -3301,8 +4525,73 @@ class OcrPipeline:
 
         parts = self._paddle_det_boxes(cad_ink_to_gray(crop).convert("RGB"))
         raw = stacked_deviation_text(parts)
+        # The detector inside the crop tends to lose the small lower deviation
+        # ("0") that the levelled pass had found as a box of its own. Those
+        # member boxes are read with the fast recogniser and added wherever
+        # the crop's detection left a gap, then the members alone are tried.
+        if not raw and member_boxes and getattr(
+            self, "_page_batch_recognition_available", False
+        ):
+            try:
+                part_crops = []
+                usable_members = []
+                for box in member_boxes:
+                    x0 = max(0, int(box["x"]) - 2)
+                    y0 = max(0, int(box["y"]) - 2)
+                    x1 = min(crop.width, int(box["x"] + box["w"]) + 2)
+                    y1 = min(crop.height, int(box["y"] + box["h"]) + 2)
+                    if x1 - x0 < 2 or y1 - y0 < 2:
+                        continue
+                    part_crops.append(crop.crop((x0, y0, x1, y1)))
+                    usable_members.append(box)
+                fast = self._recognize_page_batch(part_crops, batch_size=16)
+                member_parts = [
+                    {
+                        **box,
+                        "text": str(item.get("raw_ocr") or item.get("text") or ""),
+                        "conf": float(item.get("confidence") or 0.0),
+                    }
+                    for box, item in zip(usable_members, fast)
+                ]
+
+                def overlaps_a_part(box: dict[str, Any]) -> bool:
+                    for part in parts:
+                        ox = min(box["x"] + box["w"], part["x"] + part["w"]) - max(box["x"], part["x"])
+                        oy = min(box["y"] + box["h"], part["y"] + part["h"]) - max(box["y"], part["y"])
+                        if ox > 0 and oy > 0 and ox * oy >= 0.3 * box["w"] * box["h"]:
+                            return True
+                    return False
+
+                combined = list(parts) + [m for m in member_parts if not overlaps_a_part(m)]
+                raw = stacked_deviation_text(combined) or stacked_deviation_text(member_parts)
+            except Exception:
+                raw = None
+        if not raw:
+            # Last resort: the interleaved string itself. Reading order puts
+            # the upper deviation first, then the value, then the lower
+            # deviation — "+0.07018H100" is "+0.070" | "18H10" | "0". A
+            # deviation has two or three decimals and a fit class is one to
+            # three digits, a letter and one or two digits, which pins the
+            # split. Stray letters from a finish mark at either end are
+            # dropped first.
+            import re as _re
+
+            text = str(res.get("text") or "")
+            text = _re.sub(r"^[^+\-−\dØø]+|[^0-9]+$", "", text.replace(" ", ""))
+            m = _re.fullmatch(
+                r"([+\-−]\d[.,]\d{2,3})(\d{1,3}[A-Za-z]\d{1,2})([+\-−]?\d(?:[.,]\d{1,3})?)",
+                text,
+            )
+            if m:
+                raw = f"{m.group(2)} {m.group(1)}/{m.group(3)}"
         if not raw:
             return None
+        # The value part sometimes carries the upper deviation's sign (and a
+        # stray "0") when the detector cut between them: "18H10+0 +0.070/0".
+        # A value never ends in a bare sign, so it is dropped.
+        import re as _re2
+
+        raw = _re2.sub(r"[+\-−]0?\s+(?=[+\-−])", " ", raw)
         symbols = DetectedSymbols(**(res.get("symbols_detected") or {}))
         composed = compose_engineering_dimension(raw, crop, symbols)
         text = (composed.text or "").strip()
@@ -3334,10 +4623,180 @@ class OcrPipeline:
             return 0.0
         return float(shorts[len(shorts) // 2])
 
+    @staticmethod
+    def _record_text_boxes(
+        records: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Detection-style boxes (x, y, w, h, text, conf) from page records."""
+        boxes: list[dict[str, Any]] = []
+        for record in records:
+            if record.get("table_excluded"):
+                continue
+            result = record.get("result") or {}
+            text = str(result.get("raw_ocr") or record.get("text") or "").strip()
+            if not text:
+                continue
+            bbox = record.get("bbox") or {}
+            try:
+                boxes.append(
+                    {
+                        "x": float(bbox["x"]),
+                        "y": float(bbox["y"]),
+                        "w": float(bbox["width"]),
+                        "h": float(bbox["height"]),
+                        "text": text,
+                        "conf": float(result.get("confidence") or 0.0),
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return boxes
+
+    def _notes_boxes_near_anchor(
+        self,
+        image: Image.Image,
+        boxes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Line boxes from a recognising pass over the corner the notes sit in.
+
+        The corner is found from what was already read: the "NOTES:" heading,
+        or failing that the column of point markers ("12345") that the
+        detector returns as one tall object. The crop runs from there to the
+        right edge of the sheet and down to the first title-block word, so
+        one small OCR pass replaces the whole-page pass that cost 75 s.
+        Returns [] when neither anchor is present.
+        """
+        heading = None
+        column = None
+        for b in boxes:
+            text = str(b.get("text") or "").strip()
+            if heading is None and _NOTES_ANCHOR_RE.match(text):
+                heading = b
+            elif (
+                column is None
+                and _NOTE_COLUMN_RE.match(text)
+                and b["h"] >= 2.5 * b["w"]
+            ):
+                digits = re.sub(r"\D", "", text)
+                if digits == "".join(str(i) for i in range(1, len(digits) + 1)):
+                    column = b
+        iw, ih = image.size
+        if heading is not None:
+            line_h = float(heading["h"])
+            x0 = heading["x"] - 0.5 * line_h
+            y0 = heading["y"] - 0.5 * line_h
+            y1 = heading["y"] + 14.0 * line_h
+            anchor_bottom = heading["y"] + heading["h"]
+        elif column is not None:
+            count = len(re.sub(r"\D", "", str(column.get("text") or "")))
+            line_h = float(column["h"]) / max(count, 1)
+            x0 = column["x"] - 0.5 * line_h
+            y0 = column["y"] - 2.0 * line_h
+            y1 = column["y"] + column["h"] + 2.0 * line_h
+            anchor_bottom = column["y"] + column["h"]
+        else:
+            return []
+        # The paragraph never continues past the top of the title block.
+        for b in boxes:
+            if (
+                b["y"] >= anchor_bottom
+                and b["x"] < x0 + 0.6 * iw
+                and _TITLE_BLOCK_WORDS_RE.search(str(b.get("text") or ""))
+            ):
+                y1 = min(y1, b["y"])
+        crop_box = (
+            max(0, int(x0)),
+            max(0, int(y0)),
+            iw,
+            min(ih, int(y1)),
+        )
+        if crop_box[2] - crop_box[0] < 8 or crop_box[3] - crop_box[1] < 8:
+            return []
+        try:
+            found = self._detect_regions_ocr(image.crop(crop_box).convert("RGB"))
+        except Exception:
+            return []
+        for b in found:
+            b["x"] = round(b["x"] + crop_box[0], 1)
+            b["y"] = round(b["y"] + crop_box[1], 1)
+        return self._join_note_markers(found)
+
+    @staticmethod
+    def _join_note_markers(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Put each point marker back on its line.
+
+        At sheet resolution the detector returns "1." and "MATERIAL: …" as two
+        boxes, and two markers drawn close together as one ("45."). The block
+        finder recognises a point by its marker AND its first word, so a lone
+        marker is joined to the line box beside it on the same row, and a
+        fused marker column is cut into one box per digit first.
+        """
+        lone = re.compile(r"^\s*(\d{1,2})\s*[.)]?\s*$")
+        expanded: list[dict[str, Any]] = []
+        for b in boxes:
+            text = str(b.get("text") or "").strip()
+            digits = re.sub(r"\D", "", text)
+            if (
+                _NOTE_COLUMN_RE.match(text) or (lone.match(text) and len(digits) >= 2)
+            ) and len(digits) >= 2 and b["h"] >= 1.5 * b["w"]:
+                pitch = b["h"] / len(digits)
+                for i, d in enumerate(digits):
+                    expanded.append(
+                        {**b, "y": round(b["y"] + i * pitch, 1), "h": round(pitch, 1), "text": f"{d}."}
+                    )
+            else:
+                expanded.append(b)
+
+        markers = [b for b in expanded if lone.match(str(b.get("text") or ""))]
+        lines = [b for b in expanded if b not in markers]
+        used: set[int] = set()
+        out: list[dict[str, Any]] = []
+        for m in markers:
+            m_text = str(m.get("text") or "").strip()
+            digit = lone.match(m_text).group(1)
+            best = None
+            best_gap = None
+            for i, ln in enumerate(lines):
+                if i in used:
+                    continue
+                text = str(ln.get("text") or "")
+                if sum(c.isalpha() for c in text) < 3:
+                    continue
+                gap = ln["x"] - (m["x"] + m["w"])
+                if gap < -0.3 * m["h"] or gap > 2.0 * m["h"]:
+                    continue
+                overlap = min(m["y"] + m["h"], ln["y"] + ln["h"]) - max(m["y"], ln["y"])
+                if overlap < 0.5 * min(m["h"], ln["h"]):
+                    continue
+                if best is None or gap < best_gap:
+                    best, best_gap = i, gap
+            if best is None:
+                out.append(m)
+                continue
+            used.add(best)
+            ln = lines[best]
+            top = min(m["y"], ln["y"])
+            bottom = max(m["y"] + m["h"], ln["y"] + ln["h"])
+            out.append(
+                {
+                    "x": m["x"],
+                    "y": top,
+                    "w": round(ln["x"] + ln["w"] - m["x"], 1),
+                    "h": round(bottom - top, 1),
+                    "text": f"{digit}. {str(ln.get('text') or '').strip()}",
+                    "conf": min(float(m.get("conf") or 0.0), float(ln.get("conf") or 0.0)),
+                }
+            )
+        out.extend(ln for i, ln in enumerate(lines) if i not in used)
+        return out
+
     def _notes_region(
         self,
         image: Image.Image,
         *,
+        boxes: list[dict[str, Any]] | None = None,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
     ) -> dict[str, Any] | None:
@@ -3352,11 +4811,21 @@ class OcrPipeline:
         neighbouring dimension clusters, which is how a balloon came out as
         "AN.2WTOOPING.".
         """
-        try:
-            boxes = self._detect_regions_ocr(image)
-        except Exception:
-            return None
+        if boxes is None:
+            try:
+                boxes = self._detect_regions_ocr(image)
+            except Exception:
+                return None
         region, _ = self._detect_notes_block(boxes)
+        if region is None:
+            # The page route's objects are not lines: it hands over the
+            # marker column as one tall "12345" and each long note line
+            # read as debris, so the markers this looks for are missing.
+            # The heading (or the column) still says where the block IS, so
+            # just that corner is read again, line by line.
+            near = self._notes_boxes_near_anchor(image, boxes)
+            if near:
+                region, _ = self._detect_notes_block(near)
         if region is None:
             return None
         bounds = region.pop("_bounds", None)
@@ -3807,6 +5276,27 @@ class OcrPipeline:
                 self._cluster_row_count(cluster) >= 2
                 and ub["width"] >= ub["height"]
             )
+            if multirow:
+                # A limit dimension is one callout drawn on two rows; read it
+                # as one value before the split has a chance to cut it in two.
+                limit = self._read_limit_pair(
+                    image,
+                    {"x": cx0, "y": cy0, "width": cx1 - cx0, "height": cy1 - cy0},
+                )
+                if limit is not None:
+                    limit_res = dict(limit["result"])
+                    limit_res["type"] = limit["type"]
+                    limit_res["confidence"] = limit["confidence"]
+                    feature = classify_feature(
+                        limit["text"], symbols=limit_res.get("symbols_detected") or {}
+                    )
+                    limit_res["category"], limit_res["subtype"], limit_res["label"] = (
+                        feature.category, feature.subtype, feature.label,
+                    )
+                    regions.append(
+                        self._region_from_result(limit_res, limit["bbox"], limit["text"])
+                    )
+                    continue
             if multivalue or multirow:
                 split_regions = self._split_stacked_cluster(
                     image, (cx0, cy0, cx1, cy1),
@@ -3866,6 +5356,8 @@ class OcrPipeline:
             candidate_count=cluster_total,
         )
         regions = self._complete_angle_regions(image, regions)
+        # Inch limits beside their bracketed metric limits are one callout.
+        regions, _joined_metric = join_dual_unit_limits(regions)
         regions = dedupe_regions(regions)
 
         # Recover slanted callouts (chamfers, angled fits) the upright/90°
@@ -3946,6 +5438,84 @@ class OcrPipeline:
             "candidate_outcomes": candidate_outcomes,
         }
 
+    def _worker_pool(self) -> Any | None:
+        """
+        The started OCR worker pool, or ``None`` to run everything in-process.
+
+        Only the server starts the pool (in its start-up hook); tests and
+        scripts never spawn workers unless they ask to, and every pooled stage
+        has an in-process path that is exactly the sequential code.
+        """
+        try:
+            from ocr_workers import get_worker_pool
+
+            pool = get_worker_pool(start=False)
+        except Exception:  # noqa: BLE001 - no pool is a slower scan, not a failure
+            return None
+        try:
+            return pool if pool.available else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _authoritative_attempts(
+        self,
+        tight_crop: Any,
+        padded_crop: Any,
+        *,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+        max_paddle_predictions: int | None = None,
+        preliminary_text: str = "",
+    ) -> list[dict[str, Any]]:
+        """
+        The full Draw Value OCR read of one detected object: the tight crop,
+        then the padded crop only when the tight read cannot be accepted.
+
+        ``max_paddle_predictions`` bounds the voting recogniser per crop. The
+        page route passes 3: its crops are rectified upright from the detector
+        polygon, so the two deskew variants can add nothing, and on the junk
+        objects that reach this stage (specks, hatching, a datum letter) they
+        doubled a read that was never going to be a value.
+
+        The padded retry exists to complete a value the tight crop clipped.
+        When neither the tight read nor the preliminary read contains a single
+        digit there is no value to complete, so the retry is skipped.
+        """
+        from page_candidate_recovery import (
+            assess_authoritative_result,
+            authoritative_result_needs_retry,
+        )
+
+        tight_result = self.recognize(
+            tight_crop.image,
+            debug_dump=debug_dump,
+            debug_dump_force=debug_dump_force,
+            compute_text_bbox=True,
+            max_paddle_predictions=max_paddle_predictions,
+        )
+        attempts = [assess_authoritative_result(tight_result, tight_crop)]
+        if authoritative_result_needs_retry(attempts[0]):
+            digit_seen = any(
+                c.isdigit()
+                for c in (
+                    str(attempts[0].get("text") or "")
+                    + str(tight_result.get("raw_ocr") or "")
+                    + str(preliminary_text or "")
+                )
+            )
+            if digit_seen:
+                padded_result = self.recognize(
+                    padded_crop.image,
+                    debug_dump=debug_dump,
+                    debug_dump_force=debug_dump_force,
+                    compute_text_bbox=True,
+                    max_paddle_predictions=max_paddle_predictions,
+                )
+                attempts.append(
+                    assess_authoritative_result(padded_result, padded_crop)
+                )
+        return attempts
+
     def segment_page(
         self,
         image: Image.Image,
@@ -4010,7 +5580,9 @@ class OcrPipeline:
             select_recovery_record_indexes,
         )
         from page_value_filters import (
+            EXCLUDE_TABLE_REGIONS,
             PageValueCandidate,
+            candidate_is_in_table,
             is_complete_engineering_value,
             evaluate_page_value,
             needs_expanded_filter_context,
@@ -4125,6 +5697,116 @@ class OcrPipeline:
         )
 
         detector_pass_index = 0
+        detection_pool = self._worker_pool() if detector_pass_total > 2 else None
+        if detection_pool is not None:
+            # Every (panel, rotation) pass is independent, so they are dealt
+            # across the OCR workers and this process; boxes are mapped back
+            # to the page here, in pass order, exactly as the loop below does.
+            from ocr_workers import image_to_png, png_to_image
+
+            full_target_edge = max(
+                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+                detection_primary_target_edge(masked_page),
+            )
+            pass_specs: list[tuple[int, Any, int, int, tuple[int, int]]] = []
+            payloads: list[dict[str, Any]] = []
+            for tile_index, tile in enumerate(tiles, start=1):
+                tile_image = masked_page.crop(tile.box)
+                primary_image = build_primary_detection_image(tile_image)
+                target_long_edge = detection_tile_target_edge(
+                    tile,
+                    full_size=page_size,
+                    pass_target_edge=full_target_edge,
+                )
+                for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                    pass_specs.append(
+                        (tile_index, tile, rotation_cw, target_long_edge, tile_image.size)
+                    )
+                    payloads.append(
+                        {
+                            "png": image_to_png(
+                                rotate_for_detection(primary_image, rotation_cw)
+                            ),
+                            "target_long_edge": target_long_edge,
+                        }
+                    )
+            report(
+                stage="detecting",
+                message=(
+                    f"Running {detector_pass_total} detector-only passes across "
+                    "the OCR workers"
+                ),
+                percent=12,
+                completed=0,
+                total=detector_pass_total,
+                pass_current=1,
+                pass_total=detector_pass_total,
+                tile_current=1,
+                tile_total=tile_total,
+                operation_label="Adaptive panels · detector only",
+                candidate_count=0,
+                overlay=layout.overlay(scope_kind="page", panel_states=panel_states),
+            )
+            passes_done = 0
+
+            def on_pass_done(index: int, detected_boxes: Any) -> None:
+                nonlocal passes_done
+                passes_done += 1
+                tile_index, tile, rotation_cw, _target, tile_size = pass_specs[index]
+                for detected in detected_boxes or []:
+                    restored = map_quarter_turn_box_to_source(
+                        detected, rotation_cw, tile_size
+                    )
+                    if restored is None:
+                        continue
+                    mapped = map_tile_candidate(
+                        {
+                            "x": restored["x"],
+                            "y": restored["y"],
+                            "width": restored["w"],
+                            "height": restored["h"],
+                        },
+                        tile,
+                        tile_index=tile_index,
+                        page_size=page_size,
+                        detection_confidence=float(restored.get("conf", 0.0)),
+                        pass_index=index + 1,
+                        rotation_cw=rotation_cw,
+                        polygon=restored.get("polygon"),
+                    )
+                    if mapped is not None:
+                        page_candidates.append(mapped)
+                panel_states[layout.panels[tile_index - 1].panel_id] = "completed"
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Completed detector-only pass {passes_done} of "
+                        f"{detector_pass_total}; collected "
+                        f"{len(page_candidates)} raw candidates"
+                    ),
+                    percent=12 + int(40 * passes_done / max(detector_pass_total, 1)),
+                    completed=passes_done,
+                    total=detector_pass_total,
+                    pass_current=passes_done,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=f"Panel {tile_index} · {rotation_cw} deg complete",
+                    candidate_count=len(page_candidates),
+                    overlay=layout.overlay(scope_kind="page", panel_states=panel_states),
+                )
+
+            detection_pool.map(
+                "detect_tile",
+                payloads,
+                local=lambda payload: self._detector_only_boxes(
+                    png_to_image(payload["png"]),
+                    target_long_edge=int(payload["target_long_edge"]),
+                ),
+                on_item_done=on_pass_done,
+            )
+            detector_pass_index = detector_pass_total
+            tiles = []
         for tile_index, tile in enumerate(tiles, start=1):
             panel_id = layout.panels[tile_index - 1].panel_id
             panel_states[panel_id] = "active"
@@ -4315,14 +5997,56 @@ class OcrPipeline:
             ),
         )
 
+        table_masks = [mask.to_dict() for mask in layout.table_masks]
         margin = 6
         page_width, page_height = page_size
         detected_count = len(final_candidates)
         primary_recognized_count = 0
-        ocr_records: list[dict[str, Any]] = []
-        candidate_crops: list[Image.Image] = []
-        for candidate in final_candidates:
-            bbox = candidate.bbox
+        # An object inside a detected table is excluded by the page policy
+        # whatever it reads — the table rule is checked before the text — so
+        # recognising it first is pure cost. On a real sheet the title block
+        # and the tolerance tables held 60 of 204 detected objects. They keep
+        # their record (the state invariant counts every detection) but skip
+        # every recognition, recovery and reread batch.
+        recognition_indexes = [
+            index
+            for index, candidate in enumerate(final_candidates)
+            if not (
+                EXCLUDE_TABLE_REGIONS
+                and candidate_is_in_table(candidate.bbox, table_masks)
+            )
+        ]
+        recognition_total = len(recognition_indexes)
+        table_skipped_count = detected_count - recognition_total
+        ocr_records: list[dict[str, Any]] = [
+            {
+                "candidate": candidate,
+                "candidate_id": candidate.candidate_id,
+                "bbox": candidate.bbox,
+                "polygon": [list(point) for point in candidate.polygon],
+                "text": "",
+                "result": {
+                    "text": "",
+                    "raw_ocr": "",
+                    "confidence": 0.0,
+                    "agreement": 0.0,
+                    "needs_review": False,
+                    "type": None,
+                    "engine": "paddleocr",
+                    "orientation": "horizontal",
+                    "rotation": 0,
+                    "symbols_detected": None,
+                    "ocr_profile": "table_region_skipped",
+                },
+                "recognized": False,
+                "context_text": "",
+                "table_excluded": True,
+            }
+            for candidate in final_candidates
+        ]
+        candidate_crops: dict[int, Image.Image] = {}
+        for index in recognition_indexes:
+            bbox = final_candidates[index].bbox
             x0 = max(0, int(bbox["x"] - margin))
             y0 = max(0, int(bbox["y"] - margin))
             x1 = min(
@@ -4333,22 +6057,126 @@ class OcrPipeline:
                 page_height,
                 int(bbox["y"] + bbox["height"] + margin + 0.999),
             )
-            candidate_crops.append(
+            candidate_crops[index] = (
                 image.crop((x0, y0, x1, y1))
                 if x1 > x0 and y1 > y0
                 else Image.new("RGB", (1, 1), (255, 255, 255))
             )
 
         primary_batch_total = (
-            (detected_count + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
+            (recognition_total + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
             // PAGE_SCAN_RECOGNITION_BATCH_SIZE
         )
-        for batch_index, batch_start in enumerate(
-            range(0, detected_count, PAGE_SCAN_RECOGNITION_BATCH_SIZE),
-            start=1,
-        ):
+        pool = self._worker_pool()
+
+        def apply_primary_batch(
+            batch_record_indexes: list[int], batch_results: list[dict[str, Any]]
+        ) -> None:
+            nonlocal primary_recognized_count
+            if len(batch_results) != len(batch_record_indexes):
+                raise RuntimeError(
+                    "Page recognition batch returned an unexpected result count"
+                )
+            for record_index, result in zip(batch_record_indexes, batch_results):
+                text = str(result.get("text") or "").strip()
+                if text:
+                    primary_recognized_count += 1
+                record = ocr_records[record_index]
+                record["text"] = text
+                record["result"] = result
+                record["recognized"] = bool(text)
+                record["table_excluded"] = False
+
+        def run_pooled_batches(
+            *,
+            stage: str,
+            label: str,
+            batches: list[list[Image.Image]],
+            profile: str,
+            percent_from: int,
+            percent_span: int,
+            overlay: dict[str, object] | None,
+            on_batch: Callable[[int, list[dict[str, Any]]], None],
+        ) -> None:
+            """Run recognition batches across the worker pool, reporting as each lands."""
+            from ocr_workers import image_to_png, png_to_image
+
+            total = len(batches)
+            report(
+                stage=stage,
+                message=f"{label}: {total} batches across the OCR workers",
+                percent=percent_from,
+                completed=0,
+                total=total,
+                batch_current=1,
+                batch_total=total,
+                operation_label=f"{label} 1/{total}",
+                candidate_count=sum(len(b) for b in batches),
+                overlay=overlay,
+            )
+            payloads = [
+                {
+                    "pngs": [image_to_png(crop) for crop in batch],
+                    "batch_size": PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                    "profile": profile,
+                }
+                for batch in batches
+            ]
+            finished = 0
+
+            def on_done(index: int, results: Any) -> None:
+                nonlocal finished
+                finished += 1
+                on_batch(index, list(results))
+                report(
+                    stage=stage,
+                    message=f"Completed {label.lower()} batch {finished} of {total}",
+                    percent=percent_from + int(percent_span * finished / max(total, 1)),
+                    completed=finished,
+                    total=total,
+                    batch_current=finished,
+                    batch_total=total,
+                    operation_label=f"{label} {finished}/{total}",
+                    candidate_count=sum(len(b) for b in batches),
+                )
+
+            pool.map(
+                "batch",
+                payloads,
+                local=lambda payload: self._recognize_page_batch(
+                    [png_to_image(data) for data in payload["pngs"]],
+                    batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                    profile=profile,
+                ),
+                on_item_done=on_done,
+            )
+
+        primary_batches = [
+            recognition_indexes[start : start + PAGE_SCAN_RECOGNITION_BATCH_SIZE]
+            for start in range(0, recognition_total, PAGE_SCAN_RECOGNITION_BATCH_SIZE)
+        ]
+        if pool is not None and len(primary_batches) > 1:
+            run_pooled_batches(
+                stage="recognizing",
+                label="Primary recognition",
+                batches=[[candidate_crops[i] for i in b] for b in primary_batches],
+                profile="batch_recognition",
+                percent_from=59,
+                percent_span=17,
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=neutral_overlay_candidates,
+                ),
+                on_batch=lambda index, results: apply_primary_batch(
+                    primary_batches[index], results
+                ),
+            )
+            primary_batches = []
+        for batch_index, batch_record_indexes in enumerate(primary_batches, start=1):
+            batch_start = (batch_index - 1) * PAGE_SCAN_RECOGNITION_BATCH_SIZE
             batch_end = min(
-                detected_count,
+                recognition_total,
                 batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             )
             report(
@@ -4356,7 +6184,8 @@ class OcrPipeline:
                 message=(
                     f"Primary recognition batch {batch_index} of "
                     f"{primary_batch_total} ({batch_start + 1}–{batch_end} "
-                    f"of {detected_count} objects)"
+                    f"of {recognition_total} objects; "
+                    f"{table_skipped_count} table objects skipped)"
                 ),
                 percent=(
                     59
@@ -4381,32 +6210,10 @@ class OcrPipeline:
                 ),
             )
             batch_results = self._recognize_page_batch(
-                candidate_crops[batch_start:batch_end],
+                [candidate_crops[index] for index in batch_record_indexes],
                 batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             )
-            if len(batch_results) != batch_end - batch_start:
-                raise RuntimeError(
-                    "Page recognition batch returned an unexpected result count"
-                )
-            for candidate, result in zip(
-                final_candidates[batch_start:batch_end],
-                batch_results,
-            ):
-                text = str(result.get("text") or "").strip()
-                if text:
-                    primary_recognized_count += 1
-                ocr_records.append(
-                    {
-                        "candidate": candidate,
-                        "candidate_id": candidate.candidate_id,
-                        "bbox": candidate.bbox,
-                        "polygon": [list(point) for point in candidate.polygon],
-                        "text": text,
-                        "result": result,
-                        "recognized": bool(text),
-                        "context_text": "",
-                    }
-                )
+            apply_primary_batch(batch_record_indexes, batch_results)
             report(
                 stage="recognizing",
                 message=(
@@ -4429,15 +6236,26 @@ class OcrPipeline:
                 candidate_count=detected_count,
             )
 
-        selected_recovery_indexes = select_recovery_record_indexes(
-            ocr_records,
-            maximum=RECOVERY_MAX_CANDIDATES,
-        )
+        # Table-skipped objects read as empty, which is exactly what selects a
+        # record for recovery, so they are kept out of the pool (and its
+        # budget) rather than filtered after selection.
+        recoverable_indexes = [
+            index
+            for index, record in enumerate(ocr_records)
+            if not record.get("table_excluded")
+        ]
+        selected_recovery_indexes = [
+            recoverable_indexes[position]
+            for position in select_recovery_record_indexes(
+                [ocr_records[index] for index in recoverable_indexes],
+                maximum=RECOVERY_MAX_CANDIDATES,
+            )
+        ]
         selected_recovery_set = set(selected_recovery_indexes)
         all_doubtful_indexes = {
             index
-            for index, record in enumerate(ocr_records)
-            if result_needs_recovery(record["result"])
+            for index in recoverable_indexes
+            if result_needs_recovery(ocr_records[index]["result"])
         }
         budget_exhausted_indexes = (
             all_doubtful_indexes - selected_recovery_set
@@ -4474,17 +6292,42 @@ class OcrPipeline:
             )
             // PAGE_SCAN_RECOGNITION_BATCH_SIZE
         )
-        for first_batch_index, batch_start in enumerate(
-            range(
-                0,
-                len(selected_recovery_indexes),
-                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
-            ),
-            start=1,
-        ):
-            batch_indexes = selected_recovery_indexes[
+        first_recovery_batches = [
+            selected_recovery_indexes[
                 batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
             ]
+            for batch_start in range(
+                0, len(selected_recovery_indexes), PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            )
+        ]
+        if pool is not None and len(first_recovery_batches) > 1:
+            def apply_first_recovery(index: int, results: list[dict[str, Any]]) -> None:
+                batch_indexes = first_recovery_batches[index]
+                if len(results) != len(batch_indexes):
+                    raise RuntimeError(
+                        "Page recovery batch returned an unexpected result count"
+                    )
+                for record_index, result in zip(batch_indexes, results):
+                    recovery_attempts[record_index].append(result)
+
+            run_pooled_batches(
+                stage="recovering",
+                label="Recovery pass 1",
+                batches=[
+                    [recovery_crops[i][0].image for i in b] for b in first_recovery_batches
+                ],
+                profile=recovery_crops[first_recovery_batches[0][0]][0].profile,
+                percent_from=77,
+                percent_span=6,
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+                on_batch=apply_first_recovery,
+            )
+            first_recovery_batches = []
+        for first_batch_index, batch_indexes in enumerate(first_recovery_batches, start=1):
             batch_profile = recovery_crops[batch_indexes[0]][0].profile
             report(
                 stage="recovering",
@@ -4572,20 +6415,45 @@ class OcrPipeline:
         recovery_batch_total = (
             first_recovery_batch_total + second_recovery_batch_total
         )
-        for second_batch_index, batch_start in enumerate(
-            range(
-                0,
-                len(second_recovery_indexes),
-                PAGE_SCAN_RECOGNITION_BATCH_SIZE,
-            ),
-            start=1,
-        ):
+        second_recovery_batches = [
+            second_recovery_indexes[
+                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            ]
+            for batch_start in range(
+                0, len(second_recovery_indexes), PAGE_SCAN_RECOGNITION_BATCH_SIZE
+            )
+        ]
+        if pool is not None and len(second_recovery_batches) > 1:
+            def apply_second_recovery(index: int, results: list[dict[str, Any]]) -> None:
+                batch_indexes = second_recovery_batches[index]
+                if len(results) != len(batch_indexes):
+                    raise RuntimeError(
+                        "Page recovery batch returned an unexpected result count"
+                    )
+                for record_index, result in zip(batch_indexes, results):
+                    recovery_attempts[record_index].append(result)
+
+            run_pooled_batches(
+                stage="recovering",
+                label="Recovery pass 2",
+                batches=[
+                    [recovery_crops[i][1].image for i in b] for b in second_recovery_batches
+                ],
+                profile=recovery_crops[second_recovery_batches[0][0]][1].profile,
+                percent_from=83,
+                percent_span=6,
+                overlay=layout.overlay(
+                    scope_kind="page",
+                    panel_states=panel_states,
+                    candidates=recovery_overlay_candidates,
+                ),
+                on_batch=apply_second_recovery,
+            )
+            second_recovery_batches = []
+        for second_batch_index, batch_indexes in enumerate(second_recovery_batches, start=1):
             recovery_batch_index = (
                 first_recovery_batch_total + second_batch_index
             )
-            batch_indexes = second_recovery_indexes[
-                batch_start : batch_start + PAGE_SCAN_RECOGNITION_BATCH_SIZE
-            ]
             batch_profile = recovery_crops[batch_indexes[0]][1].profile
             report(
                 stage="recovering",
@@ -4654,6 +6522,8 @@ class OcrPipeline:
             )
 
         for index, record in enumerate(ocr_records):
+            if record.get("table_excluded"):
+                continue
             resolved = resolve_recovery_consensus(
                 record["result"],
                 recovery_attempts.get(index, ()),
@@ -4774,7 +6644,6 @@ class OcrPipeline:
                 candidate_count=len(context_ocr_indexes),
             )
 
-        table_masks = [mask.to_dict() for mask in layout.table_masks]
         hard_exclusion_rules = {
             "table_region",
             # A sheet-frame zone label is not a value a human can confirm, so
@@ -4830,6 +6699,12 @@ class OcrPipeline:
                         review_reason
                         or "Recognition found no text at this object",
                     )
+                if record.get("speck"):
+                    return (
+                        "excluded",
+                        "No text was read at this object and it is too small "
+                        "to hold a value",
+                    )
                 return (
                     "review",
                     review_reason or "Accurate recognition returned no text",
@@ -4863,6 +6738,36 @@ class OcrPipeline:
                     or "Recognition remains genuinely ambiguous after recovery",
                 )
             return "eligible", decision.reason
+
+        # An object that read as nothing through the primary pass AND both
+        # recovery passes, and whose box could not hold even two characters of
+        # this sheet's text, is a speck — a tick, an arrowhead, a piece of
+        # hatching. On a real sheet 28 of 86 authoritative rereads were such
+        # objects and every one came back empty. Boxes large enough to hold a
+        # value keep their reread: an empty batch read of a real value is
+        # exactly what that pass exists to rescue.
+        recognized_heights = sorted(
+            float(record["bbox"]["height"])
+            for record in ocr_records
+            if record.get("recognized")
+            and float(record["bbox"]["width"]) >= float(record["bbox"]["height"])
+        )
+        speck_line_height = (
+            recognized_heights[len(recognized_heights) // 2]
+            if recognized_heights
+            else 0.0
+        )
+        if speck_line_height > 0:
+            for record in ocr_records:
+                if record.get("table_excluded") or record.get("recognized"):
+                    continue
+                width = float(record["bbox"]["width"])
+                height = float(record["bbox"]["height"])
+                if (
+                    max(width, height) < 1.2 * speck_line_height
+                    or min(width, height) < 0.45 * speck_line_height
+                ):
+                    record["speck"] = True
 
         # Keep the current fast page policy as the cost gate. Only objects that
         # would be published or reviewed receive the expensive Draw Value OCR.
@@ -4905,6 +6810,98 @@ class OcrPipeline:
                 authoritative_indexes.append(filter_index - 1)
 
         authoritative_total = len(authoritative_indexes)
+
+        def apply_authoritative(
+            record: dict[str, Any], attempts: list[dict[str, Any]]
+        ) -> None:
+            previous_result = dict(record["result"])
+            record["preliminary_result"] = previous_result
+            record["preliminary_text"] = str(previous_result.get("text") or "")
+            accurate_result = resolve_authoritative_hypotheses(
+                previous_result,
+                attempts,
+            )
+            accurate_text = str(accurate_result.get("text") or "")
+            record["result"] = accurate_result
+            record["text"] = accurate_text
+            record["recognized"] = bool(accurate_text)
+            record["authoritative_reread"] = True
+
+        if pool is not None and authoritative_total > 1:
+            # Every object's two crops are built up front (cheap, pure image
+            # work); the reads — the expensive part — are dealt across the
+            # workers and this process. Results are applied in order.
+            from ocr_workers import image_to_png, run_task
+
+            report(
+                stage="rereading",
+                message=(
+                    f"Reading {authoritative_total} final values with Draw "
+                    "Value OCR across the OCR workers"
+                ),
+                percent=95,
+                completed=0,
+                total=authoritative_total,
+                object_current=1,
+                object_total=authoritative_total,
+                operation_label="Authoritative value OCR",
+                candidate_count=authoritative_total,
+            )
+            payloads = []
+            for record_index in authoritative_indexes:
+                record = ocr_records[record_index]
+                crops = build_authoritative_crops(
+                    image, record["bbox"], record["polygon"]
+                )
+                payloads.append(
+                    {
+                        "crops": [
+                            {
+                                "profile": crop.profile,
+                                "png": image_to_png(crop.image),
+                                "target_bbox": dict(crop.target_bbox),
+                                "target_polygon": [
+                                    list(point) for point in crop.target_polygon
+                                ],
+                                "polygon_usable": bool(crop.polygon_usable),
+                            }
+                            for crop in crops
+                        ],
+                        "debug_dump": debug_dump,
+                        "debug_dump_force": debug_dump_force,
+                        "max_paddle_predictions": _PAGE_REREAD_MAX_PREDICTIONS,
+                        "preliminary_text": str(record.get("text") or ""),
+                    }
+                )
+            reread_done = 0
+
+            def on_reread_done(index: int, attempts: Any) -> None:
+                nonlocal reread_done
+                reread_done += 1
+                apply_authoritative(
+                    ocr_records[authoritative_indexes[index]], list(attempts)
+                )
+                report(
+                    stage="rereading",
+                    message=(
+                        f"Read final value {reread_done} of {authoritative_total}"
+                    ),
+                    percent=95 + int(3 * reread_done / max(authoritative_total, 1)),
+                    completed=reread_done,
+                    total=authoritative_total,
+                    object_current=reread_done,
+                    object_total=authoritative_total,
+                    operation_label="Authoritative value OCR",
+                    candidate_count=authoritative_total,
+                )
+
+            pool.map(
+                "authoritative",
+                payloads,
+                local=lambda payload: run_task(self, "authoritative", payload),
+                on_item_done=on_reread_done,
+            )
+            authoritative_indexes = []
         for reread_index, record_index in enumerate(
             authoritative_indexes,
             start=1,
@@ -4931,43 +6928,22 @@ class OcrPipeline:
                 operation_label="Authoritative value OCR",
                 candidate_count=authoritative_total,
             )
-            previous_result = dict(record["result"])
-            record["preliminary_result"] = previous_result
             authoritative_crops = build_authoritative_crops(
                 image,
                 record["bbox"],
                 record["polygon"],
             )
-            tight_crop = authoritative_crops[0]
-            tight_result = self.recognize(
-                tight_crop.image,
-                debug_dump=debug_dump,
-                debug_dump_force=debug_dump_force,
-                compute_text_bbox=True,
-            )
-            authoritative_attempts = [
-                assess_authoritative_result(tight_result, tight_crop)
-            ]
-            if authoritative_result_needs_retry(authoritative_attempts[0]):
-                padded_crop = authoritative_crops[1]
-                padded_result = self.recognize(
-                    padded_crop.image,
+            apply_authoritative(
+                record,
+                self._authoritative_attempts(
+                    authoritative_crops[0],
+                    authoritative_crops[1],
                     debug_dump=debug_dump,
                     debug_dump_force=debug_dump_force,
-                    compute_text_bbox=True,
-                )
-                authoritative_attempts.append(
-                    assess_authoritative_result(padded_result, padded_crop)
-                )
-            accurate_result = resolve_authoritative_hypotheses(
-                previous_result,
-                authoritative_attempts,
+                    max_paddle_predictions=_PAGE_REREAD_MAX_PREDICTIONS,
+                    preliminary_text=str(record.get("text") or ""),
+                ),
             )
-            accurate_text = str(accurate_result.get("text") or "")
-            record["result"] = accurate_result
-            record["text"] = accurate_text
-            record["recognized"] = bool(accurate_text)
-            record["authoritative_reread"] = True
             report(
                 stage="rereading",
                 message=(
@@ -5092,6 +7068,21 @@ class OcrPipeline:
                 ),
                 "numeric_conflict": bool(result.get("numeric_conflict")),
             }
+            self._apply_feature_labels(common_region)
+            # A one- or two-character review candidate that the recogniser
+            # itself puts below even odds ("3" at 0.15, "2" at 0.24) is a
+            # stroke it could not resolve, not a value awaiting confirmation;
+            # a queue of those teaches the inspector to ignore the queue.
+            if (
+                final_state == "review"
+                and len(published_text.strip()) <= 2
+                and float(result.get("confidence") or 0.0) < 0.5
+            ):
+                final_state = "excluded"
+                final_reason = (
+                    "Recognition could not resolve this short mark with any "
+                    "confidence"
+                )
             if final_state == "eligible":
                 regions.append(common_region)
             elif final_state == "review":
@@ -5103,6 +7094,11 @@ class OcrPipeline:
                 "polygon": [list(point) for point in candidate.polygon],
                 "state": final_state,
                 "text": published_text,
+                "preliminary_text": str(
+                    (record.get("preliminary_result") or {}).get("text")
+                    or record.get("preliminary_text")
+                    or ""
+                ),
                 "confidence": float(result.get("confidence") or 0.0),
                 "recognized": record["recognized"],
                 "reason": final_reason,
@@ -5131,14 +7127,132 @@ class OcrPipeline:
         # one. The section route has always re-segmented such a read; the same
         # pass runs here, replacing a region only when the finer look actually
         # resolves two or more worthy values.
+        report(
+            stage="filtering",
+            message="Re-segmenting fused or stacked candidates",
+            percent=99,
+            completed=detected_count,
+            total=detected_count,
+            candidate_count=len(regions),
+            operation_label="Stacked-callout split",
+        )
         split_regions: list[dict[str, Any]] = []
+        split_jobs: list[tuple[dict[str, Any], tuple[int, int, int, int]]] = []
+        # Limit dimensions resolved as one value, and the objects that own them.
+        limit_boxes: list[dict[str, float]] = []
+        limit_owners: set[str] = set()
+
+        def retire_inside(
+            boxes: list[dict[str, float]], reason: str, *, keep: set[str]
+        ) -> None:
+            """
+            Retire published regions and review candidates lying inside ``boxes``.
+
+            Their outcome moves to excluded, so the state invariant below
+            still balances. Regions this route did not detect itself (the
+            notes block, slanted reads) carry no candidate id and are never
+            retired.
+            """
+            nonlocal regions, review_candidates
+            from geom_utils import contains_point, region_center
+
+            def inside(item: dict[str, Any]) -> bool:
+                try:
+                    centre = region_center(item)
+                except Exception:
+                    return False
+                return any(contains_point({"bbox": lb}, centre) for lb in boxes)
+
+            retired: set[str] = set()
+            kept_regions: list[dict[str, Any]] = []
+            for item in regions:
+                cid = str(item.get("candidate_id") or "")
+                if cid and cid not in keep and inside(item):
+                    retired.add(cid)
+                    continue
+                kept_regions.append(item)
+            regions = kept_regions
+            kept_reviews: list[dict[str, Any]] = []
+            for item in review_candidates:
+                cid = str(item.get("candidate_id") or "")
+                if cid and cid not in keep and inside(item):
+                    retired.add(cid)
+                    continue
+                kept_reviews.append(item)
+            review_candidates = kept_reviews
+            for outcome in candidate_outcomes:
+                if outcome["candidate_id"] in retired:
+                    outcome["state"] = "excluded"
+                    outcome["reason"] = reason
+            for overlay_item in filtered_overlay_candidates:
+                if overlay_item.get("id") in retired:
+                    overlay_item["state"] = "excluded"
+                    overlay_item["reason"] = reason
+
+        # The sheet's own line height, from the upright objects it detected:
+        # a box has to be at least two of those tall to hold a stacked pair.
+        upright_heights = sorted(
+            float(record["bbox"]["height"])
+            for record in ocr_records
+            if record.get("recognized")
+            and float(record["bbox"]["width"]) >= float(record["bbox"]["height"])
+        )
+        page_line_height = (
+            upright_heights[len(upright_heights) // 2] if upright_heights else 0.0
+        )
         for region in regions:
             text = str(region.get("text") or "")
             box = region["bbox"]
-            tall = box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(
-                box["width"], 1.0
+            # A tall box is two stacked lines only when the text runs across
+            # it; a vertical dimension is tall because it is one line turned
+            # through 90°. The section route has always made this distinction
+            # (its multirow split requires width >= height); without it every
+            # vertical value on a sheet paid for a detection cascade here.
+            vertical_text = str(region.get("orientation") or "") == "vertical"
+            # A limit dimension — "Ø0.620" over "0.612" — is ONE callout, and
+            # the one stacked thing the split below must not cut in two. Any
+            # published piece of it (the whole read flat, a column, a row) is
+            # at least two lines tall, so a tall object is first read as a
+            # limit stack over the whole callout; only when that fails does
+            # the two-callout split get its turn. A second piece of a stack
+            # already resolved is left for retirement below.
+            if page_line_height > 0 and box["height"] >= 1.7 * page_line_height and not vertical_text:
+                from geom_utils import contains_point, region_center
+
+                centre = region_center(region)
+                if any(contains_point({"bbox": lb}, centre) for lb in limit_boxes):
+                    split_regions.append(region)
+                    continue
+                group = self._limit_group_bbox(box, ocr_records, page_line_height)
+                limit = None
+                try:
+                    limit = self._read_limit_pair(
+                        image, group, max_paddle_predictions=_PAGE_REREAD_MAX_PREDICTIONS
+                    )
+                except Exception:
+                    limit = None
+                if limit is not None:
+                    region["text"] = limit["text"]
+                    region["bbox"] = dict(limit["bbox"])
+                    region["type"] = limit["type"]
+                    region["confidence"] = limit["confidence"]
+                    region["needs_review"] = False
+                    region["orientation"] = "horizontal"
+                    region["rotation"] = 0
+                    region.pop("oriented_box", None)
+                    self._apply_feature_labels(region)
+                    limit_boxes.append(dict(limit["bbox"]))
+                    limit_owners.add(str(region.get("candidate_id") or ""))
+                    split_regions.append(region)
+                    continue
+            tall = (
+                box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(box["width"], 1.0)
+                and box["height"] >= 1.7 * page_line_height
+                and not vertical_text
             )
-            if count_dimension_values(text) < 2 and not tall:
+            # Stacked pairs are drawn one above the other in reading direction;
+            # a vertical dimension is one line, however many numbers it holds.
+            if vertical_text or (count_dimension_values(text) < 2 and not tall):
                 split_regions.append(region)
                 continue
             margin = 6
@@ -5148,10 +7262,42 @@ class OcrPipeline:
                 min(image.width, int(box["x"] + box["width"] + margin)),
                 min(image.height, int(box["y"] + box["height"] + margin)),
             )
+            split_jobs.append((region, coords))
+            split_regions.append(region)  # placeholder, replaced below if the split is usable
+
+        def run_split(coords: tuple[int, int, int, int]) -> list[dict[str, Any]] | None:
             try:
-                pieces = self._split_stacked_cluster(image, coords)
+                return self._split_stacked_cluster(
+                    image, coords, max_paddle_predictions=_PAGE_REREAD_MAX_PREDICTIONS
+                )
             except Exception:
-                pieces = None
+                return None
+
+        split_pool = self._worker_pool() if len(split_jobs) > 1 else None
+        if split_pool is not None:
+            # Each fused candidate is re-segmented independently, so the crops
+            # are dealt across the OCR workers; pieces come back in crop
+            # pixels and are moved to page pixels here.
+            from ocr_workers import image_to_png, run_task
+
+            payloads = [
+                {"png": image_to_png(image.crop(coords)), "max_paddle_predictions": _PAGE_REREAD_MAX_PREDICTIONS}
+                for _region, coords in split_jobs
+            ]
+            raw_pieces = split_pool.map(
+                "split", payloads, local=lambda payload: run_task(self, "split", payload)
+            )
+            split_results: list[list[dict[str, Any]] | None] = []
+            for (_region, (cx0, cy0, _cx1, _cy1)), pieces in zip(split_jobs, raw_pieces):
+                if pieces:
+                    for piece in pieces:
+                        piece["bbox"]["x"] = round(float(piece["bbox"]["x"]) + cx0, 1)
+                        piece["bbox"]["y"] = round(float(piece["bbox"]["y"]) + cy0, 1)
+                split_results.append(list(pieces) if pieces else None)
+        else:
+            split_results = [run_split(coords) for _region, coords in split_jobs]
+
+        for (region, _coords), pieces in zip(split_jobs, split_results):
             # Splitting a garbled read just yields garbled pieces, so the
             # finer look is only taken when every piece it produced is itself
             # a complete engineering value. That keeps the recovered
@@ -5163,12 +7309,35 @@ class OcrPipeline:
                 )
                 for piece in pieces
             )
-            if usable:
-                split_regions.extend(pieces)
-                detected_count += len(pieces) - 1
-            else:
-                split_regions.append(region)
+            if not usable:
+                continue
+            position = next(
+                (k for k, item in enumerate(split_regions) if item is region), None
+            )
+            if position is None:
+                continue
+            split_regions[position : position + 1] = list(pieces)
+            detected_count += len(pieces) - 1
         regions = split_regions
+        if limit_boxes:
+            # The other cuts of a resolved stack — "620612", "Ø1.00", the top
+            # row alone — would each have carried a balloon of their own.
+            retire_inside(
+                limit_boxes, "Part of a limit dimension read as one value", keep=limit_owners
+            )
+            # A dual-unit sheet draws the metric limits in brackets beside the
+            # inch ones; the two stacks are one callout.
+            regions, joined_metric = join_dual_unit_limits(regions)
+            joined_ids = {str(item.get("candidate_id") or "") for item in joined_metric}
+            joined_ids.discard("")
+            for outcome in candidate_outcomes:
+                if outcome["candidate_id"] in joined_ids:
+                    outcome["state"] = "excluded"
+                    outcome["reason"] = "Metric half of a dual-unit limit dimension"
+            for overlay_item in filtered_overlay_candidates:
+                if overlay_item.get("id") in joined_ids:
+                    overlay_item["state"] = "excluded"
+                    overlay_item["reason"] = "Metric half of a dual-unit limit dimension"
 
         # Slanted callouts (chamfers, angled fits) that this route cannot read:
         # its detection only ever levels by a quarter turn, so text drawn along
@@ -5178,9 +7347,31 @@ class OcrPipeline:
         # pays one Hough call. Appended after the page policy, so an angled read
         # only ADDS a value the upright passes missed; detected_count moves with
         # it so the state invariant below still balances.
+        # The neighbourhoods come from the quads this route already detected;
+        # a second whole-page detection purely to find them cost 17 s.
+        angled_seed_boxes = [
+            {
+                "x": candidate.bbox["x"],
+                "y": candidate.bbox["y"],
+                "w": candidate.bbox["width"],
+                "h": candidate.bbox["height"],
+                "quad": [list(point) for point in candidate.polygon],
+                "text": "",
+            }
+            for candidate in final_candidates
+        ]
+        report(
+            stage="angled",
+            message="Reading slanted callouts along their leader lines",
+            percent=99,
+            completed=detected_count,
+            total=detected_count,
+            candidate_count=len(regions),
+            operation_label="Slanted callouts",
+        )
         try:
             angled_regions = self._detect_angled_regions(
-                image, regions, det_boxes=self.detect_regions(image)
+                image, regions, det_boxes=angled_seed_boxes
             )
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
@@ -5199,13 +7390,54 @@ class OcrPipeline:
         regions = [r for r in regions if not r.pop("superseded", False)]
         detected_count -= before_supersede - len(regions)
 
+        # A review candidate lying under an accepted slanted read is the
+        # upright pass's failed attempt at the same ink — "6.5×0" under
+        # "0.5×45°", "2CH10" under "Ø20H10+0.084/0". Shown together they put a
+        # grey box on top of the balloon that resolved it, so the candidate is
+        # retired as excluded (its outcome moves from review to excluded, so
+        # the state invariant below still balances).
+        if angled_regions:
+            from geom_utils import contains_point, overlap_frac, region_center
+
+            retired_ids: set[str] = set()
+            kept_reviews: list[dict[str, Any]] = []
+            for candidate in review_candidates:
+                covered = any(
+                    overlap_frac(candidate, angled) >= 0.3
+                    or contains_point(angled, region_center(candidate))
+                    for angled in angled_regions
+                )
+                if covered:
+                    retired_ids.add(str(candidate.get("candidate_id")))
+                else:
+                    kept_reviews.append(candidate)
+            review_candidates = kept_reviews
+            for outcome in candidate_outcomes:
+                if outcome["candidate_id"] in retired_ids:
+                    outcome["state"] = "excluded"
+                    outcome["reason"] = "Resolved by a slanted read of the same callout"
+            for overlay_item in filtered_overlay_candidates:
+                if overlay_item.get("id") in retired_ids:
+                    overlay_item["state"] = "excluded"
+                    overlay_item["reason"] = "Resolved by a slanted read of the same callout"
+
         # The NOTES paragraph, read as one region rather than left to leak into
         # neighbouring clusters as fragments. Same accounting as the angled
         # pass, so the state invariant below still balances.
+        # Built from the lines this route has ALREADY read: a second whole-page
+        # OCR pass purely to find the NOTES markers cost 75 s on one sheet and
+        # found nothing the panel passes had not. The raw recogniser text is
+        # used because the value normaliser rewrites prose.
         notes_region = self._notes_region(
-            image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
+            image,
+            boxes=self._record_text_boxes(ocr_records),
+            debug_dump=debug_dump,
+            debug_dump_force=debug_dump_force,
         )
         if notes_region is not None:
+            # The fragments the block was assembled from — the marker column,
+            # a phrase out of one line — must not keep balloons of their own.
+            retire_inside([dict(notes_region["bbox"])], "Part of the general notes", keep=set())
             regions.append(notes_region)
             detected_count += 1
 

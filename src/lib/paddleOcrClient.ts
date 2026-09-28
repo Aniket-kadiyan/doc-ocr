@@ -163,6 +163,18 @@ export interface ApiSegmentRegion {
   label?: string;
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
+  /**
+   * Tight rotated rectangle for a slanted callout, in the same pixel space as
+   * `bbox` (top-left corner + size + clockwise rotation degrees). Only the
+   * angled pass sets it; upright reads carry `bbox` alone.
+   */
+  oriented_box?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  };
   needs_review?: boolean;
   recognized?: boolean;
   page_filter_rule?: string;
@@ -194,7 +206,11 @@ export interface ApiSegmentResponse {
   }>;
 }
 
-function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
+function mappedSegmentRegion(
+  r: ApiSegmentRegion,
+  valueBox: BBox,
+  orientedBox?: BBox & { rotation: number }
+): SegmentRegion {
   return {
     candidateId: r.candidate_id,
     // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
@@ -215,6 +231,7 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     reviewReason: r.review_reason,
     recoveryAttempted: r.recovery_attempted,
     valueBox,
+    orientedBox,
   };
 }
 
@@ -253,7 +270,20 @@ export function mapSegmentRegions(
         }
       : mapped;
 
-    return mappedSegmentRegion(r, valueBox);
+    // Map the oriented rectangle (angled callouts only) the same way — its
+    // top-left corner translates + scales like any point; rotation is invariant.
+    const orientedBox =
+      r.oriented_box && !outOfBounds
+        ? {
+            x: bbox.x + (r.oriented_box.x - CROP_PAD_PX) / displayScale,
+            y: bbox.y + (r.oriented_box.y - CROP_PAD_PX) / displayScale,
+            width: r.oriented_box.width / displayScale,
+            height: r.oriented_box.height / displayScale,
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, valueBox, orientedBox);
   });
 }
 
@@ -290,7 +320,20 @@ export function mapPageSegmentRegions(
       direct.x + direct.width > pageBounds.x + pageBounds.width ||
       direct.y + direct.height > pageBounds.y + pageBounds.height;
 
-    return mappedSegmentRegion(r, invalid ? pageBounds : direct);
+    // The oriented rectangle lives in the same page pixels as `bbox`, so it
+    // comes down by the same scale. Rotation is scale-invariant.
+    const orientedBox =
+      r.oriented_box && !invalid
+        ? {
+            x: toBounds(r.oriented_box.x),
+            y: toBounds(r.oriented_box.y),
+            width: toBounds(r.oriented_box.width),
+            height: toBounds(r.oriented_box.height),
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
   });
 }
 

@@ -1,5 +1,6 @@
 import type { ProjectRecord } from "@/lib/db";
 import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
+import { balloonLabel } from "@/lib/featureLabel";
 import { valueAnnotations } from "@/lib/project";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetSnapshotPayload } from "@/types/checksheet";
@@ -64,7 +65,7 @@ export function buildChecksheetCreationSnapshot({
         page: annotation.page,
         bbox: { ...annotation.bbox },
         rotation: annotation.rotation,
-        label: annotation.label ?? "",
+        label: balloonLabel(annotation),
         specification: annotation.value,
         tolerance: annotation.range ?? "",
         method: annotation.method ?? "",

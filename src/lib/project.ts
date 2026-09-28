@@ -1,4 +1,5 @@
 import type { Annotation } from "@/types/annotation";
+import { balloonLabel } from "@/lib/featureLabel";
 import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
@@ -144,7 +145,7 @@ export function buildInspectionSheet(
     .sort((a, b) => a.number - b.number)
     .map((a) => [
       String(a.number),
-      oneLine(a.label ?? ""),
+      oneLine(balloonLabel(a)),
       oneLine(a.value),
       a.range ?? "",
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),

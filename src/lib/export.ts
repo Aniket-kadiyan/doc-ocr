@@ -1,4 +1,5 @@
 import type { Annotation } from "@/types/annotation";
+import { isNoteAnnotation } from "@/lib/notes";
 import {
   buildInspectionSheet,
   type InspectionSheet,
@@ -16,12 +17,20 @@ const VALID_EMBEDDED_TOLERANCE = new RegExp(
  * Return dimensions containing tolerance-like text that cannot be interpreted.
  * The annotations remain untouched and editable; callers use this only to
  * prevent saving/exporting an ambiguous checksheet.
+ *
+ * A drawing NOTES block is prose, not a measurement, and it reads as a
+ * malformed tolerance on sight: the first number is its point marker ("1.")
+ * and almost any note carries a hyphen after it ("ASTM B633-LATEST REV."),
+ * which looks exactly like an unreadable minus tolerance. That blocked every
+ * save and export on a sheet whose notes were ballooned, so notes are exempt —
+ * they are never given a tolerance and never inspected as a value.
  */
 export function findMalformedToleranceAnnotations(
   annotations: Annotation[]
 ): Annotation[] {
   return annotations.filter((annotation) => {
     if ((annotation.kind ?? "dimension") !== "dimension") return false;
+    if (isNoteAnnotation(annotation)) return false;
 
     const tolerance = (annotation.range ?? "").trim();
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);

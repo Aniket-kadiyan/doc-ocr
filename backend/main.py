@@ -119,6 +119,15 @@ def classify_dimension(text: str) -> DimensionType:
 def startup() -> None:
     initialize_checksheet_storage()
     get_pipeline()
+    # OCR worker processes for the parallel parts of a page scan. Spawned now
+    # so a scan never waits for their model load; OCR_WORKERS=0 disables them.
+    try:
+        from ocr_workers import get_worker_pool
+
+        pool = get_worker_pool(start=True)
+        print(f"[ocr_workers] {pool.size} worker process(es) starting")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001 - a scan still runs in-process
+        print(f"[ocr_workers] disabled: {exc}")  # noqa: T201
     st = dump_status()
     if st["enabled"]:
         print(f"[debug_dump] ON → {st['root']}")  # noqa: T201
@@ -131,12 +140,29 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown() -> None:
     scan_job_manager.shutdown(wait=False)
+    try:
+        from ocr_workers import shutdown_worker_pool
+
+        shutdown_worker_pool()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
-    return {"status": "ok", **pipeline.status, "debug_dump": dump_status()}
+    try:
+        from ocr_workers import get_worker_pool
+
+        workers = get_worker_pool(start=False).status()
+    except Exception:  # noqa: BLE001
+        workers = {"configured": 0, "started": False, "ready": 0, "broken": True}
+    return {
+        "status": "ok",
+        **pipeline.status,
+        "debug_dump": dump_status(),
+        "ocr_workers": workers,
+    }
 
 
 @app.post("/checksheet/templates")
@@ -378,15 +404,23 @@ def _map_section_result_to_page(
                 "rule": rule,
             }
         )
-        mapped_regions.append(
-            {
-                **region,
-                "bbox": page_bbox,
-                "text": text,
-                "page_filter_rule": rule,
-                "page_filter_reason": reason,
+        mapped_region = {
+            **region,
+            "bbox": page_bbox,
+            "text": text,
+            "page_filter_rule": rule,
+            "page_filter_reason": reason,
+        }
+        # A slanted callout's tight rotated rectangle is in section pixels
+        # too; it translates like the bbox and its rotation is unchanged.
+        oriented = region.get("oriented_box")
+        if isinstance(oriented, dict):
+            mapped_region["oriented_box"] = {
+                **oriented,
+                "x": round(origin_x + float(oriented.get("x", 0.0)), 1),
+                "y": round(origin_y + float(oriented.get("y", 0.0)), 1),
             }
-        )
+        mapped_regions.append(mapped_region)
 
     mapped_outcomes: list[dict[str, Any]] = []
     for outcome in list(seg.get("candidate_outcomes", [])):

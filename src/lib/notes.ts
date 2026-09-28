@@ -38,7 +38,15 @@ const INLINE_POINT = /(?:^|\s)(\d{1,2})\s*[.)]\s*(?=\D)/g;
  * block whatever it was called — no dimension callout has that shape.
  */
 export function isNoteAnnotation(a: Annotation): boolean {
-  return NOTE_TYPES.has(a.type) || splitNotePoints(a.value).length >= 2;
+  return isNoteText(a.type, a.value);
+}
+
+/**
+ * The same test for anything carrying a type and a text, such as a checksheet
+ * row, which is a snapshot of an annotation rather than an annotation.
+ */
+export function isNoteText(type: string, text: string): boolean {
+  return NOTE_TYPES.has(type) || splitNotePoints(text).length >= 2;
 }
 
 /**

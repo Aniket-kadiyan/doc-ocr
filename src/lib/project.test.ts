@@ -86,7 +86,8 @@ describe("project and integration exports", () => {
     // The value rows come first; the title-block section (a gap, then one row
     // per configured keyword) is appended under them and asserted separately.
     expect(sheet.rows.slice(0, values.length)).toEqual([
-      ["1", "", "25", "0", "", "", "", ""],
+      // No label was stored on this one, so it shows its category label.
+      ["1", "Linear Dimension", "25", "0", "", "", "", ""],
       [
         "2",
         "Outer diameter",

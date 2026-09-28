@@ -427,12 +427,144 @@ def _cells_are_adjacent(
     return vertical_edge or horizontal_edge
 
 
+# Cell-geometry limits, as fractions of the page height / width, that separate
+# a table from the other things two crossing lines can enclose on a drawing.
+# Measured on four sheets rendered at 250 DPI (text rows 35-70 px on a 2068 px
+# page): hatching makes grids of 8-20 px cells, a feature-control frame is a
+# strip of one or two 50 px rows under 200 px wide, and a part view crossed by
+# extension lines makes a chain of boxes 120-280 px tall.
+TABLE_MIN_CELL_HEIGHT_RATIO = 0.012
+TABLE_FRAME_ROW_HEIGHT_RATIO = 0.03
+TABLE_FRAME_MAX_WIDTH_RATIO = 0.12
+TABLE_TALL_CELL_HEIGHT_RATIO = 0.06
+TABLE_TALL_CELL_MIN_PX = 100
+TABLE_MAX_DRAWING_CELL_FRACTION = 0.34
+TABLE_EMPTY_CELL_INK_FRACTION = 0.02
+TABLE_STROKE_LENGTH_RATIO = 0.05
+
+
+def _ink_without_axis_lines(ink: np.ndarray, min_length: int) -> np.ndarray:
+    """The ink map with horizontal and vertical strokes of ``min_length`` removed."""
+    try:
+        import cv2
+    except ImportError:
+        return ink
+    raw = ink.astype(np.uint8) * 255
+    horizontal = cv2.morphologyEx(
+        raw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (min_length, 1))
+    )
+    vertical = cv2.morphologyEx(
+        raw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, min_length))
+    )
+    lines = cv2.dilate(cv2.bitwise_or(horizontal, vertical), np.ones((3, 3), np.uint8))
+    return (raw > 0) & (lines == 0)
+
+
+def _cell_holds_drawing(
+    content: np.ndarray,
+    cell: LayoutBox,
+    *,
+    page_height: int,
+) -> bool:
+    """
+    Whether a cell's ink is drawing geometry rather than table text.
+
+    ``content`` is the ink map with the grid's own lines removed. A table
+    cell then holds glyph-sized marks or nothing worth masking; a box a part
+    view closed by accident holds nothing at all (the blank between an
+    extension line and the part) or a stroke far longer than any glyph — a
+    leader, an arc, a chamfer.
+    """
+    sub = content[cell.y : cell.y1, cell.x : cell.x1]
+    if sub.size == 0:
+        return False
+    if float(sub.mean()) < TABLE_EMPTY_CELL_INK_FRACTION:
+        return True
+    try:
+        import cv2
+    except ImportError:
+        return False
+    _count, _labels, stats, _ = cv2.connectedComponentsWithStats(
+        sub.astype(np.uint8), connectivity=8
+    )
+    longest = max(
+        (max(int(row[2]), int(row[3])) for row in stats[1:]),
+        default=0,
+    )
+    return longest > TABLE_STROKE_LENGTH_RATIO * page_height
+
+
+def _group_is_table(
+    group: Sequence[LayoutBox],
+    *,
+    page_width: int,
+    page_height: int,
+    tolerance: int,
+    content: np.ndarray | None = None,
+) -> bool:
+    """
+    Whether a connected group of closed cells is a table rather than drawing.
+
+    Repetition alone is not enough on an engineering drawing: a part view
+    crossed by its own extension lines closes into two or three big boxes, a
+    stacked pair of feature-control frames is a neat 2×3 grid, and hatching
+    is a grid of specks. Masking those erased the values inside them — on one
+    sheet ``Ø20.5``, ``Ø36.8``, ``12.55``, ``15`` and both frames — before the
+    detector ever saw them.
+    """
+    if len(group) < 2:
+        return False
+    heights = sorted(cell.height for cell in group)
+    median_height = heights[len(heights) // 2]
+    # Hatching and decorative grids: cells far smaller than a text row.
+    if median_height < TABLE_MIN_CELL_HEIGHT_RATIO * page_height:
+        return False
+    rows: list[int] = []
+    for cell in group:
+        if all(abs(cell.y - row) > tolerance for row in rows):
+            rows.append(cell.y)
+    width = max(cell.x1 for cell in group) - min(cell.x for cell in group)
+    # A table's tall cells hold text (a multi-line specification, a title).
+    # A part view crossed by its extension lines closes into boxes the size
+    # of the view itself, and those hold drawing: on one sheet four of the
+    # group's ten boxes were 167 to 280 px tall and held either nothing or an
+    # arc or leader far longer than a glyph.
+    if content is not None:
+        tall_limit = max(TABLE_TALL_CELL_HEIGHT_RATIO * page_height, TABLE_TALL_CELL_MIN_PX)
+        drawing = sum(
+            1
+            for cell in group
+            if cell.height > tall_limit
+            and _cell_holds_drawing(content, cell, page_height=page_height)
+        )
+        if drawing >= TABLE_MAX_DRAWING_CELL_FRACTION * len(group):
+            return False
+    # A feature-control frame or datum box: one or two text-height rows in a
+    # strip much narrower than any table.
+    if (
+        len(rows) <= 2
+        and median_height <= TABLE_FRAME_ROW_HEIGHT_RATIO * page_height
+        and width <= TABLE_FRAME_MAX_WIDTH_RATIO * page_width
+    ):
+        return False
+    return True
+
+
 def _retain_repeated_cell_groups(
     cells: Sequence[LayoutBox],
     *,
     tolerance: int,
+    page_size: tuple[int, int] | None = None,
+    content: np.ndarray | None = None,
 ) -> list[LayoutBox]:
-    """Discard isolated drawing rectangles while retaining repeated grids."""
+    """
+    Discard isolated drawing rectangles while retaining repeated grids.
+
+    With ``page_size`` each connected group is also judged by
+    :func:`_group_is_table`, which drops the grids a drawing makes by accident;
+    ``content`` (the ink map without the grid lines) lets it look inside the
+    tall cells.
+    """
 
     parent = list(range(len(cells)))
 
@@ -453,15 +585,25 @@ def _retain_repeated_cell_groups(
             if _cells_are_adjacent(left, cells[right_index], tolerance=tolerance):
                 union(left_index, right_index)
 
-    counts: dict[int, int] = {}
-    for index in range(len(cells)):
-        root = find(index)
-        counts[root] = counts.get(root, 0) + 1
-    return [
-        cell
-        for index, cell in enumerate(cells)
-        if counts.get(find(index), 0) >= 2
-    ]
+    groups: dict[int, list[LayoutBox]] = {}
+    for index, cell in enumerate(cells):
+        groups.setdefault(find(index), []).append(cell)
+    kept_roots = {
+        root
+        for root, group in groups.items()
+        if len(group) >= 2
+        and (
+            page_size is None
+            or _group_is_table(
+                group,
+                page_width=page_size[0],
+                page_height=page_size[1],
+                tolerance=tolerance,
+                content=content,
+            )
+        )
+    }
+    return [cell for index, cell in enumerate(cells) if find(index) in kept_roots]
 
 
 def _merge_rectangular_cells(
@@ -563,6 +705,10 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
     repeated_cells = _retain_repeated_cell_groups(
         cells,
         tolerance=intersection_tolerance * 2,
+        page_size=(width, height),
+        content=_ink_without_axis_lines(
+            ink, max(20, int(round(min(width, height) * 0.02)))
+        ),
     )
     boxes = _discard_mostly_contained_boxes(
         _merge_rectangular_cells(

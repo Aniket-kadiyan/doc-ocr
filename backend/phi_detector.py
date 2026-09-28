@@ -309,6 +309,17 @@ def detect_phi_multi_strip(
     details: list[dict[str, Any]] = []
     src_vertical = is_vertical_dimension(prep)
 
+    # Topology is decisive (see below): when it confirms a Ø its score is used
+    # outright and the strip detectors cannot change the answer, so they are
+    # skipped. On a vertical crop the six enlarged strips cost ~0.7 s, ten
+    # times the rest of the symbol pass.
+    topo_score, topo = detect_phi_topology(image)
+    if topo_score >= TOPO_ACCEPT:
+        details.append(
+            {"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])}
+        )
+        return True, round(topo_score, 3), details
+
     if src_vertical:
         for frac in (0.30, 0.38, 0.45):
             strip = max(16, int(h * frac))
@@ -333,7 +344,6 @@ def detect_phi_multi_strip(
     # Hough / contour) fire on 0/4/8 loops nearly as often as on a real Ø, so
     # without a slashed-ring hole pair their score is capped below the
     # vision-only compose threshold; with one, its score is used outright.
-    topo_score, topo = detect_phi_topology(image)
     details.append({"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])})
     topology_confirmed = topo_score >= TOPO_ACCEPT
     if topology_confirmed:

@@ -742,6 +742,9 @@ export function DrawingViewer() {
               confidence: r.confidence,
               bbox: r.valueBox,
               rotation: r.rotation,
+              // Slanted callouts draw along their leader line; the loose
+              // axis-aligned valueBox stays the anchor for overlap tests.
+              orientedBox: r.orientedBox,
               page: scanPage,
               createdAt: now,
               kind: "dimension",
@@ -1415,13 +1418,19 @@ export function DrawingViewer() {
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
+                      // Slanted callouts carry a tight rotated rectangle; draw
+                      // that (Konva rotates about x,y clockwise) instead of the
+                      // loose axis-aligned bbox so the box hugs the diagonal text.
+                      const box = ann.orientedBox ?? ann.bbox;
+                      const boxRotation = ann.orientedBox?.rotation ?? 0;
                       return (
                         <Rect
                           key={ann.id}
-                          x={ann.bbox.x}
-                          y={ann.bbox.y}
-                          width={ann.bbox.width}
-                          height={ann.bbox.height}
+                          x={box.x}
+                          y={box.y}
+                          width={box.width}
+                          height={box.height}
+                          rotation={boxRotation}
                           stroke={stroke}
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.
