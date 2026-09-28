@@ -327,24 +327,25 @@ export async function runScanJob({
   }
 
   const regions = snapshot.result.coordinate_space === "page"
-    ? mapPageSegmentRegions(snapshot.result.regions ?? [], {
-        x: 0,
-        y: 0,
-        width: sourceCanvas.width,
-        height: sourceCanvas.height,
-      })
+    ? mapPageSegmentRegions(
+        snapshot.result.regions ?? [],
+        // Viewer-space bounds, not the scanned canvas: that canvas may be a
+        // higher-resolution render, and its own size would validate hi-res
+        // coordinates as in-bounds and place every balloon off the drawing.
+        bbox,
+        displayScale
+      )
     : mapSegmentRegions(
         snapshot.result.regions ?? [],
         bbox,
         displayScale
       );
   const reviewCandidates = snapshot.result.coordinate_space === "page"
-    ? mapPageSegmentRegions(snapshot.result.review_candidates ?? [], {
-        x: 0,
-        y: 0,
-        width: sourceCanvas.width,
-        height: sourceCanvas.height,
-      })
+    ? mapPageSegmentRegions(
+        snapshot.result.review_candidates ?? [],
+        bbox,
+        displayScale
+      )
     : mapSegmentRegions(
         snapshot.result.review_candidates ?? [],
         bbox,

@@ -260,14 +260,23 @@ export function mapSegmentRegions(
 /** Map API regions that are already expressed in full-page coordinates. */
 export function mapPageSegmentRegions(
   regions: ApiSegmentRegion[],
-  pageBounds: BBox
+  pageBounds: BBox,
+  /**
+   * Pixels of the scanned image per unit of `pageBounds`. The scan may read a
+   * higher-resolution render than the one on screen, in which case the backend
+   * returns page coordinates in those larger pixels and they have to come back
+   * down before they are used as annotation geometry. Left at 1 the behaviour
+   * is unchanged.
+   */
+  scale = 1
 ): SegmentRegion[] {
+  const toBounds = (value: number) => value / scale;
   return regions.map((r) => {
     const direct: BBox = {
-      x: r.bbox.x,
-      y: r.bbox.y,
-      width: r.bbox.width,
-      height: r.bbox.height,
+      x: toBounds(r.bbox.x),
+      y: toBounds(r.bbox.y),
+      width: toBounds(r.bbox.width),
+      height: toBounds(r.bbox.height),
     };
     const invalid =
       !Number.isFinite(direct.x) ||

@@ -99,6 +99,55 @@ describe("scan result coordinate mapping", () => {
     });
   });
 
+  it("brings a higher-resolution page scan back to viewer coordinates", () => {
+    // The scan may read a 250dpi render while the viewer shows 1.5x, so the
+    // backend returns page coordinates in those larger pixels. Placing them
+    // unscaled put every balloon about 2.3x too far right and down, off the
+    // drawing entirely.
+    const scale = 250 / 72 / 1.5;
+    const [mapped] = mapPageSegmentRegions(
+      [
+        {
+          bbox: {
+            x: 130 * scale,
+            y: 240 * scale,
+            width: 50 * scale,
+            height: 12 * scale,
+          },
+          text: "25",
+          confidence: 0.9,
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      scale
+    );
+
+    expect(mapped.valueBox.x).toBeCloseTo(130, 6);
+    expect(mapped.valueBox.y).toBeCloseTo(240, 6);
+    expect(mapped.valueBox.width).toBeCloseTo(50, 6);
+    expect(mapped.valueBox.height).toBeCloseTo(12, 6);
+  });
+
+  it("judges bounds in viewer space, not scanned-image space", () => {
+    // A region beyond the page must still fall back to the page rectangle
+    // once scaled; checking hi-res coordinates against hi-res bounds would
+    // wrongly accept it.
+    const [mapped] = mapPageSegmentRegions(
+      [
+        {
+          // 2400/2 = 1200, past the 1000-wide page once scaled.
+          bbox: { x: 2400, y: 100, width: 50, height: 12 },
+          text: "25",
+          confidence: 0.9,
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      2
+    );
+
+    expect(mapped.valueBox).toEqual({ x: 0, y: 0, width: 1000, height: 700 });
+  });
+
   it("preserves post-scan review identity and reason", () => {
     const [mapped] = mapPageSegmentRegions(
       [
