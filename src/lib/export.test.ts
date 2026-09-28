@@ -8,7 +8,7 @@ import {
 import { makeAnnotation } from "@/test/annotationFixture";
 
 describe("tolerance export validation", () => {
-  it("accepts supported default, symmetric, and asymmetric tolerances", () => {
+  it("accepts supported default, symmetric, asymmetric, and one-sided tolerances", () => {
     const annotations = [
       makeAnnotation({ id: "zero", value: "0.02", range: "0" }),
       makeAnnotation({
@@ -17,6 +17,8 @@ describe("tolerance export validation", () => {
         range: "+0.05, -0.05",
       }),
       makeAnnotation({ id: "asymmetric", value: "25", range: "+0.1, -0.2" }),
+      makeAnnotation({ id: "upper-only", value: "25", range: "+0.1" }),
+      makeAnnotation({ id: "lower-only", value: "25", range: "-.5" }),
     ];
 
     expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);
@@ -80,5 +82,20 @@ describe("values-only exports", () => {
     expect(xml.match(/<annotation /g)).toHaveLength(2);
     expect(xml).toContain("Diameter &amp; finish");
     expect(xml).not.toContain('<annotation id="label');
+  });
+
+  it("adds the missing zero bound to exported JSON and XML", () => {
+    const oneSided = [
+      makeAnnotation({ id: "upper", number: 1, value: "25", range: "+0.1" }),
+      makeAnnotation({ id: "lower", number: 2, value: "30", range: "-.5" }),
+    ];
+
+    const json = JSON.parse(exportInspectionJSON(oneSided));
+    expect(json.data[0].Tolerance).toBe("+0.1, -0");
+    expect(json.data[1].Tolerance).toBe("+0, -.5");
+
+    const xml = exportXML(oneSided);
+    expect(xml).toContain("<range>+0.1, -0</range>");
+    expect(xml).toContain("<range>+0, -.5</range>");
   });
 });

@@ -61,6 +61,32 @@ export function valueWithRange(a: Annotation): string {
   return a.range ? `${a.value} ${a.range}` : a.value;
 }
 
+const EXPORT_TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+const SINGLE_UPPER_TOLERANCE = new RegExp(
+  String.raw`^\+\s*(${EXPORT_TOLERANCE_NUMBER})$`
+);
+const SINGLE_LOWER_TOLERANCE = new RegExp(
+  String.raw`^-\s*(${EXPORT_TOLERANCE_NUMBER})$`
+);
+
+/**
+ * Complete a one-sided tolerance for exported data without changing the
+ * editable annotation. Existing zero, symmetric, and two-sided tolerances are
+ * returned unchanged.
+ */
+export function toleranceForExport(tolerance?: string): string {
+  const original = tolerance ?? "";
+  const trimmed = original.trim();
+
+  const upper = SINGLE_UPPER_TOLERANCE.exec(trimmed);
+  if (upper) return `+${upper[1]}, -0`;
+
+  const lower = SINGLE_LOWER_TOLERANCE.exec(trimmed);
+  if (lower) return `+0, -${lower[1]}`;
+
+  return original;
+}
+
 /** New projects contain value annotations only. Older projects may still have
  * separate label annotations, which are merged into their mapped value here. */
 export interface LegacyAnnotationMigration {
@@ -144,7 +170,7 @@ export function buildInspectionSheet(
       String(a.number),
       a.label ?? "",
       a.value,
-      a.range ?? "",
+      toleranceForExport(a.range),
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),
       a.method ?? "",
       a.tool ?? "",
@@ -187,7 +213,7 @@ export function buildVerificationPayload(
       kind: "dimension",
       method: a.method ?? "",
       tool: a.tool ?? "",
-      range: a.range ?? "",
+      range: toleranceForExport(a.range),
       labelId: "",
       page: a.page,
       confidence: a.confidence,

@@ -5,6 +5,7 @@ import {
   buildVerificationPayload,
   normalizeLegacyAnnotations,
   parseProjectBundle,
+  toleranceForExport,
 } from "@/lib/project";
 import { makeAnnotation } from "@/test/annotationFixture";
 
@@ -98,6 +99,33 @@ describe("project and integration exports", () => {
     ]);
   });
 
+  it("completes one-sided tolerances only in exported data", () => {
+    const upperOnly = makeAnnotation({
+      id: "upper-only",
+      number: 1,
+      value: "25",
+      range: "+0.1",
+    });
+    const lowerOnly = makeAnnotation({
+      id: "lower-only",
+      number: 2,
+      value: "30",
+      range: "-.5",
+    });
+
+    expect(toleranceForExport(upperOnly.range)).toBe("+0.1, -0");
+    expect(toleranceForExport(lowerOnly.range)).toBe("+0, -.5");
+    expect(toleranceForExport("+0.1, -0.2")).toBe("+0.1, -0.2");
+
+    const sheet = buildInspectionSheet([upperOnly, lowerOnly]);
+    expect(sheet.rows[0][3]).toBe("+0.1, -0");
+    expect(sheet.rows[1][3]).toBe("+0, -.5");
+
+    // Export formatting must never mutate the editable annotations.
+    expect(upperOnly.range).toBe("+0.1");
+    expect(lowerOnly.range).toBe("-.5");
+  });
+
   it("saves a values-only project without embedding balloon artwork", () => {
     const serialized = buildProjectBundle({
       projectName: "Test drawing",
@@ -162,5 +190,14 @@ describe("project and integration exports", () => {
       range: "+0.05, -0.05",
     });
     expect(payload.sheet?.extraColumns).toEqual(["part1"]);
+  });
+
+  it("completes one-sided tolerances in verification exports", () => {
+    const payload = buildVerificationPayload(
+      [makeAnnotation({ id: "single", range: "+.25" })],
+      "Test drawing"
+    );
+
+    expect(payload.items[0].range).toBe("+.25, -0");
   });
 });

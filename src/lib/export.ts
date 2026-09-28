@@ -1,6 +1,7 @@
 import type { Annotation } from "@/types/annotation";
 import {
   buildInspectionSheet,
+  toleranceForExport,
   valueAnnotations,
   type InspectionSheet,
 } from "@/lib/project";
@@ -24,7 +25,7 @@ export function findMalformedToleranceAnnotations(
   return annotations.filter((annotation) => {
     if ((annotation.kind ?? "dimension") !== "dimension") return false;
 
-    const tolerance = (annotation.range ?? "").trim();
+    const tolerance = toleranceForExport(annotation.range).trim();
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);
 
     const value = annotation.value.trim();
@@ -93,7 +94,7 @@ export function exportXML(annotations: Annotation[]): string {
       (a) => `  <annotation id="${a.id}" number="${a.number}" page="${a.page}" type="${a.type}" confidence="${a.confidence}">
     <value>${escapeXml(a.value)}</value>
     <label>${escapeXml(a.label ?? "")}</label>
-    <range>${escapeXml(a.range ?? "")}</range>
+    <range>${escapeXml(toleranceForExport(a.range))}</range>
     <method>${escapeXml(a.method ?? "")}</method>
     <tool>${escapeXml(a.tool ?? "")}</tool>
     <bbox x="${a.bbox.x}" y="${a.bbox.y}" width="${a.bbox.width}" height="${a.bbox.height}" rotation="${a.rotation}"/>
