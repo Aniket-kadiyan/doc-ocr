@@ -53,6 +53,7 @@ export interface InspectionSheet {
 
 export interface VerificationPayload {
   projectName: string;
+  metadata: DocumentMetadata;
   /** Optional remote endpoint baked into the file for reference. */
   endpoint: string;
   items: VerificationItem[];
@@ -222,10 +223,12 @@ export function buildVerificationPayload(
   annotations: Annotation[],
   projectName: string,
   endpoint = verificationEndpoint(),
-  extraColumns?: string[]
+  extraColumns?: string[],
+  metadata?: Partial<DocumentMetadata> | null
 ): VerificationPayload {
   return {
     projectName,
+    metadata: normalizeDocumentMetadata(metadata),
     endpoint,
     ...(extraColumns != null
       ? { sheet: buildInspectionSheet(annotations, extraColumns) }

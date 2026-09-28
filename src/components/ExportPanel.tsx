@@ -196,7 +196,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportInspectionJSON(annotations, extraColumns),
+      exportInspectionJSON(annotations, extraColumns, metadata),
       `${base}_inspection.json`,
       "application/json"
     );
@@ -238,11 +238,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         partCount,
         fileName,
         companyName,
-        metadata: {
-          partName: "",
-          drawingNumber: "",
-          revisionNumber: "",
-        },
+        metadata,
       };
       const downloadedFile = await downloadInspectionWorkbook({
         annotations,
@@ -269,7 +265,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
     downloadFile(
-      exportXML(annotations),
+      exportXML(annotations, metadata),
       `${base}_annotations.xml`,
       "application/xml"
     );
@@ -291,7 +287,8 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         annotations,
         projectName,
         url,
-        extraColumns
+        extraColumns,
+        metadata
       );
       await sendForVerification(url, payload);
       setActionStatus({
@@ -342,7 +339,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           >
             <span className="font-medium">JSON</span>
             <span className="block text-[11px] text-slate-400">
-              Values only: S.no, Label, Value, Tolerance, …, Method, Tool
+              Document metadata and inspection values
             </span>
           </button>
           <button

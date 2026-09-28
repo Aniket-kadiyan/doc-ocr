@@ -71,7 +71,7 @@ describe("inspection workbook", () => {
     expect(worksheet.getCell("A2").value).toBe("Punch Inspection");
     expect(worksheet.getCell("A4").value).toBe("Part Name");
     expect(worksheet.getCell("B4").value).toBe("");
-    expect(worksheet.getCell("E4").value).toBe("Drawing No.");
+    expect(worksheet.getCell("E4").value).toBe("Document No.");
     expect(worksheet.getCell("F4").value).toBe("");
     expect(worksheet.getCell("H4").value).toBe("Revision No.");
     expect(worksheet.getCell("I4").value).toBe("");
@@ -95,5 +95,29 @@ describe("inspection workbook", () => {
 
     const buffer = await workbook.xlsx.writeBuffer();
     expect(buffer.byteLength).toBeGreaterThan(1000);
+  });
+
+  it("writes document metadata into the workbook header", async () => {
+    const workbook = await buildInspectionWorkbook({
+      annotations: [makeAnnotation()],
+      pages: [],
+      options: {
+        companyName: "Organization Name",
+        fileName: "Bracket Inspection",
+        partCount: 1,
+        metadata: {
+          partName: "Drive Bracket",
+          documentNumber: "DB-1042",
+          revisionNumber: "C",
+        },
+      },
+    });
+    const worksheet = workbook.getWorksheet("Checksheet");
+    expect(worksheet).toBeDefined();
+    if (!worksheet) throw new Error("Checksheet worksheet was not created.");
+
+    expect(worksheet.getCell("B4").value).toBe("Drive Bracket");
+    expect(worksheet.getCell("F4").value).toBe("DB-1042");
+    expect(worksheet.getCell("I4").value).toBe("C");
   });
 });

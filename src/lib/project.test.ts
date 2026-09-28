@@ -231,9 +231,19 @@ describe("project and integration exports", () => {
       values,
       "Test drawing",
       "https://example.invalid/verify",
-      ["part1"]
+      ["part1"],
+      {
+        partName: "Drive Bracket",
+        documentNumber: "DB-1042",
+        revisionNumber: "C",
+      }
     );
 
+    expect(payload.metadata).toEqual({
+      partName: "Drive Bracket",
+      documentNumber: "DB-1042",
+      revisionNumber: "C",
+    });
     expect(payload.items).toHaveLength(2);
     expect(payload.items.every(({ kind }) => kind === "dimension")).toBe(true);
     expect(payload.items[1]).toMatchObject({

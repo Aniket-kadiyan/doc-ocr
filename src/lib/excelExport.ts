@@ -2,21 +2,19 @@ import type ExcelJS from "exceljs";
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet } from "@/lib/project";
 import type { BalloonedPageImage } from "@/lib/balloonedPageExport";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 export const EXCEL_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-export interface ExcelExportMetadata {
-  partName: string;
-  drawingNumber: string;
-  revisionNumber: string;
-}
 
 export interface ExcelExportOptions {
   companyName: string;
   fileName: string;
   partCount: number;
-  metadata?: Partial<ExcelExportMetadata>;
+  metadata?: Partial<DocumentMetadata>;
 }
 
 const TABLE_HEADER_ROW = 7;
@@ -189,11 +187,7 @@ export async function buildInspectionWorkbook(args: {
 
   const partColumns = partColumnNames(args.options.partCount);
   const inspection = buildInspectionSheet(args.annotations, partColumns);
-  const metadata: ExcelExportMetadata = {
-    partName: args.options.metadata?.partName ?? "",
-    drawingNumber: args.options.metadata?.drawingNumber ?? "",
-    revisionNumber: args.options.metadata?.revisionNumber ?? "",
-  };
+  const metadata = normalizeDocumentMetadata(args.options.metadata);
   const worksheet = workbook.addWorksheet("Checksheet", {
     views: [{ state: "frozen", ySplit: TABLE_HEADER_ROW }],
     pageSetup: {
@@ -233,8 +227,8 @@ export async function buildInspectionWorkbook(args: {
     worksheet,
     "E4",
     "F4:G4",
-    "Drawing No.",
-    metadata.drawingNumber
+    "Document No.",
+    metadata.documentNumber
   );
   addMetadataPair(
     worksheet,

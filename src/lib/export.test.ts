@@ -66,6 +66,11 @@ describe("values-only exports", () => {
   it("exports JSON with exactly one row per value", () => {
     const result = JSON.parse(exportInspectionJSON(annotations, ["part1"]));
 
+    expect(result.metadata).toEqual({
+      partName: "",
+      documentNumber: "",
+      revisionNumber: "",
+    });
     expect(result.extra_columns).toEqual(["part1"]);
     expect(result.data).toHaveLength(2);
     expect(result.data[0]).toEqual({
@@ -92,8 +97,29 @@ describe("values-only exports", () => {
     const xml = exportXML(annotations);
 
     expect(xml.match(/<annotation /g)).toHaveLength(2);
+    expect(xml).toContain("<metadata>");
     expect(xml).toContain("Diameter &amp; finish");
     expect(xml).not.toContain('<annotation id="label');
+  });
+
+  it("includes metadata in JSON and XML exports", () => {
+    const metadata = {
+      partName: "Drive & Bracket",
+      documentNumber: "DOC<1042>",
+      revisionNumber: 'C"1',
+    };
+
+    const json = JSON.parse(
+      exportInspectionJSON(annotations, [], metadata)
+    );
+    expect(json.metadata).toEqual(metadata);
+
+    const xml = exportXML(annotations, metadata);
+    expect(xml).toContain("<partName>Drive &amp; Bracket</partName>");
+    expect(xml).toContain(
+      "<documentNumber>DOC&lt;1042&gt;</documentNumber>"
+    );
+    expect(xml).toContain("<revisionNumber>C&quot;1</revisionNumber>");
   });
 
   it("adds the missing zero bound to exported JSON and XML", () => {
