@@ -3,10 +3,18 @@
 import { useState } from "react";
 import type { Annotation } from "@/types/annotation";
 import { BalloonThumbnail } from "@/components/BalloonThumbnail";
+import { MetadataPanel } from "@/components/MetadataPanel";
+import type {
+  DocumentMetadata,
+  DocumentMetadataField,
+} from "@/types/documentMetadata";
 
 interface SidebarProps {
   annotations: Annotation[];
   reviewCandidates: ReviewSidebarItem[];
+  metadata: DocumentMetadata;
+  activeMetadataField: DocumentMetadataField | null;
+  drawingAvailable: boolean;
   disabled?: boolean;
   selectedId: string | null;
   selectedReviewCandidateId: string | null;
@@ -16,6 +24,9 @@ interface SidebarProps {
   onDelete: (id: string) => void;
   onMove: (id: string, targetNumber: number) => void;
   onToggleVisibility: (id: string) => void;
+  onMetadataChange: (field: DocumentMetadataField, value: string) => void;
+  onMetadataSelect: (field: DocumentMetadataField) => void;
+  onMetadataClear: (field: DocumentMetadataField) => void;
 }
 
 export interface ReviewSidebarItem {
@@ -31,6 +42,9 @@ export interface ReviewSidebarItem {
 export function Sidebar({
   annotations,
   reviewCandidates,
+  metadata,
+  activeMetadataField,
+  drawingAvailable,
   disabled = false,
   selectedId,
   selectedReviewCandidateId,
@@ -40,7 +54,13 @@ export function Sidebar({
   onDelete,
   onMove,
   onToggleVisibility,
+  onMetadataChange,
+  onMetadataSelect,
+  onMetadataClear,
 }: SidebarProps) {
+  const [activeTab, setActiveTab] = useState<"balloons" | "metadata">(
+    "balloons"
+  );
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
   const values = annotations
@@ -49,24 +69,65 @@ export function Sidebar({
   const reviews = [...reviewCandidates].sort(
     (left, right) => left.reviewOrder - right.reviewOrder
   );
+  const metadataValueCount = Object.values(metadata).filter(
+    (value) => value.trim() !== ""
+  ).length;
+  const balloonControlsDisabled = disabled || activeMetadataField !== null;
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-900">Values</h2>
-        <p className="text-xs text-slate-500">
-          {values.length} ballooned value{values.length === 1 ? "" : "s"}
-          {reviews.length > 0 && (
-            <>
-              {" · "}
-              {reviews.length} review{reviews.length === 1 ? "" : "s"}
-            </>
-          )}
-        </p>
+      <div
+        role="tablist"
+        aria-label="Drawing details"
+        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pt-2"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "balloons"}
+          onClick={() => setActiveTab("balloons")}
+          className={`border-b-2 px-2 py-2 text-left text-xs font-semibold transition ${
+            activeTab === "balloons"
+              ? "border-blue-600 text-blue-700"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <span className="block">Balloons</span>
+          <span className="mt-0.5 block text-[10px] font-normal">
+            {values.length} value{values.length === 1 ? "" : "s"}
+            {reviews.length > 0 ? ` · ${reviews.length} review` : ""}
+          </span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "metadata"}
+          onClick={() => setActiveTab("metadata")}
+          className={`border-b-2 px-2 py-2 text-left text-xs font-semibold transition ${
+            activeTab === "metadata"
+              ? "border-blue-600 text-blue-700"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <span className="block">Metadata</span>
+          <span className="mt-0.5 block text-[10px] font-normal">
+            {metadataValueCount}/3 filled
+          </span>
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
-        {values.length === 0 && reviews.length === 0 ? (
+        {activeTab === "metadata" ? (
+          <MetadataPanel
+            metadata={metadata}
+            activeField={activeMetadataField}
+            disabled={disabled}
+            drawingAvailable={drawingAvailable}
+            onChange={onMetadataChange}
+            onSelect={onMetadataSelect}
+            onClear={onMetadataClear}
+          />
+        ) : values.length === 0 && reviews.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-slate-500">
             Choose Draw Value, then draw a box around a value on the drawing.
           </p>
@@ -109,7 +170,7 @@ export function Sidebar({
                         >
                           <button
                             type="button"
-                            disabled={disabled}
+                            disabled={balloonControlsDisabled}
                             onClick={() => {
                               onSelect(annotation.id);
                               onEdit(annotation.id);
@@ -154,7 +215,7 @@ export function Sidebar({
                           </button>
                           <button
                             type="button"
-                            disabled={disabled}
+                            disabled={balloonControlsDisabled}
                             onClick={() => onToggleVisibility(annotation.id)}
                             title={
                               annotation.hidden
@@ -169,7 +230,7 @@ export function Sidebar({
                         <div className="mt-0.5 flex items-center justify-center gap-2 text-[10px]">
                           <button
                             type="button"
-                            disabled={disabled}
+                            disabled={balloonControlsDisabled}
                             onClick={() => {
                               setMovingId(annotation.id);
                               setMoveTarget(String(annotation.number));
@@ -181,7 +242,7 @@ export function Sidebar({
                           <span className="text-slate-300">·</span>
                           <button
                             type="button"
-                            disabled={disabled}
+                            disabled={balloonControlsDisabled}
                             onClick={() => onDelete(annotation.id)}
                             className="text-red-500 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                           >
@@ -281,7 +342,7 @@ export function Sidebar({
                       <li key={candidate.candidateId} className="mb-2">
                         <button
                           type="button"
-                          disabled={disabled}
+                          disabled={balloonControlsDisabled}
                           onClick={() => onSelectReview(candidate.candidateId)}
                           title={
                             candidate.reviewReason ||

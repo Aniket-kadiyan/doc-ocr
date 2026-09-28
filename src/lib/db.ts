@@ -1,5 +1,9 @@
 import Dexie, { type Table } from "dexie";
 import type { Annotation } from "@/types/annotation";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 export interface ProjectRecord {
   id: string;
@@ -9,6 +13,8 @@ export interface ProjectRecord {
   /** Original drawing bytes, stored so the PDF/image reopens with its annotations. */
   fileBlob?: Blob;
   mimeType?: string;
+  /** Optional for compatibility with projects saved before metadata support. */
+  metadata?: DocumentMetadata;
   updatedAt: number;
 }
 
@@ -62,6 +68,16 @@ export async function loadAnnotations(
 
 export async function saveProject(project: ProjectRecord): Promise<void> {
   await db.projects.put(project);
+}
+
+export async function saveProjectMetadata(
+  projectId: string,
+  metadata: DocumentMetadata
+): Promise<void> {
+  await db.projects.update(projectId, {
+    metadata: normalizeDocumentMetadata(metadata),
+    updatedAt: Date.now(),
+  });
 }
 
 export async function getProject(

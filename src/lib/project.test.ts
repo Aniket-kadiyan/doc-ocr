@@ -151,6 +151,53 @@ describe("project and integration exports", () => {
     expect(serialized).not.toContain("artwork");
   });
 
+  it("round-trips document metadata in a project bundle", () => {
+    const serialized = buildProjectBundle({
+      projectName: "Metadata test",
+      source: {
+        fileName: "drawing.png",
+        mimeType: "image/png",
+        fileType: "image",
+        dataUrl: "data:image/png;base64,AA==",
+      },
+      annotations: values,
+      metadata: {
+        partName: "Drive Bracket",
+        documentNumber: "DB-1042",
+        revisionNumber: "C",
+      },
+      savedAt: 123,
+    });
+
+    expect(parseProjectBundle(serialized).metadata).toEqual({
+      partName: "Drive Bracket",
+      documentNumber: "DB-1042",
+      revisionNumber: "C",
+    });
+  });
+
+  it("loads project bundles saved before metadata support with blank values", () => {
+    const legacyBundle = {
+      format: "doc-ocr-box.project",
+      version: 1,
+      projectName: "Legacy drawing",
+      savedAt: 123,
+      source: {
+        fileName: "drawing.png",
+        mimeType: "image/png",
+        fileType: "image",
+        dataUrl: "data:image/png;base64,AA==",
+      },
+      annotations: values,
+    };
+
+    expect(parseProjectBundle(JSON.stringify(legacyBundle)).metadata).toEqual({
+      partName: "",
+      documentNumber: "",
+      revisionNumber: "",
+    });
+  });
+
   it("persists individual visibility without removing hidden values from exports", () => {
     const hiddenValue = makeAnnotation({
       id: "hidden",

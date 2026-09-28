@@ -1,5 +1,9 @@
 import type { Annotation } from "@/types/annotation";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -205,6 +209,7 @@ export interface ProjectBundle {
   savedAt: number;
   source: ProjectSource;
   annotations: Annotation[];
+  metadata: DocumentMetadata;
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -252,6 +257,7 @@ export function buildProjectBundle(args: {
   projectName: string;
   source: ProjectSource;
   annotations: Annotation[];
+  metadata?: Partial<DocumentMetadata> | null;
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -261,6 +267,7 @@ export function buildProjectBundle(args: {
     savedAt: args.savedAt,
     source: args.source,
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
+    metadata: normalizeDocumentMetadata(args.metadata),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -283,7 +290,10 @@ export function parseProjectBundle(text: string): ProjectBundle {
   if (!Array.isArray(b.annotations)) {
     throw new Error("Project file is missing its annotations.");
   }
-  return b as ProjectBundle;
+  return {
+    ...(b as ProjectBundle),
+    metadata: normalizeDocumentMetadata(b.metadata),
+  };
 }
 
 /** POST the value/label payload to a remote server for checking. */
