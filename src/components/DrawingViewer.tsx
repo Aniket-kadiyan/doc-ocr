@@ -1583,17 +1583,6 @@ export function DrawingViewer() {
                       <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
                     )}
 
-                    {pageScanReviewCandidates.length > 0 &&
-                      scanProgress === null && (
-                      <ScanReviewOverlay
-                        candidates={pageScanReviewCandidates}
-                        scale={scale}
-                        disabled={drawingActive || isProcessing}
-                        selectedCandidateId={selectedReviewCandidateId}
-                        onSelect={openScanReviewCandidate}
-                      />
-                    )}
-
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
@@ -1616,12 +1605,28 @@ export function DrawingViewer() {
                           strokeWidth={(highlighted ? 3 : 2) / scale}
                           dash={[6 / scale, 4 / scale]}
                           // When something is selected, fade the other values.
-                          opacity={selectedId && !highlighted ? 0.15 : 1}
+                          opacity={
+                            (selectedId && !highlighted) ||
+                            selectedReviewCandidateId !== null
+                              ? 0.15
+                              : 1
+                          }
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
                         />
                       );
                     })}
+
+                    {pageScanReviewCandidates.length > 0 &&
+                      scanProgress === null && (
+                      <ScanReviewOverlay
+                        candidates={pageScanReviewCandidates}
+                        scale={scale}
+                        disabled={drawingActive || isProcessing}
+                        selectedCandidateId={selectedReviewCandidateId}
+                        onSelect={openScanReviewCandidate}
+                      />
+                    )}
 
                     {pageSelectedScanSections.map((section) => {
                       const order =
@@ -1668,7 +1673,10 @@ export function DrawingViewer() {
                         annotation={ann}
                         scale={scale}
                         selected={selectedId === ann.id}
-                        dimmed={!!selectedId && selectedId !== ann.id}
+                        dimmed={
+                          (!!selectedId && selectedId !== ann.id) ||
+                          selectedReviewCandidateId !== null
+                        }
                         listening={!drawingActive}
                         onSelect={handleSelect}
                       />

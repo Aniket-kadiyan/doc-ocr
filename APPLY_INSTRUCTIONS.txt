@@ -1,47 +1,35 @@
-Doc OCR Box - internal checksheet integration replacements
-===========================================================
+Selected review-value highlighting
+==================================
 
-Target branch: checksheet_integration
-Verified base commit: 0ae04b10dd3863685ff17af3d033765dd6414deb
+Base branch: MVP1
+Required base commit: e3a8e96e3d21b33d33a48c62776239aabff1a05d
 
-How to apply
-------------
+No commit or push was made.
 
-1. Check out the checksheet_integration branch in your own repository.
-2. Extract this archive.
-3. Copy the extracted contents into the repository root, preserving folders.
-4. Allow existing files with the same paths to be replaced.
-5. Do not copy the containing archive folder itself into the repository.
+Apply this ZIP in the repository root, then run:
 
-The archive contains complete replacement copies of every modified file and
-complete contents for every new file. It does not contain node_modules, build
-output, OCR models, source documents, a database, test changes, or Git metadata.
+  npm run typecheck
+  npm run test:frontend
+  npm run lint
+  npm run build
 
-Runtime
--------
+Behavior
+--------
 
-Start the backend and frontend normally:
+- The selected review value gets a stronger blue box and glow.
+- Other review candidates and existing balloons fade while it is selected.
+- The review overlay is drawn above ordinary value boxes.
+- Rotated review values use their oriented detection box.
 
-  npm run ocr-api
-  npm run dev
+Suggested commit message
+------------------------
 
-The backend creates its SQLite database and source-document directory at:
+feat(review): highlight the selected review value
 
-  backend/data/checksheets/
+Validation completed before packaging
+-------------------------------------
 
-For a durable deployment location, add this to .env.local using an appropriate
-absolute path for the server:
-
-  CHECKSHEET_DATA_DIR=D:\doc-ocr-data\checksheets
-  CHECKSHEET_MAX_DOCUMENT_MB=200
-
-Validation already completed
-----------------------------
-
-- TypeScript compilation
-- Targeted ESLint checks
-- Next.js production build
-- Python syntax parsing
-- SQLite schema initialization
-
-No automated test files were added or changed.
+- TypeScript: passed
+- ESLint: passed
+- Frontend: 18 files, 94 tests passed
+- Next.js production build: passed
