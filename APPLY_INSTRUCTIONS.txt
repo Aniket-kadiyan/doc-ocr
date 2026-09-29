@@ -1,35 +1,29 @@
-Selected review-value highlighting
-==================================
+Persistent selected-review highlight
+====================================
 
-Base branch: MVP1
-Required base commit: e3a8e96e3d21b33d33a48c62776239aabff1a05d
+Branch: MVP1
+Expected base commit: e3a8e96e3d21b33d33a48c62776239aabff1a05d
 
-No commit or push was made.
+This ZIP supersedes the earlier selected-review-highlight ZIP. It contains the
+same visual highlight changes plus the persistent-selection adjustment.
 
-Apply this ZIP in the repository root, then run:
+Copy the included src directory over the repository's src directory.
 
+Resulting behavior:
+- Selecting a review value opens the review popup and highlights its geometry.
+- Closing the popup leaves that review value highlighted.
+- Accepting or ignoring the value removes its review highlight.
+- Selecting another review value transfers the highlight to it.
+- Selecting a normal balloon/value or clicking blank drawing space clears the
+  review highlight.
+
+Suggested validation:
   npm run typecheck
   npm run test:frontend
   npm run lint
   npm run build
 
-Behavior
---------
+Suggested commit message:
+  fix(review): preserve highlight after closing review popup
 
-- The selected review value gets a stronger blue box and glow.
-- Other review candidates and existing balloons fade while it is selected.
-- The review overlay is drawn above ordinary value boxes.
-- Rotated review values use their oriented detection box.
-
-Suggested commit message
-------------------------
-
-feat(review): highlight the selected review value
-
-Validation completed before packaging
--------------------------------------
-
-- TypeScript: passed
-- ESLint: passed
-- Frontend: 18 files, 94 tests passed
-- Next.js production build: passed
+No commit or push was made while preparing this package.

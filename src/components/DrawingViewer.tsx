@@ -1714,11 +1714,6 @@ export function DrawingViewer() {
 
       <AnnotationPopup
         onReviewResolved={resolveScanReviewCandidate}
-        onReviewCancelled={(candidateId) =>
-          setSelectedReviewCandidateId((current) =>
-            current === candidateId ? null : current
-          )
-        }
       />
 
       {(() => {
