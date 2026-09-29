@@ -36,6 +36,18 @@ interface ExportPanelProps {
   disabled?: boolean;
 }
 
+async function loadCompanyLogo(): Promise<string> {
+  const response = await fetch("/senior_flexonics_logo.jpeg");
+  if (!response.ok) throw new Error("Could not load the Senior Flexonics logo.");
+  const blob = await response.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read the company logo."));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const { style: balloonStyle, artworkImage } = useBalloonStyle();
   const annotations = useAnnotationStore((s) => s.annotations);
@@ -212,7 +224,6 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const handleExcelExport = async ({
     partCount,
     fileName,
-    companyName,
   }: ExcelExportValues) => {
     setActionStatus({
       kind: "exporting",
@@ -237,7 +248,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
       const options: ExcelExportOptions = {
         partCount,
         fileName,
-        companyName,
+        companyLogoDataUrl: await loadCompanyLogo(),
         metadata,
       };
       const downloadedFile = await downloadInspectionWorkbook({

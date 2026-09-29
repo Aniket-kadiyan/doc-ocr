@@ -5,7 +5,6 @@ import { useEffect, useState, type FormEvent } from "react";
 export interface ExcelExportValues {
   partCount: number;
   fileName: string;
-  companyName: string;
 }
 
 interface ExcelExportDialogProps {
@@ -25,7 +24,6 @@ export function ExcelExportDialog({
 }: ExcelExportDialogProps) {
   const [partCount, setPartCount] = useState("1");
   const [fileName, setFileName] = useState(defaultFileName);
-  const [companyName, setCompanyName] = useState("Organization Name");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -33,7 +31,6 @@ export function ExcelExportDialog({
     if (!open) return;
     setPartCount("1");
     setFileName(defaultFileName);
-    setCompanyName("Organization Name");
     setSubmitting(false);
     setError("");
   }, [defaultFileName, open]);
@@ -43,15 +40,10 @@ export function ExcelExportDialog({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const normalizedFileName = fileName.trim();
-    const normalizedCompanyName = companyName.trim();
     const normalizedPartCount = Number(partCount);
 
     if (!normalizedFileName) {
       setError("Enter a file name.");
-      return;
-    }
-    if (!normalizedCompanyName) {
-      setError("Enter a company name.");
       return;
     }
     if (
@@ -69,7 +61,6 @@ export function ExcelExportDialog({
       await onExport({
         partCount: normalizedPartCount,
         fileName: normalizedFileName,
-        companyName: normalizedCompanyName,
       });
       onClose();
     } catch (reason) {
@@ -149,17 +140,6 @@ export function ExcelExportDialog({
           <span className="mt-1 block text-xs text-slate-400">
             Used inside the workbook and for the downloaded .xlsx file.
           </span>
-        </label>
-
-        <label className="mt-4 block text-sm font-medium text-slate-700">
-          Company name
-          <input
-            value={companyName}
-            onChange={(event) => setCompanyName(event.target.value)}
-            maxLength={200}
-            disabled={submitting}
-            className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-          />
         </label>
 
         {error && (

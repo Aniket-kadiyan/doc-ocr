@@ -9,12 +9,14 @@ import {
 
 export const EXCEL_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const DEFAULT_COMPANY_NAME = "Senior Flexonics";
 
 export interface ExcelExportOptions {
-  companyName: string;
   fileName: string;
   partCount: number;
   metadata?: Partial<DocumentMetadata>;
+  /** Data URL for the Senior Flexonics logo bundled with the frontend. */
+  companyLogoDataUrl?: string;
 }
 
 const TABLE_HEADER_ROW = 7;
@@ -168,6 +170,41 @@ function addBalloonedPageImages(
   }
 }
 
+function addCompanyHeader(
+  workbook: ExcelJS.Workbook,
+  worksheet: ExcelJS.Worksheet,
+  leftEndColumn: string,
+  logoDataUrl?: string
+) {
+  const companyStartColumn = logoDataUrl ? "C" : "A";
+  if (logoDataUrl) {
+    styleMergedValue(worksheet, "A1:B1", "", {
+      fill: "FF1E3A5F",
+      color: "FFFFFFFF",
+      size: 1,
+    });
+    const logoId = workbook.addImage({
+      base64: logoDataUrl,
+      extension: logoDataUrl.startsWith("data:image/png") ? "png" : "jpeg",
+    });
+    worksheet.addImage(logoId, {
+      tl: { col: 0.2, row: 0.08 },
+      ext: { width: 44, height: 38 },
+      editAs: "oneCell",
+    });
+  }
+  styleMergedValue(
+    worksheet,
+    `${companyStartColumn}1:${leftEndColumn}1`,
+    DEFAULT_COMPANY_NAME,
+    {
+      fill: "FF1E3A5F",
+      color: "FFFFFFFF",
+      size: 18,
+    }
+  );
+}
+
 /** Build a workbook without touching browser download APIs, enabling unit tests. */
 export async function buildInspectionWorkbook(args: {
   annotations: Annotation[];
@@ -182,9 +219,6 @@ export async function buildInspectionWorkbook(args: {
   workbook.modified = new Date();
 
   const title = workbookTitle(args.options.fileName);
-  const companyName = args.options.companyName.trim();
-  if (!companyName) throw new Error("Enter a company name.");
-
   const partColumns = partColumnNames(args.options.partCount);
   const inspection = buildInspectionSheet(args.annotations, partColumns);
   const metadata = normalizeDocumentMetadata(args.options.metadata);
@@ -209,17 +243,18 @@ export async function buildInspectionWorkbook(args: {
 
   const leftColumnCount = Math.max(METADATA_WIDTH, inspection.headers.length);
   const leftEndColumn = worksheet.getColumn(leftColumnCount).letter;
-  styleMergedValue(worksheet, `A1:${leftEndColumn}1`, companyName, {
-    fill: "FF1E3A5F",
-    color: "FFFFFFFF",
-    size: 18,
-  });
+  addCompanyHeader(
+    workbook,
+    worksheet,
+    leftEndColumn,
+    args.options.companyLogoDataUrl
+  );
   styleMergedValue(worksheet, `A2:${leftEndColumn}2`, title, {
     fill: "FFDCE6F1",
     color: "FF0F172A",
     size: 14,
   });
-  worksheet.getRow(1).height = 28;
+  worksheet.getRow(1).height = 36;
   worksheet.getRow(2).height = 24;
 
   addMetadataPair(worksheet, "A4", "B4:D4", "Part Name", metadata.partName);

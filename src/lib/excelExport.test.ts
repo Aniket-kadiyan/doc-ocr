@@ -58,16 +58,16 @@ describe("inspection workbook", () => {
         { page: 1, dataUrl: ONE_PIXEL_PNG, width: 1000, height: 1400 },
       ],
       options: {
-        companyName: "Organization Name",
         fileName: "Punch Inspection",
         partCount: 2,
+        companyLogoDataUrl: ONE_PIXEL_PNG,
       },
     });
     const worksheet = workbook.getWorksheet("Checksheet");
     expect(worksheet).toBeDefined();
     if (!worksheet) throw new Error("Checksheet worksheet was not created.");
 
-    expect(worksheet.getCell("A1").value).toBe("Organization Name");
+    expect(worksheet.getCell("C1").value).toBe("Senior Flexonics");
     expect(worksheet.getCell("A2").value).toBe("Punch Inspection");
     expect(worksheet.getCell("A4").value).toBe("Part Name");
     expect(worksheet.getCell("B4").value).toBe("");
@@ -91,7 +91,7 @@ describe("inspection workbook", () => {
     expect(worksheet.getCell("B8").value).toBe("Outside diameter");
     expect(worksheet.getCell("E8").value).toBe("");
     expect(worksheet.getCell("F8").value).toBe("");
-    expect(worksheet.getImages()).toHaveLength(1);
+    expect(worksheet.getImages()).toHaveLength(2);
 
     const buffer = await workbook.xlsx.writeBuffer();
     expect(buffer.byteLength).toBeGreaterThan(1000);
@@ -102,7 +102,6 @@ describe("inspection workbook", () => {
       annotations: [makeAnnotation()],
       pages: [],
       options: {
-        companyName: "Organization Name",
         fileName: "Bracket Inspection",
         partCount: 1,
         metadata: {
