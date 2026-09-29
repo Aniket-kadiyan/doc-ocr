@@ -8,6 +8,7 @@ export interface ChecksheetSnapshotItem {
   balloon_number: number;
   page: number;
   bbox: BBox;
+  oriented_box?: (BBox & { rotation: number }) | null;
   rotation: number;
   label: string;
   specification: string;
@@ -40,6 +41,7 @@ export interface ChecksheetRow {
   balloon_number: number;
   page: number;
   bbox: BBox;
+  oriented_box?: (BBox & { rotation: number }) | null;
   rotation: number;
   label: string;
   specification: string;

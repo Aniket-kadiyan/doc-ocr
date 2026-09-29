@@ -1,0 +1,125 @@
+{
+  "document": "Docs/BS1801006.020.pdf",
+  "title": "PUNCH, drawing BS1801006.020",
+  "dpi": 250,
+  "match_threshold": 0.9,
+  "partial_threshold": 0.6,
+  "requires": {
+    "matched": 12,
+    "mean_percent": 95.0,
+    "type_correct": 12,
+    "max_unexpected": 3
+  },
+  "expected": [
+    {
+      "id": 1,
+      "accept": [
+        "60°±0°30"
+      ],
+      "type": "angle"
+    },
+    {
+      "id": 2,
+      "accept": [
+        "Ø33-0.05-0.1",
+        "33-0.1-0.05"
+      ],
+      "type": "diameter",
+      "note": "one callout; the ground-truth list carries it twice, as items 2 and 14"
+    },
+    {
+      "id": 3,
+      "accept": [
+        "15-0.2"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 4,
+      "accept": [
+        "R2±0.2"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 5,
+      "accept": [
+        "70±0.2"
+      ],
+      "type": "tolerance"
+    },
+    {
+      "id": 6,
+      "accept": [
+        "114.5±0.05"
+      ],
+      "type": "tolerance"
+    },
+    {
+      "id": 7,
+      "accept": [
+        "R2±0.5"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 8,
+      "accept": [
+        "R10±2"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 9,
+      "accept": [
+        "Ø30±0.2"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 10,
+      "accept": [
+        "5°±0°3011",
+        "115°±0°301",
+        "5°±0°30"
+      ],
+      "type": "angle",
+      "note": "one callout; the ground-truth list carries it twice, as items 10 and 13"
+    },
+    {
+      "id": 11,
+      "accept": [
+        "Ø23.5-0.05"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 12,
+      "accept": [
+        "Ø30-0.2"
+      ],
+      "type": "diameter"
+    }
+  ],
+  "noise_patterns": [
+    "^MAT",
+    "^TREAT",
+    "^DAT",
+    "^DESIGN",
+    "^CODE",
+    "^SCALE",
+    "^SURF",
+    "RC$",
+    "SHEET",
+    "FORM",
+    "^PART",
+    "^PUNCH",
+    "CAD",
+    "1801006",
+    "^1\\.3343$",
+    "^S6-5-2$",
+    "^PO",
+    "^SHARP$",
+    "^DETAIL"
+  ]
+}

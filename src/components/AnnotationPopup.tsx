@@ -78,13 +78,15 @@ export function AnnotationPopup({
     const annotation: Annotation = {
       id: uuidv4(),
       number: getNextNumber(),
-      label: "",
+      label: pending.suggestedLabel?.trim() || "",
       value: cleanValue,
-      type: classifyDimension(cleanValue),
+      type: pending.suggestedType || classifyDimension(cleanValue),
+      subtype: pending.suggestedSubtype,
       confidence,
       // Preserve the exact manual selection or scan-review detector box.
       bbox: pending.bbox,
       rotation: pending.ocrResult.rotation,
+      orientedBox: pending.orientedBox,
       page: pending.page,
       createdAt: Date.now(),
       kind: "dimension",

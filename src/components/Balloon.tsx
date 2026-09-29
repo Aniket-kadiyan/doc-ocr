@@ -16,6 +16,8 @@ interface BalloonProps {
   dimmed?: boolean;
   listening?: boolean;
   onSelect?: (id: string) => void;
+  /** Double click / double tap opens the editor for this annotation. */
+  onOpen?: (id: string) => void;
 }
 
 export function Balloon({
@@ -25,6 +27,7 @@ export function Balloon({
   dimmed = false,
   listening = true,
   onSelect,
+  onOpen,
 }: BalloonProps) {
   const { bbox, number } = annotation;
   const anchorX = bbox.x + bbox.width / 2;
@@ -53,6 +56,8 @@ export function Balloon({
       opacity={dimmed ? 0.15 : 1}
       onClick={() => onSelect?.(annotation.id)}
       onTap={() => onSelect?.(annotation.id)}
+      onDblClick={() => onOpen?.(annotation.id)}
+      onDblTap={() => onOpen?.(annotation.id)}
     >
       {artworkImage ? (
         <KonvaImage

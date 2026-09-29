@@ -116,6 +116,14 @@ def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
 
     oriented = primary_oriented(image)
     merged.degree = _detect_degree(oriented)
+    if not merged.degree:
+        # A chamfer "0.5×45°" runs along a diagonal leader; its ° ring is not in
+        # the upright top band. Check the deskewed view when one exists.
+        from image_preprocess import deskew_to_horizontal
+
+        deskewed = deskew_to_horizontal(oriented)
+        if deskewed is not None:
+            merged.degree = _detect_degree(deskewed)
     zones = split_symbol_zones(
         oriented,
         from_vertical_rotated=vertical,
@@ -151,8 +159,10 @@ def detect_prefix_from_ocr_text(prefix_ocr: str) -> DetectedSymbols:
     elif re.match(r"^[Rr](?=\d)", t):
         out.radius = True
     elif re.match(r"^[O0Q©¢C]$", t):
-        # Single-char prefix OCR of Ø
-        out.diameter_score = 0.55
+        # Single-char prefix OCR of Ø. Kept below the vision-only compose bar
+        # (a bare "0" in the strip is more often the first digit than a Ø) —
+        # it corroborates a stripped leading glyph, it does not decide alone.
+        out.diameter_score = 0.4
     if "±" in t or "+/-" in t:
         out.plus_minus = True
     if re.search(r"°|˚|⁰", t):
@@ -165,9 +175,23 @@ def symbols_to_dict(s: DetectedSymbols) -> dict:
 
 
 def merge_symbol_scores(a: DetectedSymbols, b: DetectedSymbols) -> DetectedSymbols:
+    """
+    Combine visual and OCR-prefix evidence for the symbols.
+
+    Diameter needs *evidence*, not a score. Either side may decide it: the
+    vision pass through its own topology decision (a slashed ring, not merely
+    something round), or the OCR prefix through an explicit Ø-family glyph.
+
+    A score on its own decides nothing. The previous rule accepted any score
+    at or above 0.32, which contradicted this module's own reasoning — an
+    ambiguous "O"/"0" prefix is scored 0.4 precisely so that it corroborates
+    rather than decides, yet 0.4 cleared the 0.32 bar. The same bar let a
+    leader-line ring near a plain length publish it as a diameter, which is
+    how "5.50[139.70]" reached the sheet as "Ø5.50[139.70]".
+    """
     score = max(a.diameter_score, b.diameter_score)
     return DetectedSymbols(
-        diameter=score >= 0.32,
+        diameter=a.diameter or b.diameter,
         diameter_score=score,
         plus_minus=a.plus_minus or b.plus_minus,
         degree=a.degree or b.degree,

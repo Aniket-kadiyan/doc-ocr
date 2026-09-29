@@ -1,0 +1,626 @@
+[
+ {
+  "bbox": {
+   "x": 462.0,
+   "y": 343.0,
+   "width": 245.0,
+   "height": 42.0
+  },
+  "text": "-M54×1.5-6H-",
+  "confidence": 0.9507787227630615,
+  "type": "linear",
+  "category": "Thread",
+  "subtype": "M54×1.5",
+  "label": "Thread M54×1.5",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 846.0,
+   "y": 355.0,
+   "width": 42.0,
+   "height": 76.0
+  },
+  "text": "10.0",
+  "confidence": 0.9996161460876465,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "vertical",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 465.0,
+   "y": 405.0,
+   "width": 218.0,
+   "height": 38.0
+  },
+  "text": "CHF1.0×45°",
+  "confidence": 0.9831139445304871,
+  "type": "angle",
+  "category": "Chamfer",
+  "subtype": null,
+  "label": "Chamfer",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 223.0,
+   "y": 515.0,
+   "width": 97.0,
+   "height": 45.0
+  },
+  "text": "R075",
+  "confidence": 0.8827412128448486,
+  "type": "radius",
+  "category": "Radius",
+  "subtype": null,
+  "label": "Radius",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.667,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 440.0,
+   "y": 631.0,
+   "width": 124.0,
+   "height": 39.0
+  },
+  "text": "R0.25",
+  "confidence": 0.9374396204948425,
+  "type": "radius",
+  "category": "Radius",
+  "subtype": null,
+  "label": "Radius",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 0.6,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.12,
+   "plus_minus": false,
+   "degree": false,
+   "radius": true
+  }
+ },
+ {
+  "bbox": {
+   "x": 886.0,
+   "y": 622.0,
+   "width": 104.0,
+   "height": 36.0
+  },
+  "text": "45.0°",
+  "confidence": 0.8882780075073242,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.333,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.121,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 531.0,
+   "y": 679.0,
+   "width": 122.0,
+   "height": 44.0
+  },
+  "text": "Ø54.4",
+  "confidence": 0.9963386654853821,
+  "type": "diameter",
+  "category": "Diameter",
+  "subtype": null,
+  "label": "Diameter",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.92,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 647.0,
+   "y": 889.0,
+   "width": 78.0,
+   "height": 42.0
+  },
+  "text": "10.3°",
+  "confidence": 0.9742116928100586,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 184.0,
+   "y": 954.0,
+   "width": 208.0,
+   "height": 53.0
+  },
+  "text": "5C0-2R1430u",
+  "confidence": 0.5472148954868317,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.333,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.155,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 821.0,
+   "y": 968.0,
+   "width": 75.0,
+   "height": 38.0
+  },
+  "text": "R1.4",
+  "confidence": 0.9938865303993225,
+  "type": "radius",
+  "category": "Radius",
+  "subtype": null,
+  "label": "Radius",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.036,
+   "plus_minus": false,
+   "degree": false,
+   "radius": true
+  }
+ },
+ {
+  "bbox": {
+   "x": 1087.0,
+   "y": 1007.0,
+   "width": 90.0,
+   "height": 48.0
+  },
+  "text": "12.0",
+  "confidence": 0.9988773465156555,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 788.0,
+   "y": 1037.0,
+   "width": 145.0,
+   "height": 42.0
+  },
+  "text": "No co se59.2PCD",
+  "confidence": 0.7128260135650635,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.333,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.172,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1393.0,
+   "y": 1195.0,
+   "width": 41.0,
+   "height": 250.0
+  },
+  "text": "–CHF0.25×45°",
+  "confidence": 0.9603649973869324,
+  "type": "angle",
+  "category": "Chamfer",
+  "subtype": null,
+  "label": "Chamfer",
+  "orientation": "vertical",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 224.0,
+   "y": 1367.0,
+   "width": 86.0,
+   "height": 37.0
+  },
+  "text": "60.8",
+  "confidence": 0.9999743700027466,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1020.0,
+   "y": 1447.0,
+   "width": 93.0,
+   "height": 74.0
+  },
+  "text": "30.0°",
+  "confidence": 0.9620454907417297,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 250.0,
+   "y": 1499.0,
+   "width": 74.0,
+   "height": 38.0
+  },
+  "text": "59.2",
+  "confidence": 0.9999556541442871,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 769.0,
+   "y": 1513.0,
+   "width": 181.0,
+   "height": 53.0
+  },
+  "text": "Ø52.5REF",
+  "confidence": 0.9830952882766724,
+  "type": "diameter",
+  "category": "Diameter",
+  "subtype": null,
+  "label": "Diameter",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.92,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1982.0,
+   "y": 1578.0,
+   "width": 131.0,
+   "height": 41.0
+  },
+  "text": "1-0.5",
+  "confidence": 0.9517467617988586,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.064,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1984.0,
+   "y": 1540.0,
+   "width": 122.0,
+   "height": 37.0
+  },
+  "text": "1°0'",
+  "confidence": 0.985684335231781,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.057,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1129.0,
+   "y": 1591.0,
+   "width": 117.0,
+   "height": 40.0
+  },
+  "text": "R10.0",
+  "confidence": 0.9746576547622681,
+  "type": "radius",
+  "category": "Radius",
+  "subtype": null,
+  "label": "Radius",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": true
+  }
+ },
+ {
+  "bbox": {
+   "x": 1360.0,
+   "y": 1606.0,
+   "width": 111.0,
+   "height": 52.0
+  },
+  "text": "TN101",
+  "confidence": 0.684027910232544,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.333,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.103,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1304.0,
+   "y": 1819.0,
+   "width": 205.0,
+   "height": 47.0
+  },
+  "text": "SC25C4",
+  "confidence": 0.9610700607299805,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 1764.0,
+   "y": 1939.0,
+   "width": 143.0,
+   "height": 41.0
+  },
+  "text": "Ø71",
+  "confidence": 0.6907495111227036,
+  "type": "diameter",
+  "category": "Diameter",
+  "subtype": null,
+  "label": "Diameter",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.5,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.92,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ },
+ {
+  "bbox": {
+   "x": 2250.0,
+   "y": 1915.0,
+   "width": 277.0,
+   "height": 63.0
+  },
+  "text": "56103-0182",
+  "confidence": 0.9999040365219116,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  }
+ }
+]

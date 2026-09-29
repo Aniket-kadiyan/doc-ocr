@@ -233,6 +233,7 @@ export function ChecksheetDrawingPreview({
       type: row.dimension_type,
       confidence: 1,
       bbox: row.bbox,
+      orientedBox: row.oriented_box ?? undefined,
       rotation: row.rotation,
       page: row.page,
       createdAt: 0,
@@ -332,7 +333,8 @@ export function ChecksheetDrawingPreview({
               listening={false}
             />
             <Rect
-              {...annotation.bbox}
+              {...(annotation.orientedBox ?? annotation.bbox)}
+              rotation={annotation.orientedBox?.rotation ?? 0}
               stroke="#dc2626"
               strokeWidth={2.5 / transform.scale}
               dash={[7 / transform.scale, 4 / transform.scale]}

@@ -98,9 +98,16 @@ SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
+# Degrees, then optional minutes and seconds. The minute mark is often lost:
+# it is a small tick and the recogniser drops it, so "60°±0°30" arrives where
+# the drawing reads "60°±0°30'". A bare 1-2 digit integer straight after the
+# degree symbol is unambiguously minutes, so it is accepted without the prime —
+# guarded against a following digit or decimal point so "30.0°" and a longer
+# run are not swallowed.
 _ANGLE_MAGNITUDE = (
     rf"{_NUMBER}\s*°(?:\s*{_NUMBER}\s*['′]"
-    rf"(?:\s*{_NUMBER}\s*[\"″])?)?"
+    rf"(?:\s*{_NUMBER}\s*[\"″])?"
+    rf"|\s*\d{{1,2}}(?![\d.]))?"
 )
 _ANGLE_VALUE = _compile(
     rf"^{_ANGLE_MAGNITUDE}"
@@ -114,6 +121,11 @@ _LINEAR_VALUE = _compile(
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
     rf"(?:\s*±\s*{_NUMBER}"
     rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
+    # Two stacked deviations, printed one above the other on the drawing and
+    # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
+    # a shaft or hole limit often has upper AND lower below nominal. Listed
+    # before the single-deviation branch so the longer form wins.
+    rf"|\s*[+-]\s*{_NUMBER}\s*[+-]\s*{_NUMBER}"
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
@@ -128,8 +140,15 @@ _THREAD_VALUE = _compile(
 _STANDALONE_TOLERANCE = _compile(
     rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
 )
-_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,]+\s*")
-_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,]+$")
+# Leader and extension lines touch the crop edge and read as a stray dash or
+# bar, so "-" and "~" join the punctuation already treated as boundary noise.
+# normalize_page_value_text only strips these when what remains is itself a
+# complete value, so a real signed value like "-0.5" is untouched.
+# A leader arrowhead touching the crop reads as an arrow glyph. Arrows are
+# never part of a value so they are stripped from the front; a leading "-" is
+# deliberately NOT stripped, because it is the sign of a real value.
+_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,\u2190-\u21FF\u25B6\u25C0]+\s*")
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,\-\u2010-\u2015~]+$")
 _KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
 _KEYWORD_CONFUSABLES = str.maketrans(
     {
@@ -173,6 +192,46 @@ def _unwrapped_value(text: str) -> str:
     return text
 
 
+# A dual-dimensioned callout: the primary value followed by its converted
+# equivalent in brackets ("2.25[57.15]", "Ø0.33[8.38]", "1.13[28.70]REF.").
+# Drawings that carry INCHES[MILLIMETERS] in the title block write nearly every
+# dimension this way, and without this rule the grammar below rejects all of
+# them as incomplete.
+_DUAL_UNIT_VALUE = _compile(
+    r"^(?P<primary>[^\[\]]+?)"
+    r"\s*\[\s*(?P<secondary>[^\[\]]+?)\s*\]"
+    r"\s*(?P<suffix>REF|BASIC|MAX|MIN|TYP|THRU)?\.?$"
+)
+
+
+def _is_single_value(value: str) -> bool:
+    """One value on its own, by the grammar rules below."""
+    return bool(
+        _ANGLE_VALUE.fullmatch(value)
+        or _LINEAR_VALUE.fullmatch(value)
+        or _THREAD_VALUE.fullmatch(value)
+        or _STANDALONE_TOLERANCE.fullmatch(value)
+    )
+
+
+def _is_dual_unit_value(value: str) -> bool:
+    """
+    A primary value with its bracketed unit conversion.
+
+    Both halves have to be complete values in their own right, which is what
+    keeps two callouts fused by a clustering error ("1.00[25.40]0.25[6.35]")
+    from passing: their combined text is not primary + one bracket + suffix.
+    """
+    match = _DUAL_UNIT_VALUE.fullmatch(value)
+    if not match:
+        return False
+    primary = match.group("primary").strip()
+    secondary = match.group("secondary").strip()
+    if not primary or not secondary:
+        return False
+    return _is_single_value(primary) and _is_single_value(secondary)
+
+
 def is_complete_engineering_value(text: str) -> bool:
     """Recognize a complete value without extracting digits from prose."""
 
@@ -188,6 +247,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _THREAD_VALUE.fullmatch(value):
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
+        return True
+    if _is_dual_unit_value(value):
         return True
     return bool(COMPACT_IDENTIFIER_VALUE.fullmatch(value))
 
@@ -516,11 +577,44 @@ def candidate_is_in_table(
     return False
 
 
+# A drawing sheet's frame carries zone labels — single digits along the top and
+# bottom, letters up the sides — plus trim and fold marks. They are not
+# dimensions, but they read as clean short values and get ballooned. On a real
+# sheet every one sat within 4.3% of an edge while the nearest true dimension
+# was at 15.4%, so a conservative band with a length guard separates them
+# cleanly: a zone label is one or two characters, so nothing like "12.0" or
+# "R1.4" can be caught by this even if a drawing puts one near the border.
+_FRAME_BAND_FRACTION = 0.055
+_ZONE_LABEL_MAX_CHARS = 2
+
+
+def is_sheet_frame_label(bbox: BBox, page_size: tuple[int, int] | None, text: str) -> bool:
+    """True for a short token sitting in the sheet's border band."""
+    if not page_size:
+        return False
+    width, height = page_size
+    if width <= 0 or height <= 0:
+        return False
+    compact = "".join(str(text or "").split())
+    if not compact or len(compact) > _ZONE_LABEL_MAX_CHARS:
+        return False
+    centre_x = float(bbox["x"]) + float(bbox["width"]) / 2.0
+    centre_y = float(bbox["y"]) + float(bbox["height"]) / 2.0
+    edge_distance = min(
+        centre_x / width,
+        centre_y / height,
+        (width - centre_x) / width,
+        (height - centre_y) / height,
+    )
+    return edge_distance <= _FRAME_BAND_FRACTION
+
+
 def evaluate_scan_value(
     candidate: PageValueCandidate,
     *,
     scope_kind: ScanScopeKind,
     table_masks: Sequence[BBox] = (),
+    page_size: tuple[int, int] | None = None,
     page_candidates: Sequence[PageValueCandidate] = (),
     rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
     require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
@@ -540,6 +634,13 @@ def evaluate_scan_value(
             accepted=False,
             rule_name="table_region",
             reason="Candidate lies inside a detected table region",
+        )
+
+    if is_sheet_frame_label(normalized.bbox, page_size, normalized.text):
+        return PageValueFilterDecision(
+            accepted=False,
+            rule_name="sheet_frame_label",
+            reason="Short token inside the drawing frame's zone-label band",
         )
 
     if scope_kind == "section":
@@ -617,6 +718,7 @@ def evaluate_page_value(
     *,
     page_candidates: Sequence[PageValueCandidate] = (),
     table_masks: Sequence[BBox] = (),
+    page_size: tuple[int, int] | None = None,
     rules: Sequence[PageValueFilterRule] = NEVER_BALLOON_RULES,
     require_numeric_component: bool = REQUIRE_NUMERIC_COMPONENT,
 ) -> PageValueFilterDecision:
@@ -626,6 +728,7 @@ def evaluate_page_value(
         candidate,
         scope_kind="page",
         table_masks=table_masks,
+        page_size=page_size,
         page_candidates=page_candidates,
         rules=rules,
         require_numeric_component=require_numeric_component,

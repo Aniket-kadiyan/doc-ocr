@@ -202,6 +202,11 @@ class ChecksheetStorage:
                         bbox_width REAL NOT NULL CHECK (bbox_width > 0),
                         bbox_height REAL NOT NULL CHECK (bbox_height > 0),
                         rotation REAL NOT NULL,
+                        oriented_x REAL,
+                        oriented_y REAL,
+                        oriented_width REAL,
+                        oriented_height REAL,
+                        oriented_rotation REAL,
                         label TEXT NOT NULL,
                         specification TEXT NOT NULL,
                         tolerance TEXT NOT NULL,
@@ -246,6 +251,23 @@ class ChecksheetStorage:
                     );
                     """
                 )
+                item_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(checksheet_items)"
+                    ).fetchall()
+                }
+                for column in (
+                    "oriented_x",
+                    "oriented_y",
+                    "oriented_width",
+                    "oriented_height",
+                    "oriented_rotation",
+                ):
+                    if column not in item_columns:
+                        connection.execute(
+                            f"ALTER TABLE checksheet_items ADD COLUMN {column} REAL"
+                        )
                 connection.commit()
             finally:
                 connection.close()
@@ -407,9 +429,11 @@ class ChecksheetStorage:
                 INSERT INTO checksheet_items (
                     id, revision_id, annotation_id, balloon_number, page,
                     bbox_x, bbox_y, bbox_width, bbox_height, rotation,
+                    oriented_x, oriented_y, oriented_width, oriented_height,
+                    oriented_rotation,
                     label, specification, tolerance, method, tool,
                     dimension_type, position
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid4()),
@@ -422,6 +446,11 @@ class ChecksheetStorage:
                     item.bbox.width,
                     item.bbox.height,
                     item.rotation,
+                    item.oriented_box.x if item.oriented_box else None,
+                    item.oriented_box.y if item.oriented_box else None,
+                    item.oriented_box.width if item.oriented_box else None,
+                    item.oriented_box.height if item.oriented_box else None,
+                    item.oriented_box.rotation if item.oriented_box else None,
                     item.label,
                     item.specification,
                     item.tolerance,
@@ -861,6 +890,26 @@ class ChecksheetStorage:
                         "height": float(item["bbox_height"]),
                     },
                     "rotation": float(item["rotation"]),
+                    "oriented_box": (
+                        {
+                            "x": float(item["oriented_x"]),
+                            "y": float(item["oriented_y"]),
+                            "width": float(item["oriented_width"]),
+                            "height": float(item["oriented_height"]),
+                            "rotation": float(item["oriented_rotation"]),
+                        }
+                        if all(
+                            item[key] is not None
+                            for key in (
+                                "oriented_x",
+                                "oriented_y",
+                                "oriented_width",
+                                "oriented_height",
+                                "oriented_rotation",
+                            )
+                        )
+                        else None
+                    ),
                     "label": str(item["label"]),
                     "specification": str(item["specification"]),
                     "tolerance": str(item["tolerance"]),
@@ -1176,9 +1225,11 @@ class ChecksheetStorage:
                     INSERT INTO checksheet_items (
                         id, revision_id, annotation_id, balloon_number, page,
                         bbox_x, bbox_y, bbox_width, bbox_height, rotation,
+                        oriented_x, oriented_y, oriented_width, oriented_height,
+                        oriented_rotation,
                         label, specification, tolerance, method, tool,
                         dimension_type, position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
@@ -1191,6 +1242,11 @@ class ChecksheetStorage:
                         item["bbox_width"],
                         item["bbox_height"],
                         item["rotation"],
+                        item["oriented_x"],
+                        item["oriented_y"],
+                        item["oriented_width"],
+                        item["oriented_height"],
+                        item["oriented_rotation"],
                         item["label"],
                         item["specification"],
                         item["tolerance"],

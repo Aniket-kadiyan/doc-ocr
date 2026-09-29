@@ -40,6 +40,7 @@ export function ScanProgressBanner({
     context: "Reading filter context",
     filtering: "Classifying candidates",
     rereading: "Reading final values",
+    angled: "Reading slanted callouts",
     finalizing: "Finalizing balloons",
     cancelling: "Stopping scan",
     cancelled: "Scan stopped",

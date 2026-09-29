@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  exportInspectionCSV,
   exportInspectionJSON,
   exportXML,
+  downloadBlob,
   downloadFile,
   findMalformedToleranceAnnotations,
 } from "@/lib/export";
@@ -20,6 +22,13 @@ import {
   sendForVerification,
   verificationEndpoint,
 } from "@/lib/project";
+import {
+  canvasToPngBlob,
+  collectBalloonedPages,
+  pagesToExport,
+  renderBalloonedCanvas,
+} from "@/lib/ballooned";
+import { buildBalloonedPdf } from "@/lib/balloonedPdf";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { useDocumentMetadataStore } from "@/store/documentMetadataStore";
 import {
@@ -54,8 +63,17 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
   const metadata = useDocumentMetadataStore((s) => s.metadata);
+  const currentPage = useAnnotationStore((s) => s.currentPage);
+  const pageCanvasProvider = useAnnotationStore((s) => s.pageCanvasProvider);
   const [actionStatus, setActionStatus] = useState<{
-    kind: "idle" | "saving" | "exporting" | "sending" | "ok" | "error";
+    kind:
+      | "idle"
+      | "saving"
+      | "exporting"
+      | "sending"
+      | "rendering"
+      | "ok"
+      | "error";
     message: string;
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
@@ -68,12 +86,15 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const busy =
     actionStatus.kind === "saving" ||
     actionStatus.kind === "exporting" ||
-    actionStatus.kind === "sending";
+    actionStatus.kind === "sending" ||
+    actionStatus.kind === "rendering";
   const busyLabel =
     actionStatus.kind === "saving"
       ? "Saving…"
       : actionStatus.kind === "exporting"
         ? "Generating…"
+      : actionStatus.kind === "rendering"
+        ? "Rendering…"
         : "Sending…";
 
   // Close the Export dropdown when clicking elsewhere.
@@ -214,6 +235,18 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     );
   };
 
+  const handleCSV = () => {
+    if (!validateToleranceExpressions()) return;
+    setMenuOpen(false);
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
+    downloadFile(
+      exportInspectionCSV(annotations, extraColumns, metadata),
+      `${base}_inspection.csv`,
+      "text/csv;charset=utf-8"
+    );
+  };
+
   const handleExcelDialog = () => {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
@@ -272,12 +305,103 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     }
   };
 
+  const handleBalloonedPdf = async () => {
+    if (!validateToleranceExpressions()) return;
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
+
+    setActionStatus({ kind: "rendering", message: "Rendering pages…" });
+    try {
+      const pages = await collectBalloonedPages(
+        pageCanvasProvider,
+        annotations,
+        pagesToExport(annotations, currentPage)
+      );
+      if (pages.length === 0) {
+        throw new Error("Could not render the drawing pages.");
+      }
+      const pdf = await buildBalloonedPdf({
+        projectName,
+        metadata,
+        pages,
+        annotations,
+        extraColumns,
+      });
+      downloadBlob(pdf, `${base}_ballooned.pdf`);
+      setActionStatus({
+        kind: "ok",
+        message: `Saved ${base}_ballooned.pdf (${pages.length} drawing page${
+          pages.length === 1 ? "" : "s"
+        } + inspection table).`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to build the ballooned drawing.",
+      });
+    }
+  };
+
+  // Flat image of the page on screen with its balloons burned in — for pasting
+  // into a report or a chat where an .html attachment won't do.
+  const handleBalloonedPng = async () => {
+    if (!validateToleranceExpressions()) return;
+    setMenuOpen(false);
+    if (!pageCanvasProvider) {
+      setActionStatus({
+        kind: "error",
+        message: "Open a drawing first — there's nothing to balloon yet.",
+      });
+      return;
+    }
+    setActionStatus({ kind: "rendering", message: "Rendering page…" });
+    try {
+      const source = await pageCanvasProvider(currentPage);
+      if (!source) throw new Error("Could not render this page.");
+      const canvas = renderBalloonedCanvas(
+        source,
+        annotations.filter((a) => a.page === currentPage),
+        { projectName, metadata }
+      );
+      downloadBlob(
+        await canvasToPngBlob(canvas),
+        `${base}_ballooned_p${currentPage}.png`
+      );
+      setActionStatus({
+        kind: "ok",
+        message: `Saved page ${currentPage} as PNG.`,
+      });
+    } catch (error) {
+      setActionStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to render the ballooned page.",
+      });
+    }
+  };
+
   const handleXML = () => {
     if (!validateToleranceExpressions()) return;
     setMenuOpen(false);
+    // Same prompt as CSV/JSON so all three exports carry identical columns.
+    const extraColumns = askExtraColumns();
+    if (extraColumns === null) return;
     downloadFile(
-      exportXML(annotations, metadata),
-      `${base}_annotations.xml`,
+      exportXML(annotations, extraColumns, metadata),
+      `${base}_inspection.xml`,
       "application/xml"
     );
   };
@@ -365,12 +489,42 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           </button>
           <button
             type="button"
+            onClick={handleCSV}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">CSV</span>
+            <span className="block text-[11px] text-slate-400">
+              Metadata and inspection table
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBalloonedPdf()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PDF)</span>
+            <span className="block text-[11px] text-slate-400">
+              Drawing + balloons + values in one printable file
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBalloonedPng()}
+            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+          >
+            <span className="font-medium">Ballooned Drawing (PNG)</span>
+            <span className="block text-[11px] text-slate-400">
+              This page as an image with balloons burned in
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={handleXML}
             className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
           >
             <span className="font-medium">XML</span>
             <span className="block text-[11px] text-slate-400">
-              Annotations as a .xml file
+              Same table as CSV/JSON, as a .xml file
             </span>
           </button>
           <button

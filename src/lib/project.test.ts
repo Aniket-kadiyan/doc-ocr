@@ -84,8 +84,11 @@ describe("project and integration exports", () => {
       "Method",
       "Tool",
     ]);
-    expect(sheet.rows).toEqual([
-      ["1", "", "25", "0", "", "", "", ""],
+    // The value rows come first; the title-block section (a gap, then one row
+    // per configured keyword) is appended under them and asserted separately.
+    expect(sheet.rows.slice(0, values.length)).toEqual([
+      // No label was stored on this one, so it shows its category label.
+      ["1", "Linear Dimension", "25", "0", "", "", "", ""],
       [
         "2",
         "Outer diameter",
@@ -130,6 +133,20 @@ describe("project and integration exports", () => {
     // Export formatting must never mutate the editable annotations.
     expect(upperOnly.range).toBe("+0.1");
     expect(lowerOnly.range).toBe("-.5");
+  });
+
+  it("does not duplicate known metadata as title-block rows", () => {
+    const sheet = buildInspectionSheet(values, []);
+    const labels = sheet.rows
+      .slice(values.length)
+      .map((row) => row[1])
+      .filter(Boolean);
+
+    expect(labels).toEqual([]);
+    // Every row is the sheet's full width, so the columns stay aligned.
+    expect(sheet.rows.every((row) => row.length === sheet.headers.length)).toBe(
+      true
+    );
   });
 
   it("saves a values-only project without embedding balloon artwork", () => {

@@ -32,3 +32,25 @@ if __name__ == "__main__":
     test_clean_and_partial_angles()
     test_does_not_invent_angles()
     print("OK")
+
+
+def test_tickless_dms_recovered():
+    # PaddleOCR drops the ' and " ticks; trailing "|" / "1" is the extension line.
+    from angle_utils import parse_dms
+
+    assert parse_dms("32°20 40") == "32°20'40\""
+    assert parse_dms("32°20 40|") == "32°20'40\""
+    assert parse_dms("32°20 401") == "32°20'40\""
+    assert parse_dms("32°20401") == "32°20'40\""
+    # Not an angle: no degree mark, no ticks.
+    assert parse_dms("32 20 40") is None
+
+
+def test_strip_angle_tail():
+    from angle_utils import strip_angle_tail
+
+    assert strip_angle_tail("12°±3°1") == "12°±3°"
+    assert strip_angle_tail("12°±3°|") == "12°±3°"
+    assert strip_angle_tail("45°") == "45°"
+    assert strip_angle_tail("32°20'40\"") == "32°20'40\""
+    assert strip_angle_tail("215.37±0.05") == "215.37±0.05"

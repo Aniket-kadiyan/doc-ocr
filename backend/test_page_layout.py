@@ -102,3 +102,48 @@ def test_page_layout_cache_is_bounded_and_reuses_geometry() -> None:
     assert cache.get("one") is None
     assert cache.get("two") is layout
     assert cache.get("three") is layout
+
+
+def _grid(draw: ImageDraw.ImageDraw, x_values, y_values) -> None:
+    for x in x_values:
+        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
+    for y in y_values:
+        draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
+
+
+def test_a_part_view_crossed_by_extension_lines_is_not_a_table() -> None:
+    # GPD 18T: the part outline and the extension lines of "23 -0.1" close
+    # into two stacked boxes 180 and 280 px tall on a 2068 px page. Masking
+    # them erased Ø20.5, Ø36.8 and 12.55 before detection.
+    image = Image.new("RGB", (2924, 2068), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (1596, 1760), (346, 528, 808))
+
+    assert not any(_contains(mask, 1680, 600) for mask in detect_table_masks(image))
+
+
+def test_stacked_feature_control_frames_are_not_a_table() -> None:
+    # Two frames "// 0.03 B" over "⟂ 0.03 A": a 2×3 grid of 49 px cells,
+    # 180 px wide, on a 2068 px page.
+    image = Image.new("RGB", (2924, 2068), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (1832, 1880, 1930, 2011), (323, 372, 421))
+
+    assert not any(_contains(mask, 1900, 372) for mask in detect_table_masks(image))
+
+
+def test_hatching_is_not_a_table() -> None:
+    image = Image.new("RGB", (2924, 2068), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, tuple(range(1428, 1470, 12)), tuple(range(229, 280, 10)))
+
+    assert not any(_contains(mask, 1445, 250) for mask in detect_table_masks(image))
+
+
+def test_a_title_block_grid_is_still_a_table() -> None:
+    # 47630: the revision table, 4 rows of 41 px cells across 1170 px.
+    image = Image.new("RGB", (2924, 2068), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (1568, 1631, 1694, 1774, 2742), (88, 129, 170, 211, 252))
+
+    assert any(_contains(mask, 1660, 190) for mask in detect_table_masks(image))

@@ -119,6 +119,15 @@ def classify_dimension(text: str) -> DimensionType:
 def startup() -> None:
     initialize_checksheet_storage()
     get_pipeline()
+    # OCR worker processes for the parallel parts of a page scan. Spawned now
+    # so a scan never waits for their model load; OCR_WORKERS=0 disables them.
+    try:
+        from ocr_workers import get_worker_pool
+
+        pool = get_worker_pool(start=True)
+        print(f"[ocr_workers] {pool.size} worker process(es) starting")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001 - a scan still runs in-process
+        print(f"[ocr_workers] disabled: {exc}")  # noqa: T201
     st = dump_status()
     if st["enabled"]:
         print(f"[debug_dump] ON → {st['root']}")  # noqa: T201
@@ -131,12 +140,29 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown() -> None:
     scan_job_manager.shutdown(wait=False)
+    try:
+        from ocr_workers import shutdown_worker_pool
+
+        shutdown_worker_pool()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
-    return {"status": "ok", **pipeline.status, "debug_dump": dump_status()}
+    try:
+        from ocr_workers import get_worker_pool
+
+        workers = get_worker_pool(start=False).status()
+    except Exception:  # noqa: BLE001
+        workers = {"configured": 0, "started": False, "ready": 0, "broken": True}
+    return {
+        "status": "ok",
+        **pipeline.status,
+        "debug_dump": dump_status(),
+        "ocr_workers": workers,
+    }
 
 
 @app.post("/checksheet/templates")
@@ -249,6 +275,13 @@ async def segment_region(
     ),
     x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
     x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+    keywords: str = Form(
+        "",
+        description=(
+            "Comma-separated title-block labels to look for "
+            "(the client's 'Keywords to look for' setting), e.g. 'DWG,REV'"
+        ),
+    ),
 ) -> dict[str, Any]:
     """Auto-segment a multi-value selection into per-dimension OCR results."""
     raw = await file.read()
@@ -257,6 +290,10 @@ async def segment_region(
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = debug_dump_force or (x_debug_dump_force or "").strip().lower() in truthy
+
+    # Kept for request compatibility with older clients. Title fields are read
+    # by the dedicated whole-page /ocr/title-fields endpoint.
+    _ = keywords
 
     seg = pipeline.segment(
         image,
@@ -368,15 +405,23 @@ def _map_section_result_to_page(
                 "rule": rule,
             }
         )
-        mapped_regions.append(
-            {
-                **region,
-                "bbox": page_bbox,
-                "text": text,
-                "page_filter_rule": rule,
-                "page_filter_reason": reason,
+        mapped_region = {
+            **region,
+            "bbox": page_bbox,
+            "text": text,
+            "page_filter_rule": rule,
+            "page_filter_reason": reason,
+        }
+        # A slanted callout's tight rotated rectangle is in section pixels
+        # too; it translates like the bbox and its rotation is unchanged.
+        oriented = region.get("oriented_box")
+        if isinstance(oriented, dict):
+            mapped_region["oriented_box"] = {
+                **oriented,
+                "x": round(origin_x + float(oriented.get("x", 0.0)), 1),
+                "y": round(origin_y + float(oriented.get("y", 0.0)), 1),
             }
-        )
+        mapped_regions.append(mapped_region)
 
     mapped_outcomes: list[dict[str, Any]] = []
     for outcome in list(seg.get("candidate_outcomes", [])):
@@ -384,6 +429,25 @@ def _map_section_result_to_page(
         mapped_outcomes.append(
             {
                 **outcome,
+                "bbox": {
+                    "x": round(origin_x + float(local.get("x", 0.0)), 1),
+                    "y": round(origin_y + float(local.get("y", 0.0)), 1),
+                    "width": round(float(local.get("width", 0.0)), 1),
+                    "height": round(float(local.get("height", 0.0)), 1),
+                },
+            }
+        )
+
+    # Review candidates carry geometry too. They were always empty while the
+    # section scan used the light pipeline, so passing them through untouched
+    # was harmless; the page pipeline produces real ones and they would
+    # otherwise reach the client still in section coordinates.
+    mapped_reviews: list[dict[str, Any]] = []
+    for candidate in list(seg.get("review_candidates", [])):
+        local = dict(candidate.get("bbox", {}))
+        mapped_reviews.append(
+            {
+                **candidate,
                 "bbox": {
                     "x": round(origin_x + float(local.get("x", 0.0)), 1),
                     "y": round(origin_y + float(local.get("y", 0.0)), 1),
@@ -401,6 +465,7 @@ def _map_section_result_to_page(
             "coordinate_space": "page",
             "regions": mapped_regions,
             "candidate_outcomes": mapped_outcomes,
+            "review_candidates": mapped_reviews,
         },
         overlay_candidates,
     )
@@ -585,7 +650,14 @@ async def create_scan_job(
                     percent=max(10, 10 + int(raw_percent * 0.88)),
                 )
 
-            seg = pipeline.segment(
+            # Both scopes run the same pipeline. Measured on the benchmark
+            # drawings at fixture resolution, the page route reads far more of
+            # the same sheet than the light section route does — 16/19 against
+            # 11/19 on 47630, 16/24 against 10/24 on 56103-0182B, 11/12 against
+            # 8/12 on BS1801006.020 — and it is the route that now matches or
+            # beats the pre-merge pipeline. A section scan is the same problem
+            # on a smaller image, so it gets the same treatment.
+            seg = pipeline.segment_page(
                 section_image,
                 debug_dump=req_dump,
                 debug_dump_force=req_force,
@@ -648,6 +720,51 @@ def cancel_scan_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
+
+
+@app.post("/ocr/title-fields")
+async def read_title_fields(
+    file: UploadFile = File(...),
+    keywords: str = Form(
+        "",
+        description="Comma-separated title-block labels, e.g. 'DWG,REV'",
+    ),
+) -> dict[str, Any]:
+    """
+    Read the title block of a WHOLE sheet for the configured keywords.
+
+    Separate from /ocr/segment because the title block's position does not
+    depend on whatever rectangle the user drew for Auto-Segment.
+    """
+    wanted = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not wanted:
+        return {"fields": []}
+
+    raw = await file.read()
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    fields = get_pipeline().title_fields(image, wanted)
+
+    return {
+        "fields": [
+            {
+                "keyword": f["keyword"],
+                "label": f["label"],
+                "value": f["value"],
+                "confidence": f["confidence"],
+                "bbox": (
+                    {
+                        "x": round(f["bbox"]["x"], 1),
+                        "y": round(f["bbox"]["y"], 1),
+                        "width": round(f["bbox"]["w"], 1),
+                        "height": round(f["bbox"]["h"], 1),
+                    }
+                    if f["bbox"]
+                    else None
+                ),
+            }
+            for f in fields
+        ]
+    }
 
 
 @app.post("/training/export-labels")

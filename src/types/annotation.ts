@@ -1,10 +1,55 @@
+/**
+ * Feature category assigned by the GD&T rule engine (GDTOCR spec). The string
+ * values are the single source of truth shared with the backend
+ * (backend/feature_dictionary.py CAT_* constants). Keep the two in sync.
+ */
+export const DIMENSION_TYPES = [
+  "Diameter",
+  "Radius",
+  "Chamfer",
+  "Angle",
+  "Taper",
+  "Linear",
+  "Tolerance",
+  "Thread",
+  "Hole",
+  "GD&T",
+  "Datum",
+  "Surface Finish",
+  "Weld",
+  "Material",
+  "Heat Treatment",
+  "Coating",
+  "General Note",
+  "Reference",
+  "Basic",
+  "Note",
+  "Title Block",
+  "Unknown",
+] as const;
+
 export type DimensionType =
   | "Diameter"
   | "Radius"
+  | "Chamfer"
   | "Angle"
-  | "Tolerance"
+  | "Taper"
   | "Linear"
+  | "Tolerance"
+  | "Thread"
+  | "Hole"
+  | "GD&T"
+  | "Datum"
+  | "Surface Finish"
+  | "Weld"
+  | "Material"
+  | "Heat Treatment"
+  | "Coating"
+  | "General Note"
+  | "Reference"
+  | "Basic"
   | "Note"
+  | "Title Block"
   | "Unknown";
 
 export interface BBox {
@@ -41,9 +86,15 @@ export interface Annotation {
   label: string;
   value: string;
   type: DimensionType;
+  /** Optional rule-engine subtype retained for downstream labeling/export. */
+  subtype?: string;
   confidence: number;
   bbox: BBox;
   rotation: number;
+  /** Tight rotated rectangle for slanted callouts (source coords + clockwise
+   * degrees). When present the drawing renders this instead of the loose
+   * axis-aligned {@link bbox}, which is oversized for diagonal text. */
+  orientedBox?: BBox & { rotation: number };
   page: number;
   createdAt: number;
   /** New records use "dimension". "label" is accepted only during migration. */
@@ -91,6 +142,10 @@ export interface OCRResult {
   agreement?: number;
   /** Backend flagged this read as uncertain — prompt the user to verify. */
   needsReview?: boolean;
+  /** Rule-engine classification returned by manual region OCR. */
+  category?: string;
+  subtype?: string;
+  label?: string;
   /** Tight bbox of the detected text in source-canvas coords (snap target). */
   valueBox?: BBox;
   /** backend/debug_output/<hash>/ when step dump succeeded */
@@ -105,4 +160,8 @@ export interface PendingSelection {
   source?: "manual" | "scan_review";
   reviewCandidateId?: string;
   reviewReason?: string;
+  suggestedType?: DimensionType;
+  suggestedSubtype?: string;
+  suggestedLabel?: string;
+  orientedBox?: BBox & { rotation: number };
 }

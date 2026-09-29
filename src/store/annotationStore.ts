@@ -3,6 +3,7 @@ import {
   moveValueAnnotationToNumber,
   renumberValueAnnotations,
 } from "@/lib/annotationNumbers";
+import type { PageCanvasProvider } from "@/lib/ballooned";
 import type { Annotation, PendingSelection } from "@/types/annotation";
 
 const isValue = (annotation: Annotation) => annotation.kind !== "label";
@@ -11,6 +12,9 @@ interface AnnotationState {
   annotations: Annotation[];
   pending: PendingSelection | null;
   currentPage: number;
+  /** Supplies a rendered page canvas, so the ballooned PDF/PNG exports can
+   * draw balloons over the drawing without re-rendering it themselves. */
+  pageCanvasProvider: PageCanvasProvider | null;
   totalPages: number;
   scale: number;
   isSegmenting: boolean;
@@ -32,6 +36,7 @@ interface AnnotationState {
   removeAnnotation: (id: string) => void;
   setPending: (pending: PendingSelection | null) => void;
   setCurrentPage: (page: number) => void;
+  setPageCanvasProvider: (provider: PageCanvasProvider | null) => void;
   setTotalPages: (total: number) => void;
   setScale: (scale: number) => void;
   setIsSegmenting: (segmenting: boolean) => void;
@@ -48,6 +53,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   annotations: [],
   pending: null,
   currentPage: 1,
+  pageCanvasProvider: null,
   totalPages: 1,
   scale: 1,
   isSegmenting: false,
@@ -124,6 +130,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   setPending: (pending) => set({ pending }),
 
   setCurrentPage: (page) => set({ currentPage: page }),
+  setPageCanvasProvider: (pageCanvasProvider) => set({ pageCanvasProvider }),
 
   setTotalPages: (total) => set({ totalPages: total }),
 

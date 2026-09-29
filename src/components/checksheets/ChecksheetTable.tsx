@@ -1,6 +1,8 @@
 "use client";
 
 import { validateChecksheetReading } from "@/lib/checksheetRange";
+import { labelForDimensionType } from "@/lib/featureLabel";
+import { isNoteText, splitNotePoints } from "@/lib/notes";
 import type { ChecksheetColumn, ChecksheetRow } from "@/types/checksheet";
 
 interface ChecksheetTableProps {
@@ -47,6 +49,60 @@ export function ChecksheetTable({
         <tbody>
           {rows.map((row) => {
             const active = row.annotation_id === activeAnnotationId;
+            // A checksheet snapshotted before the rule engine's label was
+            // published carries a blank one; it still knows its category, so
+            // the label is derived rather than shown as a dash.
+            const rowLabel =
+              row.label.trim() || labelForDimensionType(row.dimension_type);
+            // A drawing NOTES block is one ballooned object, so it arrives as
+            // a single row holding the whole paragraph. It reads as a wall of
+            // text there, so it is listed point by point exactly as the
+            // drawing numbers them, and it takes no readings: a note is
+            // instruction, not a measurement.
+            const notePoints = isNoteText(row.dimension_type, row.specification)
+              ? splitNotePoints(row.specification)
+              : null;
+            if (notePoints && notePoints.length > 0) {
+              return (
+                <tr
+                  key={row.annotation_id}
+                  data-checksheet-row={row.annotation_id}
+                  onClick={() => onActivate(row.annotation_id)}
+                  className={`border-b border-slate-100 transition-colors ${
+                    active
+                      ? "bg-blue-100/80 shadow-[inset_4px_0_0_#2563eb]"
+                      : "hover:bg-blue-50/50"
+                  }`}
+                >
+                  <td className="px-3 py-2 align-top text-center">
+                    <span
+                      className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-bold ${
+                        active
+                          ? "bg-blue-600 text-white"
+                          : "border border-slate-300 bg-white text-slate-700"
+                      }`}
+                    >
+                      {row.balloon_number}
+                    </span>
+                  </td>
+                  <td className="max-w-48 px-3 py-2 align-top text-sm text-slate-700">
+                    {rowLabel}
+                  </td>
+                  <td
+                    className="px-3 py-2 align-top text-sm text-slate-900"
+                    colSpan={columns.length + 4}
+                  >
+                    <ol className="space-y-1">
+                      {notePoints.map((point, index) => (
+                        <li key={index} className="leading-snug">
+                          {point}
+                        </li>
+                      ))}
+                    </ol>
+                  </td>
+                </tr>
+              );
+            }
             return (
               <tr
                 key={row.annotation_id}
@@ -70,7 +126,7 @@ export function ChecksheetTable({
                   </span>
                 </td>
                 <td className="max-w-48 px-3 py-2 text-sm text-slate-700">
-                  {row.label || <span className="text-slate-300">—</span>}
+                  {rowLabel}
                 </td>
                 <td className="px-3 py-2 font-mono text-sm font-medium text-slate-900">
                   {row.specification}

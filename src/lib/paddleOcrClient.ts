@@ -1,6 +1,7 @@
 import type { BBox, OCRResult } from "@/types/annotation";
 import { cropRegion, CROP_PAD_PX } from "@/lib/canvasUtils";
 import { fixEngineeringSymbols } from "@/lib/engineeringSymbols";
+import { getTitleKeywords } from "@/lib/titleKeywords";
 import { isOcrDebugDumpEnabled, isOcrDebugDumpForce } from "@/lib/ocrDebugDump";
 import { mergeSymbolHints } from "@/lib/visualSymbols";
 
@@ -97,6 +98,9 @@ interface ApiRecognizeResponse {
   needs_review?: boolean;
   text_bbox?: { x: number; y: number; width: number; height: number };
   type?: string;
+  category?: string;
+  subtype?: string;
+  label?: string;
   debug_dump_dir?: string;
   debug_dump?: {
     active?: boolean;
@@ -123,6 +127,11 @@ export interface SegmentRegion {
   text: string;
   confidence: number;
   type?: string;
+  /** Feature category from the backend GD&T rule engine (e.g. "Hole"). */
+  category?: string;
+  subtype?: string;
+  /** Suggested balloon label from the rule engine (e.g. "4X Through Hole"). */
+  label?: string;
   orientation: "horizontal" | "vertical" | "rotated";
   rotation: number;
   needsReview: boolean;
@@ -138,6 +147,12 @@ export interface SegmentRegion {
   recoveryAttempted?: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
+  /**
+   * Tight rotated rectangle (source-canvas coords) for a slanted callout: the
+   * axis-aligned {@link valueBox} is loose for diagonal text, so this carries a
+   * Konva-drawable box (top-left corner + size + clockwise rotation degrees).
+   */
+  orientedBox?: BBox & { rotation: number };
 }
 
 export interface ApiSegmentRegion {
@@ -146,8 +161,24 @@ export interface ApiSegmentRegion {
   text: string;
   confidence: number;
   type?: string;
+  /** Feature category / subtype / suggested label from the GD&T rule engine. */
+  category?: string;
+  subtype?: string;
+  label?: string;
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
+  /**
+   * Tight rotated rectangle for a slanted callout, in the same pixel space as
+   * `bbox` (top-left corner + size + clockwise rotation degrees). Only the
+   * angled pass sets it; upright reads carry `bbox` alone.
+   */
+  oriented_box?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  };
   needs_review?: boolean;
   recognized?: boolean;
   page_filter_rule?: string;
@@ -179,12 +210,23 @@ export interface ApiSegmentResponse {
   }>;
 }
 
-function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
+function mappedSegmentRegion(
+  r: ApiSegmentRegion,
+  valueBox: BBox,
+  orientedBox?: BBox & { rotation: number }
+): SegmentRegion {
   return {
     candidateId: r.candidate_id,
-    text: fixEngineeringSymbols(r.text ?? ""),
+    // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
+    // newlines. A notes paragraph needs neither: its line breaks are what let
+    // the sheet split it back into numbered points, and "fixing" prose only
+    // risks turning letters into engineering symbols.
+    text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
     confidence: r.confidence ?? 0,
     type: r.type,
+    category: r.category,
+    subtype: r.subtype,
+    label: r.label,
     orientation: r.orientation ?? "horizontal",
     rotation: r.rotation ?? 0,
     needsReview: r.needs_review ?? false,
@@ -194,6 +236,7 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     reviewReason: r.review_reason,
     recoveryAttempted: r.recovery_attempted,
     valueBox,
+    orientedBox,
   };
 }
 
@@ -232,21 +275,43 @@ export function mapSegmentRegions(
         }
       : mapped;
 
-    return mappedSegmentRegion(r, valueBox);
+    // Map the oriented rectangle (angled callouts only) the same way — its
+    // top-left corner translates + scales like any point; rotation is invariant.
+    const orientedBox =
+      r.oriented_box && !outOfBounds
+        ? {
+            x: bbox.x + (r.oriented_box.x - CROP_PAD_PX) / displayScale,
+            y: bbox.y + (r.oriented_box.y - CROP_PAD_PX) / displayScale,
+            width: r.oriented_box.width / displayScale,
+            height: r.oriented_box.height / displayScale,
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, valueBox, orientedBox);
   });
 }
 
 /** Map API regions that are already expressed in full-page coordinates. */
 export function mapPageSegmentRegions(
   regions: ApiSegmentRegion[],
-  pageBounds: BBox
+  pageBounds: BBox,
+  /**
+   * Pixels of the scanned image per unit of `pageBounds`. The scan may read a
+   * higher-resolution render than the one on screen, in which case the backend
+   * returns page coordinates in those larger pixels and they have to come back
+   * down before they are used as annotation geometry. Left at 1 the behaviour
+   * is unchanged.
+   */
+  scale = 1
 ): SegmentRegion[] {
+  const toBounds = (value: number) => value / scale;
   return regions.map((r) => {
     const direct: BBox = {
-      x: r.bbox.x,
-      y: r.bbox.y,
-      width: r.bbox.width,
-      height: r.bbox.height,
+      x: toBounds(r.bbox.x),
+      y: toBounds(r.bbox.y),
+      width: toBounds(r.bbox.width),
+      height: toBounds(r.bbox.height),
     };
     const invalid =
       !Number.isFinite(direct.x) ||
@@ -260,7 +325,20 @@ export function mapPageSegmentRegions(
       direct.x + direct.width > pageBounds.x + pageBounds.width ||
       direct.y + direct.height > pageBounds.y + pageBounds.height;
 
-    return mappedSegmentRegion(r, invalid ? pageBounds : direct);
+    // The oriented rectangle lives in the same page pixels as `bbox`, so it
+    // comes down by the same scale. Rotation is scale-invariant.
+    const orientedBox =
+      r.oriented_box && !invalid
+        ? {
+            x: toBounds(r.oriented_box.x),
+            y: toBounds(r.oriented_box.y),
+            width: toBounds(r.oriented_box.width),
+            height: toBounds(r.oriented_box.height),
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
   });
 }
 
@@ -271,6 +349,11 @@ export function mapPageSegmentRegions(
  * returned region's box (received-crop pixels) back into source-canvas coords
  * using the same arithmetic as the single-value valueBox mapping below.
  */
+/** A notes paragraph region, flagged as such by the backend rule engine. */
+function isNoteRegion(r: { type?: string; category?: string }): boolean {
+  return r.category === "General Note" || r.type === "General Note";
+}
+
 export async function runSegmentOcr(
   sourceCanvas: HTMLCanvasElement,
   bbox: BBox,
@@ -315,6 +398,55 @@ export async function runSegmentOcr(
   const data = (await res.json()) as ApiSegmentResponse;
 
   return mapSegmentRegions(data.regions ?? [], bbox, displayScale);
+}
+
+/** One title-block field read off the sheet for a configured keyword. */
+export interface TitleField {
+  keyword: string;
+  label: string;
+  /** "" when the keyword was not found — the sheet still gets a row for it. */
+  value: string;
+  confidence: number;
+  /** Null when not found, so there is nothing to place a balloon on. */
+  bbox: BBox | null;
+}
+
+/**
+ * Read the configured title-block keywords from a WHOLE page.
+ *
+ * Runs against the full page canvas rather than an Auto-Segment selection: the
+ * title block sits at a fixed place on the sheet, so scanning only the drawn
+ * rectangle made the result depend on where that box landed (a selection over
+ * the upper sheet found the revision table's REV and missed DWG NO. at the
+ * bottom). Coordinates come back in page space, so no crop mapping is needed.
+ */
+export async function runTitleFields(
+  pageCanvas: HTMLCanvasElement,
+  keywords: string[] = getTitleKeywords()
+): Promise<TitleField[]> {
+  if (keywords.length === 0) return [];
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    pageCanvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error("Failed to encode page"));
+    }, "image/png");
+  });
+
+  const form = new FormData();
+  form.append("file", blob, "page.png");
+  form.append("keywords", keywords.join(","));
+
+  const res = await fetch(`${getOcrApiUrl()}/ocr/title-fields`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`Title fields API error: ${res.status}`);
+  }
+
+  const data = (await res.json()) as { fields?: TitleField[] };
+  return data.fields ?? [];
 }
 
 export async function runPaddleOcr(
@@ -422,6 +554,9 @@ export async function runPaddleOcr(
     engine,
     agreement: data.agreement,
     needsReview: data.needs_review,
+    category: data.category,
+    subtype: data.subtype,
+    label: data.label,
     valueBox,
     debugDumpDir: data.debug_dump_dir ?? data.debug_dump?.dir ?? undefined,
     debugDumpSkipped: data.debug_dump?.skipped_reason ?? undefined,

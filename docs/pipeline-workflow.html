@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Ink to Balloons</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root {
+    --paper: #F6F7F9;
+    --surface: #FFFFFF;
+    --ink: #171C22;
+    --ink-soft: #59656F;
+    --rule: #D6DDE5;
+    --rule-soft: #E7ECF1;
+    --cad: #1466C8;
+    --cad-wash: #E8F0FB;
+    --balloon: #C0322A;
+    --balloon-wash: #FAEAE8;
+    --shadow: 0 1px 2px rgba(23, 28, 34, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0E1216;
+      --surface: #161B21;
+      --ink: #E7EBF0;
+      --ink-soft: #98A3AF;
+      --rule: #2B333C;
+      --rule-soft: #212831;
+      --cad: #6AABF7;
+      --cad-wash: #14283E;
+      --balloon: #F1786E;
+      --balloon-wash: #331F1E;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0E1216;
+    --surface: #161B21;
+    --ink: #E7EBF0;
+    --ink-soft: #98A3AF;
+    --rule: #2B333C;
+    --rule-soft: #212831;
+    --cad: #6AABF7;
+    --cad-wash: #14283E;
+    --balloon: #F1786E;
+    --balloon-wash: #331F1E;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 56px 88px;
+  }
+
+  .prose { max-width: 66ch; }
+
+  h1, h2, h3, .label, figcaption b, th, .tag, .stat-n {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  h1 {
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.04;
+    letter-spacing: -.022em;
+    font-weight: 700;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+
+  h2 {
+    font-size: 23px;
+    letter-spacing: -.012em;
+    font-weight: 600;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+
+  .eyebrow {
+    font-family: Archivo, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--cad);
+    margin: 0 0 14px;
+  }
+
+  .lede { font-size: 19px; color: var(--ink-soft); margin: 0; }
+  p { margin: 0 0 16px; }
+  .prose p:last-child { margin-bottom: 0; }
+
+  code, .mono {
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .86em;
+  }
+  code { color: var(--cad); }
+
+  header.page {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 32px;
+    margin-bottom: 44px;
+  }
+  header.page .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .tag {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: .02em;
+    color: var(--ink-soft);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 4px 9px;
+    background: var(--surface);
+  }
+
+  section { margin-bottom: 52px; }
+  section:last-of-type { margin-bottom: 0; }
+
+  figure {
+    margin: 26px 0 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 26px 22px 18px;
+    box-shadow: var(--shadow);
+  }
+  .figscroll { overflow-x: auto; }
+  figure svg {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    min-width: 520px;
+    color: var(--ink-soft);
+  }
+  figcaption {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule-soft);
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  /* diagram primitives */
+  .node { fill: var(--surface); stroke: var(--rule); stroke-width: 1.2; }
+  .node-cad { fill: var(--cad-wash); stroke: var(--cad); stroke-width: 1.2; }
+  .node-bal { fill: var(--balloon-wash); stroke: var(--balloon); stroke-width: 1.2; }
+  .lab {
+    font-family: Archivo, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    fill: var(--ink);
+  }
+  .lab-cad { fill: var(--cad); }
+  .lab-bal { fill: var(--balloon); }
+  .note {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 12.5px;
+    fill: var(--ink-soft);
+  }
+  .note-mono {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11.5px;
+    fill: var(--ink-soft);
+  }
+  .flow { stroke: var(--ink-soft); stroke-width: 1.4; fill: none; }
+  .flow-bal { stroke: var(--balloon); stroke-width: 1.4; fill: none; }
+  .flow-dash { stroke-dasharray: 4 4; }
+  .arrowhead { fill: var(--ink-soft); }
+  .arrowhead-bal { fill: var(--balloon); }
+  .grouprect { fill: none; stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 26px;
+  }
+  .stat { background: var(--surface); padding: 18px 20px; }
+  .stat-n {
+    font-size: 27px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    display: block;
+  }
+  .stat-k {
+    font-family: Archivo, sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    display: block;
+    margin-bottom: 7px;
+  }
+  .stat-d { font-size: 14px; color: var(--ink-soft); line-height: 1.45; margin-top: 4px; }
+  .fires { color: var(--cad); }
+  .silent { color: var(--balloon); }
+
+  .tablewrap { overflow-x: auto; margin-top: 24px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 15px;
+  }
+  th, td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  th {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td.num {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--cad);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+
+  footer.page {
+    margin-top: 56px;
+    padding-top: 26px;
+    border-top: 1px solid var(--rule);
+    font-size: 14.5px;
+    color: var(--ink-soft);
+  }
+
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    .wrap { padding-block: 40px 64px; }
+    figure { padding: 18px 14px 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <p class="eyebrow">doc-ocr-box &middot; backend</p>
+    <h1>Ink to Balloons</h1>
+    <p class="lede">How one selection on an engineering drawing becomes a list of balloon-labeled
+      dimensions: the stages of <code>OcrPipeline.segment()</code>, and the recovery path for
+      callouts lettered along a leader line.</p>
+    <div class="meta">
+      <span class="tag">PaddleOCR 3.7</span>
+      <span class="tag">Python 3.12</span>
+      <span class="tag">backend/ocr_pipeline.py</span>
+      <span class="tag">178 tests</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="prose">
+      <h2>The main path</h2>
+      <p>A CAD sheet is mostly geometry. The dimension text is a small share of the ink, it sits at
+        every orientation, and one callout is often detected as three separate fragments. So the
+        pipeline detects lines of text, decides which fragments belong to the same callout, and only
+        then reads each callout on its own crop.</p>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 800 622" role="img"
+             aria-label="Nine stages from selection to output regions: detect text lines, drop non-dimensions, cluster into callouts, read each callout, rescue and split, dedupe on oriented boxes, recover angled callouts, emit regions.">
+          <defs>
+            <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+          </defs>
+
+          <!-- 1 selection -->
+          <rect class="node-cad" x="28" y="22" width="264" height="46" rx="4"></rect>
+          <text class="lab lab-cad" x="160" y="50" text-anchor="middle">Selection</text>
+          <text class="note" x="316" y="43">A marquee on the drawing, a detail view,</text>
+          <text class="note" x="316" y="59">or a whole rendered page.</text>
+          <line class="flow" x1="160" y1="68" x2="160" y2="82" marker-end="url(#ar1)"></line>
+
+          <!-- 2 detect -->
+          <rect class="node" x="28" y="86" width="264" height="46" rx="4"></rect>
+          <text class="lab" x="160" y="107" text-anchor="middle">Detect text lines</text>
+          <text class="note-mono" x="160" y="123" text-anchor="middle">detect_regions()</text>
+          <text class="note" x="316" y="101">Two detector passes, upright and rotated 90&deg;, on a</text>
+          <text class="note" x="316" y="117">blue-ink mask. Each line keeps its four corners, so its</text>
+          <text class="note" x="316" y="133">own angle survives instead of being squared off.</text>
+          <line class="flow" x1="160" y1="132" x2="160" y2="146" marker-end="url(#ar1)"></line>
+
+          <!-- 3 drop -->
+          <rect class="node" x="28" y="150" width="264" height="46" rx="4"></rect>
+          <text class="lab" x="160" y="171" text-anchor="middle">Drop what is not a dimension</text>
+          <text class="note-mono" x="160" y="187" text-anchor="middle">notes &middot; specks &middot; bridges</text>
+          <text class="note" x="316" y="171">Process notes, finish marks, arrowheads under text</text>
+          <text class="note" x="316" y="187">size, and boxes spanning two columns.</text>
+          <line class="flow" x1="160" y1="196" x2="160" y2="210" marker-end="url(#ar1)"></line>
+
+          <!-- 4 cluster -->
+          <rect class="node" x="28" y="214" width="264" height="46" rx="4"></rect>
+          <text class="lab" x="160" y="235" text-anchor="middle">Cluster into callouts</text>
+          <text class="note-mono" x="160" y="251" text-anchor="middle">cluster_boxes()</text>
+          <text class="note" x="316" y="235">Union-find over inflated boxes. Guards keep two</text>
+          <text class="note" x="316" y="251">stacked callouts apart while rejoining the pieces</text>
+          <text class="note" x="316" y="267">of one value.</text>
+          <line class="flow" x1="160" y1="260" x2="160" y2="274" marker-end="url(#ar1)"></line>
+
+          <!-- 5 read -->
+          <rect class="node-cad" x="28" y="278" width="264" height="46" rx="4"></rect>
+          <text class="lab lab-cad" x="160" y="299" text-anchor="middle">Read each callout</text>
+          <text class="note-mono" x="160" y="315" text-anchor="middle">recognize()</text>
+          <text class="note" x="316" y="299">One crop per cluster, read on its own.</text>
+          <text class="note lab-cad" x="316" y="315">Figure 2.</text>
+          <line class="flow" x1="160" y1="324" x2="160" y2="338" marker-end="url(#ar1)"></line>
+
+          <!-- 6 rescue -->
+          <rect class="node" x="28" y="342" width="264" height="46" rx="4"></rect>
+          <text class="lab" x="160" y="363" text-anchor="middle">Rescue, filter, split</text>
+          <text class="note-mono" x="160" y="379" text-anchor="middle">worthiness &middot; stray line &middot; rows</text>
+          <text class="note" x="316" y="363">When the tight re-read fails, the detector's own read</text>
+          <text class="note" x="316" y="379">stands in. Fused rows split into one region each.</text>
+          <line class="flow" x1="160" y1="388" x2="160" y2="402" marker-end="url(#ar1)"></line>
+
+          <!-- 7 dedupe -->
+          <rect class="node" x="28" y="406" width="264" height="46" rx="4"></rect>
+          <text class="lab" x="160" y="427" text-anchor="middle">Dedupe on oriented boxes</text>
+          <text class="note-mono" x="160" y="443" text-anchor="middle">dedupe_regions()</text>
+          <text class="note" x="316" y="427">Overlap is measured on each region's tight rotated</text>
+          <text class="note" x="316" y="443">rectangle, so two callouts on parallel leaders stop</text>
+          <text class="note" x="316" y="459">looking like duplicates of each other.</text>
+          <line class="flow" x1="160" y1="452" x2="160" y2="466" marker-end="url(#ar1)"></line>
+
+          <!-- 8 angled -->
+          <rect class="node-bal" x="28" y="470" width="264" height="46" rx="4"></rect>
+          <text class="lab lab-bal" x="160" y="491" text-anchor="middle">Recover angled callouts</text>
+          <text class="note-mono" x="160" y="507" text-anchor="middle">_detect_angled_regions()</text>
+          <text class="note" x="316" y="491">Text lettered along a leader line, which the upright</text>
+          <text class="note lab-bal" x="316" y="507">and 90&deg; passes both miss. Figure 3.</text>
+          <line class="flow" x1="160" y1="516" x2="160" y2="530" marker-end="url(#ar1)"></line>
+
+          <!-- 9 out -->
+          <rect class="node-cad" x="28" y="534" width="264" height="46" rx="4"></rect>
+          <text class="lab lab-cad" x="160" y="555" text-anchor="middle">Regions out</text>
+          <text class="note-mono" x="160" y="571" text-anchor="middle">bbox + oriented_box</text>
+          <text class="note" x="316" y="555">Text, dimension type, balloon label, an upright box for</text>
+          <text class="note" x="316" y="571">anchoring and a rotated one for drawing.</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 1.</b> The nine stages of a segment call. Detection proposes lines,
+        clustering decides what a callout is, and reading happens last, once per callout.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Inside one callout</h2>
+      <p>Reading a crop is two streams that meet. One puts the crop through several preprocessing
+        variants and votes on the digits. The other looks for the symbols directly in the pixels. A
+        diameter mark is found by topology: one ink shape enclosing two similar holes, which is a
+        ring cut by a slash. A digit never produces that, which is what separates a real
+        <code>&Oslash;</code> from a leading 0, 4 or 8.</p>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 760 268" role="img"
+             aria-label="Reading one crop: preprocessing variants feed a vote on digits, symbol vision detects the diameter ring, degree and plus-minus marks, and both meet at compose, then a dual-unit cross-check and classification.">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+          </defs>
+
+          <rect class="node-cad" x="16" y="62" width="118" height="50" rx="4"></rect>
+          <text class="lab lab-cad" x="75" y="84" text-anchor="middle">Cluster crop</text>
+          <text class="note-mono" x="75" y="100" text-anchor="middle">one callout</text>
+
+          <line class="flow" x1="134" y1="87" x2="154" y2="87" marker-end="url(#ar2)"></line>
+
+          <rect class="node" x="156" y="62" width="118" height="50" rx="4"></rect>
+          <text class="lab" x="215" y="84" text-anchor="middle">Variants</text>
+          <text class="note-mono" x="215" y="100" text-anchor="middle">contrast &middot; sharpen</text>
+
+          <line class="flow" x1="274" y1="87" x2="294" y2="87" marker-end="url(#ar2)"></line>
+          <text class="note-mono" x="284" y="78" text-anchor="middle">&nbsp;</text>
+
+          <rect class="node" x="296" y="62" width="118" height="50" rx="4"></rect>
+          <text class="lab" x="355" y="84" text-anchor="middle">Vote</text>
+          <text class="note-mono" x="355" y="100" text-anchor="middle">digit quality</text>
+
+          <line class="flow" x1="414" y1="87" x2="434" y2="87" marker-end="url(#ar2)"></line>
+
+          <rect class="node" x="436" y="62" width="118" height="50" rx="4"></rect>
+          <text class="lab" x="495" y="84" text-anchor="middle">Compose</text>
+          <text class="note-mono" x="495" y="100" text-anchor="middle">fix &middot; inject &middot; join</text>
+
+          <line class="flow" x1="554" y1="87" x2="574" y2="87" marker-end="url(#ar2)"></line>
+
+          <rect class="node-cad" x="576" y="62" width="168" height="50" rx="4"></rect>
+          <text class="lab lab-cad" x="660" y="84" text-anchor="middle">Cross-check, classify</text>
+          <text class="note-mono" x="660" y="100" text-anchor="middle">&times;25.4 &middot; GD&amp;T rules</text>
+
+          <!-- symbol vision branch -->
+          <rect class="node-bal" x="396" y="186" width="198" height="50" rx="4"></rect>
+          <text class="lab lab-bal" x="495" y="208" text-anchor="middle">Symbol vision</text>
+          <text class="note-mono" x="495" y="224" text-anchor="middle">&Oslash; ring &middot; &deg; ring &middot; &plusmn;</text>
+          <line class="flow-bal" x1="495" y1="186" x2="495" y2="118" marker-end="url(#ar2)"></line>
+          <text class="note lab-bal" x="505" y="152">symbols the text lost</text>
+
+          <line class="flow flow-dash" x1="75" y1="112" x2="75" y2="211" ></line>
+          <line class="flow flow-dash" x1="75" y1="211" x2="390" y2="211" marker-end="url(#ar2)"></line>
+          <text class="note" x="90" y="203">same crop, read for shape not characters</text>
+
+          <text class="note-mono" x="215" y="44" text-anchor="middle">4 to 8 renderings</text>
+          <text class="note-mono" x="355" y="44" text-anchor="middle">candidates agree</text>
+          <text class="note-mono" x="660" y="44" text-anchor="middle">inch and mm must match</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 2.</b> The read of a single callout. The lower path never reads
+        characters. It answers three yes-or-no questions about shapes, and the composer only injects
+        a symbol the text itself failed to carry.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Callouts written along a leader</h2>
+      <p>A chamfer or a fit callout is lettered along its leader line, at whatever angle that line
+        runs. Both detector passes read horizontal text, so these are missed. The recovery path
+        levels the text and reads it again, and the only hard part is knowing the angle.</p>
+      <p>The original answer was a vote over the drawing's diagonal ink. That vote is diluted by
+        everything else in the selection, so it fires on a zoomed crop and goes silent on a full
+        sheet, which is exactly when a user is least likely to notice a missing dimension.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-k">Zoomed crop</span>
+        <span class="stat-n fires">0.711</span>
+        <span class="stat-d">Diagonal share of the vote. Fires.</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">Sheet selection</span>
+        <span class="stat-n silent">0.130</span>
+        <span class="stat-d">Under the 0.15 bar. Silent.</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">Full page</span>
+        <span class="stat-n silent">0.030</span>
+        <span class="stat-d">Nowhere near it. Silent.</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">Leader line</span>
+        <span class="stat-n fires">&minus;34.6&deg;</span>
+        <span class="stat-d">Same measurement at all three scales.</span>
+      </div>
+    </div>
+
+    <figure>
+      <div class="figscroll">
+        <svg viewBox="0 0 760 486" role="img"
+             aria-label="Angled recovery: a first attempt votes over the whole selection and exits if text is found; otherwise neighbourhoods from the detector corners are levelled, re-detected, read as stacked deviations, then superseded and deduped into angled regions.">
+          <defs>
+            <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+            <marker id="ar3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path class="arrowhead-bal" d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+          </defs>
+
+          <!-- tier 1 -->
+          <rect class="node" x="40" y="22" width="300" height="52" rx="4"></rect>
+          <text class="lab" x="190" y="44" text-anchor="middle">First: vote over the whole selection</text>
+          <text class="note-mono" x="190" y="61" text-anchor="middle">diagonal ink, one angle</text>
+
+          <!-- bypass -->
+          <line class="flow" x1="340" y1="48" x2="648" y2="48"></line>
+          <line class="flow" x1="648" y1="48" x2="648" y2="404"></line>
+          <line class="flow" x1="648" y1="404" x2="558" y2="404" marker-end="url(#ar3)"></line>
+          <text class="note" x="356" y="40">text found, done</text>
+
+          <line class="flow-bal" x1="190" y1="74" x2="190" y2="102" marker-end="url(#ar3b)"></line>
+          <text class="note lab-bal" x="200" y="93">nothing found</text>
+
+          <!-- tier 2 -->
+          <rect class="node-bal" x="40" y="106" width="300" height="52" rx="4"></rect>
+          <text class="lab lab-bal" x="190" y="128" text-anchor="middle">Then: diagonal neighbourhoods</text>
+          <text class="note-mono" x="190" y="145" text-anchor="middle">from the detector's corners</text>
+          <text class="note" x="360" y="126">The corners say where diagonal text is,</text>
+          <text class="note" x="360" y="142">and which way it leans.</text>
+
+          <line class="flow" x1="190" y1="158" x2="190" y2="182" marker-end="url(#ar3)"></line>
+
+          <!-- angle sources -->
+          <rect class="grouprect" x="40" y="186" width="300" height="76" rx="4"></rect>
+          <text class="lab" x="56" y="206">Angle for this region</text>
+          <text class="note" x="56" y="226">1. the region's own vote, now decisive</text>
+          <text class="note" x="56" y="246">2. its leader line, when the vote is silent</text>
+          <text class="note" x="360" y="212">Each region is tried at two zoom levels:</text>
+          <text class="note" x="360" y="228">detection resolves one callout's parts at</text>
+          <text class="note" x="360" y="244">one zoom and its neighbour's at the other.</text>
+
+          <line class="flow" x1="190" y1="262" x2="190" y2="286" marker-end="url(#ar3)"></line>
+
+          <!-- level and read -->
+          <rect class="node" x="40" y="290" width="300" height="52" rx="4"></rect>
+          <text class="lab" x="190" y="312" text-anchor="middle">Level, detect again, read</text>
+          <text class="note-mono" x="190" y="329" text-anchor="middle">value + stacked deviations</text>
+          <text class="note" x="360" y="310">A fit callout carries its two deviations</text>
+          <text class="note" x="360" y="326">stacked beside the value. They are regrouped</text>
+          <text class="note" x="360" y="342">by position, not by reading order.</text>
+
+          <line class="flow" x1="190" y1="342" x2="190" y2="366" marker-end="url(#ar3)"></line>
+
+          <!-- reconcile -->
+          <rect class="node" x="40" y="370" width="300" height="52" rx="4"></rect>
+          <text class="lab" x="190" y="392" text-anchor="middle">Supersede, rank, dedupe</text>
+          <text class="note-mono" x="190" y="409" text-anchor="middle">quality, not length</text>
+
+          <line class="flow" x1="340" y1="396" x2="376" y2="396" marker-end="url(#ar3)"></line>
+
+          <rect class="node-cad" x="378" y="370" width="180" height="52" rx="4"></rect>
+          <text class="lab lab-cad" x="468" y="392" text-anchor="middle">Angled regions</text>
+          <text class="note-mono" x="468" y="409" text-anchor="middle">with oriented boxes</text>
+
+          <text class="note" x="40" y="452">An upright region holding two of these is the hull of both leaders, so it steps aside.</text>
+          <text class="note" x="40" y="470">Two reads whose rotated rectangles coincide are the same ink twice; the better one wins.</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 3.</b> Recovery runs only when the ordinary path finds nothing, so a
+        zoomed crop behaves exactly as before. The leader line supplies an angle where the vote has
+        no opinion at all.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Where the thresholds live</h2>
+      <p>Most tuning in this pipeline is one of two mistakes: judging a size as a fraction of the
+        crop, which changes when the user zooms, or judging a read by its length, which rewards
+        garbled text for being long. The values below are the ones that decide outcomes.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Decision</th><th>Value</th><th>What it protects</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Diameter from ring topology</td>
+            <td class="num">2 holes</td>
+            <td>A slashed ring has two; digits 0, 4 and 8 have one, and 8's two sit across the reading axis.</td>
+          </tr>
+          <tr>
+            <td>Cluster size cap</td>
+            <td class="num">3 &times; median box</td>
+            <td>Keeps a chain of neighbours from fusing, without using a fraction of the crop.</td>
+          </tr>
+          <tr>
+            <td>Oversized cluster re-split</td>
+            <td class="num">6 &times; text scale</td>
+            <td>A normal callout in a small selection is no longer shredded into fragments.</td>
+          </tr>
+          <tr>
+            <td>Same-ink angled reads</td>
+            <td class="num">0.50 overlap</td>
+            <td>Measured on rotated rectangles. Parallel leaders score near zero; the same text twice scores high.</td>
+          </tr>
+          <tr>
+            <td>Complete clusters merging</td>
+            <td class="num">0.60 overlap</td>
+            <td>Two finished values need near containment to fuse; a fragment still rejoins at 0.25.</td>
+          </tr>
+          <tr>
+            <td>Angled read ranking</td>
+            <td class="num">symbols &minus; junk</td>
+            <td>Resolved marks beat length, so a longer garbled read cannot outrank a clean one.</td>
+          </tr>
+          <tr>
+            <td>Leader line minimum</td>
+            <td class="num">5% of the long edge</td>
+            <td>Long enough to be a leader, and near-axis lines are skipped as dimension lines.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>Timings on a 250 DPI render of the GPD 18T sheet, single-threaded on CPU: about 22 seconds for
+      a detail crop and about 160 seconds for a full sheet selection, the latter including the
+      recovery path. Backend at <span class="mono">Aniket/doc-ocr/backend</span>.</p>
+  </footer>
+
+</div>
+</body>
+</html>

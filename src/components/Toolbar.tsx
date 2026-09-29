@@ -7,6 +7,7 @@ import {
 import { DEBUG_DUMP_ENABLED } from "@/lib/featureFlags";
 import { useEffect, useState } from "react";
 import { ExportPanel } from "@/components/ExportPanel";
+import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
 
 interface ToolbarProps {
@@ -122,6 +123,8 @@ export function Toolbar({
       </a>
 
       <ExportPanel disabled={isProcessing} />
+
+      <KeywordSettings />
 
       <div className="mx-1 h-6 w-px bg-slate-200" />
 

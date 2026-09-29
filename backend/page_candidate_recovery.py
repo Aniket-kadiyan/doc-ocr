@@ -75,6 +75,10 @@ def _normalize_engineering_text(text: str) -> str:
         .replace("–", "-")
         .replace("—", "-")
     )
+    # A comma between digits is a decimal separator, so "30,0" and "30.0" are
+    # the same value. Without this they produced different signatures and every
+    # such callout was sent for review.
+    normalized = re.sub(r"(?<=\d),(?=\d)", ".", normalized)
     normalized = re.sub(r"^[øφΦ⌀]", "Ø", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"^r(?=\s*\d)", "R", normalized, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", normalized).strip()
@@ -1002,6 +1006,10 @@ def resolve_authoritative_hypotheses(
             and authoritative_signature is not None
             and preliminary_signature != authoritative_signature
         )
+        # Both reads are evidence about the same detector target. A numeric
+        # disagreement must remain visible to the inspector even when the
+        # authoritative string is structurally valid (for example 96.4° vs
+        # 105); validity alone cannot decide which number is correct.
         if numeric_conflict:
             final_text = authoritative_text
             review_reason = (
@@ -1016,7 +1024,7 @@ def resolve_authoritative_hypotheses(
             review_reason = ""
         resolved.update(
             text=final_text,
-            needs_review=bool(numeric_conflict),
+            needs_review=numeric_conflict,
             numeric_conflict=numeric_conflict,
             authoritative_review_required=numeric_conflict,
             review_reason=review_reason,

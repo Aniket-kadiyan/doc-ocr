@@ -28,6 +28,13 @@ def _snapshot(
                 "balloon_number": 1,
                 "page": 1,
                 "bbox": {"x": 10, "y": 20, "width": 30, "height": 12},
+                "oriented_box": {
+                    "x": 11,
+                    "y": 21,
+                    "width": 29,
+                    "height": 9,
+                    "rotation": 17,
+                },
                 "rotation": 0,
                 "label": "Diameter",
                 "specification": "25",
@@ -74,6 +81,13 @@ def test_revision_metadata_is_stored_and_returned(tmp_path: Path) -> None:
         "partName": "Drive Bracket",
         "documentNumber": "DB-1042",
         "revisionNumber": "C",
+    }
+    assert created["rows"][0]["oriented_box"] == {
+        "x": 11.0,
+        "y": 21.0,
+        "width": 29.0,
+        "height": 9.0,
+        "rotation": 17.0,
     }
 
     checksheet_id = created["checksheet"]["id"]

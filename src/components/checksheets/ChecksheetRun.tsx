@@ -10,6 +10,7 @@ import {
   completeChecksheetRun,
   getChecksheetRun,
 } from "@/lib/checksheetClient";
+import { isNoteText } from "@/lib/notes";
 import type { ChecksheetRunResponse, ChecksheetRow } from "@/types/checksheet";
 import {
   DOCUMENT_METADATA_FIELDS,
@@ -132,11 +133,16 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
 
   const complete = async () => {
     if (!data || !editable || completing) return;
+    // A notes row carries instruction, not a measurement, so its empty
+    // reading cells must not be counted against the inspector.
     const emptyReadings = rows.reduce(
       (count, row) =>
-        count +
-        data.columns.filter((column) => !(row.readings[column.id] ?? "").trim())
-          .length,
+        isNoteText(row.dimension_type, row.specification)
+          ? count
+          : count +
+            data.columns.filter(
+              (column) => !(row.readings[column.id] ?? "").trim()
+            ).length,
       0
     );
     const prompt = emptyReadings

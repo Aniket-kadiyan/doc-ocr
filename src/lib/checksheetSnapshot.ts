@@ -1,6 +1,8 @@
 import type { ProjectRecord } from "@/lib/db";
 import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
-import { valueAnnotations } from "@/lib/project";
+import { balloonLabel } from "@/lib/featureLabel";
+import { toleranceForExport, valueAnnotations } from "@/lib/project";
+import { isMetadataTitleAnnotation } from "@/lib/titleMetadata";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetSnapshotPayload } from "@/types/checksheet";
 import {
@@ -48,7 +50,9 @@ export function buildChecksheetCreationSnapshot({
   if (new Set(folded).size !== folded.length) {
     throw new Error("Measured-part column names must be unique.");
   }
-  const values = valueAnnotations(annotations);
+  const values = valueAnnotations(annotations).filter(
+    (annotation) => !isMetadataTitleAnnotation(annotation)
+  );
   if (values.length === 0) {
     throw new Error("Add at least one ballooned value before creating a checksheet.");
   }
@@ -70,10 +74,13 @@ export function buildChecksheetCreationSnapshot({
         balloon_number: annotation.number,
         page: annotation.page,
         bbox: { ...annotation.bbox },
+        oriented_box: annotation.orientedBox
+          ? { ...annotation.orientedBox }
+          : null,
         rotation: annotation.rotation,
-        label: annotation.label ?? "",
+        label: balloonLabel(annotation),
         specification: annotation.value,
-        tolerance: annotation.range ?? "",
+        tolerance: toleranceForExport(annotation.range, annotation.value),
         method: annotation.method ?? "",
         tool: annotation.tool ?? "",
         dimension_type: annotation.type,

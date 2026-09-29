@@ -1,0 +1,228 @@
+{
+  "document": "Docs/47630.pdf",
+  "title": "ASSY HITCH PIN 5/8 x 5, drawing 47630",
+  "dpi": 250,
+  "match_threshold": 0.9,
+  "partial_threshold": 0.6,
+  "requires": {
+    "matched": 16,
+    "mean_percent": 90.0,
+    "type_correct": 12,
+    "max_unexpected": 5
+  },
+  "notes": [
+    "Expected values are the ones recorded from the app's unmapped list. Where that reading is imperfect, the drawing's true value is listed as a second accepted form, so the benchmark keeps passing when the read improves rather than locking the error in.",
+    "This sheet is dual-unit throughout: inch [mm].",
+    "Items 16 and 17 are the two halves of one callout, 9.00 [228.60], which the app currently reports as two regions. Joining them will satisfy one item and not the other; update this fixture when that happens.",
+    "The source list skips number 3, so there are 19 items.",
+    "Baseline 2026-09-20: matched 16/19, mean 92.5%, type 12/19. Known gaps: item 12 (20 deg) is not detected at all; item 18 comes back as Ø0.148 without its [3.76]REF. tail; a spurious leading Ø is injected on four plain linear values, which is what most of the type mismatches are.",
+    "2026-09-21: items 19 and 20 retyped from reference to linear. Spec section 25 is marked out of scope, so the rule engine no longer assigns the Reference category."
+  ],
+  "expected": [
+    {
+      "id": 1,
+      "accept": [
+        "0.59[14.99]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 2,
+      "accept": [
+        "Ø0.33[8.38]",
+        "0.33[8.38]"
+      ],
+      "type": "diameter",
+      "note": "the drawing carries no Ø on this one"
+    },
+    {
+      "id": 4,
+      "accept": [
+        "0.20[5.08]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 5,
+      "accept": [
+        "1.00[25.40]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 6,
+      "accept": [
+        "5.50[139.70]-",
+        "5.50[139.70]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 7,
+      "accept": [
+        "0.25[6.35]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 8,
+      "accept": [
+        "5.105[129.67]-",
+        "5.105[129.67]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 9,
+      "accept": [
+        "Ø01.10[27.94]",
+        "Ø1.10[27.94]"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 10,
+      "accept": [
+        "0.20[5.08]"
+      ],
+      "type": "linear",
+      "note": "the second 0.20 [5.08], on the right of the pin"
+    },
+    {
+      "id": 11,
+      "accept": [
+        "2.25[57.15]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 12,
+      "accept": [
+        "E20°",
+        "20°"
+      ],
+      "type": "angle"
+    },
+    {
+      "id": 13,
+      "accept": [
+        "Ø6200.6φ0.612",
+        "Ø0.620/0.612[15.75/15.54]",
+        "Ø0.6200.612"
+      ],
+      "type": "diameter",
+      "note": "a stacked limit dimension: Ø0.620/0.612 over [15.75/15.54]"
+    },
+    {
+      "id": 14,
+      "accept": [
+        "Ø0.210[05.33]",
+        "Ø0.210[Ø5.33]"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 15,
+      "accept": [
+        "8.00",
+        "8.00[203.20]"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 16,
+      "accept": [
+        "9.00"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 17,
+      "accept": [
+        "[228.60]"
+      ],
+      "type": "basic",
+      "note": "the bracketed half of 9.00 [228.60]"
+    },
+    {
+      "id": 18,
+      "accept": [
+        "-∅0.148[3.76]REF.",
+        "Ø0.148[3.76]REF."
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 19,
+      "accept": [
+        "1.13[28.70]REF."
+      ],
+      "type": "linear",
+      "note": "carries REF., but spec section 25 (Reference Dimension) is out of scope, so the rule engine reads it as a linear dimension"
+    },
+    {
+      "id": 20,
+      "accept": [
+        "3.20[81.28]REF."
+      ],
+      "type": "linear",
+      "note": "carries REF., but spec section 25 (Reference Dimension) is out of scope, so the rule engine reads it as a linear dimension"
+    }
+  ],
+  "noise_patterns": [
+    "^NOTE",
+    "MATERIAL",
+    "GRADE",
+    "KPSI",
+    "TENSILE",
+    "YIELD",
+    "EQUIV",
+    "STAINLESS",
+    "ALUMINUM",
+    "SLEEVE",
+    "HAIRPIN",
+    "COTTER",
+    "SHANK",
+    "CABLE",
+    "COATED",
+    "CHAMFER",
+    "FINISH",
+    "ZINC",
+    "ASTM",
+    "LANYARD",
+    "WITHSTAND",
+    "OPENING",
+    "STRAIGHT",
+    "ASSEMBLED",
+    "ENTIRE",
+    "^PIN",
+    "TOLERANCE",
+    "DECIMAL",
+    "FRACTION",
+    "^ANGLE",
+    "UNLESS",
+    "SPECIFIED",
+    "^DWG",
+    "^REV",
+    "^ZONE",
+    "DESCRIPTION",
+    "APPROVED",
+    "^DATE",
+    "^DRAWN",
+    "^CHECKED",
+    "^SHEET",
+    "SCALE",
+    "^UNITS",
+    "INCHES",
+    "MILLIMETER",
+    "REVISION",
+    "ASSY",
+    "HITCH",
+    "SWING",
+    "TONGUE",
+    "47630",
+    "^LB$",
+    "^TZ$",
+    "N.T.S"
+  ]
+}

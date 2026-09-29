@@ -155,9 +155,16 @@ def extract_text_orientation_result(obj: Any) -> tuple[int, float]:
     return degrees, score
 
 
-def _yield_from_dict_page(
-    page: dict[str, Any],
-) -> Iterator[tuple[str, float, float, float, float, float]]:
+# One recognised line: text, its axis-aligned rect, confidence, and the
+# detector's own four corners. The corners are what carry a line's ANGLE — the
+# rect cannot — and the angled-callout pass needs them to group a slanted value
+# with its deviation. They were being computed here and thrown away.
+PaddleLine = tuple[
+    str, float, float, float, float, float, list[list[float]] | None
+]
+
+
+def _yield_from_dict_page(page: dict[str, Any]) -> Iterator[PaddleLine]:
     texts = _as_list(_first_present(page, "rec_texts", "rec_text"))
     scores = _as_list(_first_present(page, "rec_scores", "rec_score"))
     # rec_polys aligns with the confidence-filtered recognition arrays.
@@ -167,13 +174,15 @@ def _yield_from_dict_page(
         conf = float(scores[i]) if i < len(scores) else 0.0
         if i < len(polys) and _is_box(polys[i]):
             x, y, w, h = _box_to_rect(polys[i])
+            polygon = _box_to_polygon(polys[i])
         else:
             x, y, w, h = 0.0, 0.0, 0.0, 0.0
+            polygon = None
         if str(text).strip():
-            yield str(text), x, y, w, h, conf
+            yield str(text), x, y, w, h, conf, polygon
 
 
-def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, float, float]]:
+def _yield_from_line(line: Any) -> Iterator[PaddleLine]:
     if line is None:
         return
 
@@ -191,7 +200,8 @@ def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, floa
     if len(line) == 2 and isinstance(line[0], str) and not _is_box(line[0]):
         text, conf = _parse_recognition(line)
         if text.strip():
-            yield text, 0.0, 0.0, 0.0, 0.0, conf
+            # Recognition without detection carries no geometry at all.
+            yield text, 0.0, 0.0, 0.0, 0.0, conf, None
         return
 
     # Sometimes: [box, text, score]
@@ -200,7 +210,7 @@ def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, floa
         conf = float(line[2])
         if text.strip():
             x, y, w, h = _box_to_rect(line[0])
-            yield text, x, y, w, h, conf
+            yield text, x, y, w, h, conf, _box_to_polygon(line[0])
         return
 
     # Classic: [box, (text, score)]
@@ -210,7 +220,7 @@ def _yield_from_line(line: Any) -> Iterator[tuple[str, float, float, float, floa
         text, conf = _parse_recognition(rec)
         if text.strip():
             x, y, w, h = _box_to_rect(box)
-            yield text, x, y, w, h, conf
+            yield text, x, y, w, h, conf, _box_to_polygon(box)
         return
 
 
@@ -224,9 +234,7 @@ def _looks_like_recognition_line(obj: Any) -> bool:
     return len(obj) >= 2 and _is_box(obj[0])
 
 
-def _walk_result(
-    obj: Any,
-) -> Iterator[tuple[str, float, float, float, float, float]]:
+def _walk_result(obj: Any) -> Iterator[PaddleLine]:
     """Recursively walk v2 nested lists and v3 Result objects."""
     obj = _unwrap_result(obj)
     if obj is None:
@@ -245,10 +253,8 @@ def _walk_result(
             yield from _walk_result(child)
 
 
-def extract_paddle_lines(
-    result: Any,
-) -> list[tuple[str, float, float, float, float, float]]:
-    """Returns list of (text, x, y, width, height, confidence)."""
+def extract_paddle_lines(result: Any) -> list[PaddleLine]:
+    """Returns (text, x, y, width, height, confidence, polygon) per line."""
     return list(_walk_result(result))
 
 

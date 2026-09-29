@@ -1,0 +1,282 @@
+{
+  "document": "Docs/56103-0182B.pdf",
+  "title": "INLINE LOCKNUT, drawing 56103-0182 rev B",
+  "dpi": 250,
+  "match_threshold": 0.9,
+  "partial_threshold": 0.6,
+  "requires": {
+    "matched": 15,
+    "mean_percent": 78.0,
+    "type_correct": 17,
+    "max_unexpected": 6
+  },
+  "notes": [
+    "Expected values are the ones recorded from the app's unmapped list. Where that reading is imperfect the drawing's true value is listed as a second accepted form, so the benchmark keeps passing when the read improves rather than locking the error in.",
+    "All dimensions on this sheet are metric, and it carries significant-characteristic tags (SC-1..SC-4) that the app reports as values.",
+    "Several listed entries are two readings of one callout: 2 and 3 are both 10.0 TO INT; 9 and 10 both cover the SC-3 / 10.3 deg TYP area; 21 and 22 both cover SC-2 / R1.4; 23 and 24 are both a 35 POS ON .. PCD note. Pairing is one-to-one, so a future join will satisfy one of each pair and not the other.",
+    "Item 19 is typed radius here, not linear as recorded: the drawing carries R0.5 and the recorded 7R0.5- was a misread.",
+    "Baseline 2026-09-20: matched 15/24, partial 4, missed 5, mean 80.8%, type 18/24, ~132 s. Misses are item 3 (the second reading of 10.0 TO INT, which item 2 takes), item 9 (the SC-3 tag), item 15 (60.8 PCD), item 22 (the second R1.4 — only one of the two is detected) and item 24 (the 60.8 PCD note). Partials: R0.75 reads R075, R0.5 reads 1-0.5, and both SC tags run into the value beside them."
+  ],
+  "expected": [
+    {
+      "id": 1,
+      "accept": [
+        "-M54×1.5-6H",
+        "M54×1.5-6H"
+      ],
+      "type": "thread"
+    },
+    {
+      "id": 2,
+      "accept": [
+        "010.0",
+        "10.0"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 3,
+      "accept": [
+        "TO INT10.0",
+        "10.0TO INT"
+      ],
+      "type": "linear",
+      "note": "the same callout as item 2, read with its TO INT tail"
+    },
+    {
+      "id": 4,
+      "accept": [
+        "CHF1.0×45°"
+      ],
+      "type": "chamfer"
+    },
+    {
+      "id": 5,
+      "accept": [
+        "R0.75-",
+        "R0.75"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 6,
+      "accept": [
+        "R0.25"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 7,
+      "accept": [
+        "45.0°"
+      ],
+      "type": "angle"
+    },
+    {
+      "id": 8,
+      "accept": [
+        "Ø12054.4-",
+        "Ø54.4"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 9,
+      "accept": [
+        "SC-3100",
+        "SC-3"
+      ],
+      "type": "linear",
+      "note": "a significant-characteristic tag, run together with the 10.3 deg beside it"
+    },
+    {
+      "id": 10,
+      "accept": [
+        "0010.3°0",
+        "10.3°"
+      ],
+      "type": "angle"
+    },
+    {
+      "id": 11,
+      "accept": [
+        "R1.4"
+      ],
+      "type": "radius",
+      "note": "the SC-4 one, right of centre"
+    },
+    {
+      "id": 12,
+      "accept": [
+        "12.0-",
+        "12.0"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 13,
+      "accept": [
+        "CHF0.25×45°"
+      ],
+      "type": "chamfer"
+    },
+    {
+      "id": 14,
+      "accept": [
+        "60.8"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 15,
+      "accept": [
+        "o•00PC0",
+        "60.8PCD",
+        "PCD"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 16,
+      "accept": [
+        "30.0°"
+      ],
+      "type": "angle"
+    },
+    {
+      "id": 17,
+      "accept": [
+        "59.2"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 18,
+      "accept": [
+        "Ø52.5REF"
+      ],
+      "type": "diameter"
+    },
+    {
+      "id": 19,
+      "accept": [
+        "7R0.5-",
+        "R0.5"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 20,
+      "accept": [
+        "R10.0"
+      ],
+      "type": "radius"
+    },
+    {
+      "id": 21,
+      "accept": [
+        "SC-2R1.4mc",
+        "SC-2"
+      ],
+      "type": "linear",
+      "note": "the SC-2 tag run together with the R1.4 beside it"
+    },
+    {
+      "id": 22,
+      "accept": [
+        "R1.4"
+      ],
+      "type": "radius",
+      "note": "the SC-2 one, left of centre"
+    },
+    {
+      "id": 23,
+      "accept": [
+        "35PDS ON3nc0EO",
+        "35 POS ON59.2 PCD",
+        "35 POS ON"
+      ],
+      "type": "linear"
+    },
+    {
+      "id": 24,
+      "accept": [
+        "33FU5UN60.8PCD",
+        "35 POS ON60.8 PCD",
+        "60.8 PCD"
+      ],
+      "type": "linear"
+    }
+  ],
+  "noise_patterns": [
+    "^DWG",
+    "^REV",
+    "DO NOT SCALE",
+    "IN DOUBT",
+    "REVISION",
+    "DESCRIPTION",
+    "^ECN",
+    "^ORG",
+    "^CHK",
+    "RELEASED",
+    "PRODUCTION",
+    "^ADDED",
+    "STAMP",
+    "INMET",
+    "MATH DATA",
+    "^PART",
+    "^PROJ",
+    "MATERIAL",
+    "ALUMINIUM",
+    "YIELD",
+    "^UTS",
+    "ELONGATION",
+    "MPA",
+    "FINISH",
+    "ANODISE",
+    "DSS",
+    "TREATMENT",
+    "TUMBLE",
+    "BURR",
+    "MINS",
+    "UNLESS",
+    "OTHERWISE",
+    "SPECIFIED",
+    "METRIC",
+    "DIMENSION",
+    "FINISHED",
+    "BREAK",
+    "SHARP",
+    "^TOL",
+    "RADII",
+    "ANGULAR",
+    "SURFACE",
+    "^RA",
+    "ASME",
+    "Y14",
+    "DRAWN",
+    "^DATE",
+    "SCALE",
+    "^TITLE",
+    "LOCKNUT",
+    "^SIZE",
+    "THIRD ANGLE",
+    "SHEET",
+    "SIGNIFICANT",
+    "CHARACTERISTIC",
+    "CONTROL PLAN",
+    "VERIFICATION",
+    "VERIFY",
+    "PPAP",
+    "BATCH",
+    "TOOL/PROCESS",
+    "MINIMUM",
+    "ISOMETRIC",
+    "REFERENCE ONLY",
+    "SECTION",
+    "56103",
+    "^A3$",
+    "^SEP",
+    "^APR"
+  ]
+}

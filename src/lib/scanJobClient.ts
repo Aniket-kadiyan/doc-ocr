@@ -253,11 +253,28 @@ export async function runScanJob({
   form.append("file", blob, "scan-page.png");
   form.append("scope_kind", scopeKind);
   form.append("page", String(page));
-  form.append("scope_x", String(bbox.x));
-  form.append("scope_y", String(bbox.y));
-  form.append("scope_width", String(bbox.width));
-  form.append("scope_height", String(bbox.height));
-  form.append("existing_value_boxes", JSON.stringify(existingValueBoxes));
+  // The uploaded image is the crop taken at displayScale, so everything
+  // describing it has to be in those same pixels. The scope and the existing
+  // balloons arrive in viewer units; sending them unscaled while scanning a
+  // higher-resolution render would put the scope and every overlap test in the
+  // wrong coordinate space, and a re-scan would duplicate balloons it should
+  // have recognised as already present.
+  const toCropPixels = (value: number) => value * displayScale;
+  form.append("scope_x", String(toCropPixels(bbox.x)));
+  form.append("scope_y", String(toCropPixels(bbox.y)));
+  form.append("scope_width", String(toCropPixels(bbox.width)));
+  form.append("scope_height", String(toCropPixels(bbox.height)));
+  form.append(
+    "existing_value_boxes",
+    JSON.stringify(
+      existingValueBoxes.map((box) => ({
+        x: toCropPixels(box.x),
+        y: toCropPixels(box.y),
+        width: toCropPixels(box.width),
+        height: toCropPixels(box.height),
+      }))
+    )
+  );
 
   const baseUrl = getOcrApiUrl();
   const { query, headers } = scanRequestOptions();
@@ -310,24 +327,25 @@ export async function runScanJob({
   }
 
   const regions = snapshot.result.coordinate_space === "page"
-    ? mapPageSegmentRegions(snapshot.result.regions ?? [], {
-        x: 0,
-        y: 0,
-        width: sourceCanvas.width,
-        height: sourceCanvas.height,
-      })
+    ? mapPageSegmentRegions(
+        snapshot.result.regions ?? [],
+        // Viewer-space bounds, not the scanned canvas: that canvas may be a
+        // higher-resolution render, and its own size would validate hi-res
+        // coordinates as in-bounds and place every balloon off the drawing.
+        bbox,
+        displayScale
+      )
     : mapSegmentRegions(
         snapshot.result.regions ?? [],
         bbox,
         displayScale
       );
   const reviewCandidates = snapshot.result.coordinate_space === "page"
-    ? mapPageSegmentRegions(snapshot.result.review_candidates ?? [], {
-        x: 0,
-        y: 0,
-        width: sourceCanvas.width,
-        height: sourceCanvas.height,
-      })
+    ? mapPageSegmentRegions(
+        snapshot.result.review_candidates ?? [],
+        bbox,
+        displayScale
+      )
     : mapSegmentRegions(
         snapshot.result.review_candidates ?? [],
         bbox,

@@ -1,0 +1,392 @@
+[
+ {
+  "bbox": {
+   "x": 558.0,
+   "y": 31.7,
+   "width": 48.3,
+   "height": 54.5
+  },
+  "text": "4",
+  "confidence": 0.9999860525131226,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1190.8,
+   "y": 26.8,
+   "width": 60.7,
+   "height": 64.4
+  },
+  "text": "3",
+  "confidence": 0.9883841276168823,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1801.3,
+   "y": 30.5,
+   "width": 47.1,
+   "height": 57.0
+  },
+  "text": "2",
+  "confidence": 0.9999836683273315,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2450.2,
+   "y": 37.9,
+   "width": 31.0,
+   "height": 42.1
+  },
+  "text": "1",
+  "confidence": 0.9599610567092896,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1185.0,
+   "y": 148.0,
+   "width": 96.0,
+   "height": 38.0
+  },
+  "text": "4.99",
+  "confidence": 0.9999852180480957,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2424.2,
+   "y": 138.2,
+   "width": 116.4,
+   "height": 121.4
+  },
+  "text": "DATE3/17/20114/25/11",
+  "confidence": 0.9998626708984375,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1094.0,
+   "y": 216.0,
+   "width": 55.0,
+   "height": 39.0
+  },
+  "text": "33",
+  "confidence": 0.9999780058860779,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1045.9,
+   "y": 321.5,
+   "width": 12.4,
+   "height": 12.4
+  },
+  "text": "2",
+  "confidence": 0.6772110462188721,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 0.333,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2116.0,
+   "y": 574.0,
+   "width": 57.0,
+   "height": 38.0
+  },
+  "text": "08",
+  "confidence": 0.9990758895874023,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 2067.5,
+   "y": 766.1,
+   "width": 102.8,
+   "height": 58.2
+  },
+  "text": "20°",
+  "confidence": 0.9736347198486328,
+  "type": "angle",
+  "category": "Angle",
+  "subtype": null,
+  "label": "Angle",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr+compose",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": true,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1625.0,
+   "y": 794.0,
+   "width": 33.0,
+   "height": 113.0
+  },
+  "text": "1",
+  "confidence": 0.33883988857269287,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "vertical",
+  "rotation": 0,
+  "needs_review": true,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": true,
+   "diameter_score": 0.45,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 561.7,
+   "y": 1980.9,
+   "width": 43.3,
+   "height": 49.5
+  },
+  "text": "4",
+  "confidence": 0.9999582767486572,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ },
+ {
+  "bbox": {
+   "x": 1195.8,
+   "y": 1978.4,
+   "width": 49.5,
+   "height": 54.5
+  },
+  "text": "3",
+  "confidence": 0.9999558925628662,
+  "type": "linear",
+  "category": "Linear",
+  "subtype": null,
+  "label": "Linear Dimension",
+  "orientation": "horizontal",
+  "rotation": 0,
+  "needs_review": false,
+  "agreement": 1.0,
+  "engine": "paddleocr",
+  "symbols_detected": {
+   "diameter": false,
+   "diameter_score": 0.0,
+   "plus_minus": false,
+   "degree": false,
+   "radius": false
+  },
+  "recognized": true,
+  "page_filter_rule": "section_engineering_value",
+  "page_filter_reason": "Matches the light section engineering-value syntax gate",
+  "page": 1
+ }
+]

@@ -12,9 +12,20 @@ from pathlib import Path
 
 from checksheet_converter import (
     convert_ts2_json_to_checksheet,
+    is_notes_text,
     make_template_id_from_filename,
     parse_range,
     save_checksheet_template,
+)
+
+# 47630.pdf: the ballooned NOTES block, flattened onto one line the way the
+# inspection sheet sends it.
+NOTES_BLOCK = (
+    "1. MATERIAL: GRADE 5 EQUIV; 85KPSI YIELD MIN.;120KPSI TENSILE MIN. "
+    '2. PIN TO BE STRAIGHT WITHIN .004" OF ENTIRE LENGTH '
+    "3. PIN TO ASSEMBLED WITH CABLE AND HAIR PIN COTTER AS SHOWN "
+    "4. FINISH: ZINC YELLOW PER ASTM B633-LATEST REV. TYPE II "
+    "5. LANYARD RING MUST WITHSTAND 50 LBS MIN. WITHOUT OPENING."
 )
 
 
@@ -139,6 +150,39 @@ def test_malformed_tolerance_expressions_block_conversion() -> None:
                 f"Expected malformed expression to fail: {value!r}, {tolerance!r}"
             )
 
+def test_a_notes_block_never_blocks_conversion() -> None:
+    # "B633-LATEST" after the "1." marker reads as a minus tolerance, which
+    # aborted the whole checksheet.
+    assert is_notes_text(NOTES_BLOCK)
+    assert parse_range(NOTES_BLOCK, "") is None
+
+    template = convert_ts2_json_to_checksheet(
+        {
+            "data": [
+                {"S.no": "21", "Label": "General Notes", "Value": NOTES_BLOCK,
+                 "Tolerance": "", "part1": "", "Method": "", "Tool": ""},
+                {"S.no": "22", "Label": "", "Value": "25", "Tolerance": "0",
+                 "part1": "", "Method": "", "Tool": ""},
+            ],
+            "extra_columns": ["part1"],
+        },
+        template_id="notes_test",
+        template_name="Notes test",
+    )
+    # Header plus both rows: the notes row is kept, not dropped.
+    assert len(template["items"]) == 3
+
+
+def test_prose_and_dimensions_are_told_apart() -> None:
+    assert not is_notes_text("25 ±0.1")
+    assert not is_notes_text("1.5")
+    # A lone marker inside a sentence is not a list.
+    assert not is_notes_text("1. PIN TO BE STRAIGHT")
+    # Markers must start a list and climb.
+    assert not is_notes_text("7. ALPHA 4. BETA")
+    assert is_notes_text("1. ALPHA 2. BETA")
+
+
 def test_template_filename_is_safe_and_portable() -> None:
     assert (
         make_template_id_from_filename(
@@ -196,6 +240,8 @@ if __name__ == "__main__":
     test_default_zero_and_supported_tolerances()
     test_angle_ranges_preserve_valid_dms_and_fallback_safely()
     test_malformed_tolerance_expressions_block_conversion()
+    test_a_notes_block_never_blocks_conversion()
+    test_prose_and_dimensions_are_told_apart()
     test_template_filename_is_safe_and_portable()
     test_save_creates_then_replaces_complete_json()
     test_part_column_is_required()

@@ -1,0 +1,56 @@
+MVP1 auto-label integration — after Excel branding commit
+========================================================
+
+Required base commit:
+55502b5948240a5ca62ca4a9ad03befad2f0f104
+
+This is the new Senior Flexonics Excel-branding commit on auto-balooning.
+The ZIP contains the subsequent auto-label/MVP1 integration only. It does not
+repeat the standalone Excel dialog, Excel workbook, or logo-asset changes.
+
+No commit or push was made while preparing this package.
+
+Apply from the VS Code integrated terminal
+------------------------------------------
+
+1. Fetch the latest branches:
+
+   git fetch origin
+
+2. Switch to MVP1 and fast-forward it to the completed Excel commit:
+
+   git switch MVP1
+   git merge --ff-only origin/auto-balooning
+
+3. Confirm the required base:
+
+   git rev-parse HEAD
+
+   Expected:
+   55502b5948240a5ca62ca4a9ad03befad2f0f104
+
+4. Extract this ZIP into the repository root and overwrite existing files:
+
+   unzip -o MVP1_merge_after_excel_55502b5.zip -d .
+
+5. Install and verify:
+
+   npm ci
+   npm run verify
+   npm run build
+
+6. Review the changes and create the MVP1 integration commit yourself.
+
+Suggested commit message
+------------------------
+
+feat(mvp1): integrate auto-label OCR and checksheet workflows
+
+Validation completed before packaging
+-------------------------------------
+
+- ESLint: passed
+- TypeScript: passed
+- Frontend: 18 files, 94 tests passed
+- Backend fast suite: 146 tests passed
+- Next.js production build: passed

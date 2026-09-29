@@ -14,11 +14,16 @@ class ChecksheetBBox(BaseModel):
     height: float = Field(gt=0)
 
 
+class ChecksheetOrientedBox(ChecksheetBBox):
+    rotation: float = 0
+
+
 class ChecksheetSnapshotItem(BaseModel):
     annotation_id: str = Field(min_length=1, max_length=128)
     balloon_number: int = Field(ge=1)
     page: int = Field(ge=1)
     bbox: ChecksheetBBox
+    oriented_box: ChecksheetOrientedBox | None = None
     rotation: float = 0
     label: str = Field(default="", max_length=500)
     specification: str = Field(min_length=1, max_length=2000)

@@ -64,10 +64,14 @@ class Paddle3OrientationResult:
 def assert_one_line(result, expected_text: str, expected_confidence: float) -> None:
     parsed = extract_paddle_lines(result)
     assert len(parsed) == 1, parsed
-    text, x, y, width, height, confidence = parsed[0]
+    text, x, y, width, height, confidence, polygon = parsed[0]
     assert text == expected_text, parsed
     assert (x, y, width, height) == (1.0, 2.0, 20.0, 8.0), parsed
     assert abs(confidence - expected_confidence) < 1e-9, parsed
+    # The detector's own corners ride alongside the axis-aligned rect: they are
+    # what carry a line's angle, which the rect cannot, and the angled-callout
+    # pass groups a slanted value with its deviation using them.
+    assert polygon == [[1.0, 2.0], [21.0, 2.0], [21.0, 10.0], [1.0, 10.0]], parsed
 
 
 def test_paddle_3_result_object() -> None:
@@ -83,7 +87,8 @@ def test_paddle_2_nested_result() -> None:
 def test_paddle_2_recognition_only_result() -> None:
     # det=False has text/confidence but no detection box.
     parsed = extract_paddle_lines([[("8.00", 0.94)]])
-    assert parsed == [("8.00", 0.0, 0.0, 0.0, 0.0, 0.94)], parsed
+    # Recognition without detection carries no geometry, so no corners either.
+    assert parsed == [("8.00", 0.0, 0.0, 0.0, 0.0, 0.94, None)], parsed
 
 
 def test_paddle_3_detector_only_result_keeps_low_confidence_box() -> None:

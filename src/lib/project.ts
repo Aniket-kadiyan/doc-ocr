@@ -1,4 +1,11 @@
 import type { Annotation } from "@/types/annotation";
+import { balloonLabel } from "@/lib/featureLabel";
+import { collectNotePoints } from "@/lib/notes";
+import { getTitleKeywords } from "@/lib/titleKeywords";
+import {
+  isMetadataTitleAnnotation,
+  metadataFieldForTitleLabel,
+} from "@/lib/titleMetadata";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
 import {
   normalizeDocumentMetadata,
@@ -190,17 +197,99 @@ export function buildInspectionSheet(
     "Tool",
   ];
   const rows = valueAnnotations(annotations)
+    .filter((annotation) => !isMetadataTitleAnnotation(annotation))
     .sort((a, b) => a.number - b.number)
     .map((a) => [
       String(a.number),
-      a.label ?? "",
-      a.value,
+      oneLine(balloonLabel(a)),
+      oneLine(a.value),
       toleranceForExport(a.range, a.value),
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),
       a.method ?? "",
       a.tool ?? "",
     ]);
-  return { extraColumns, headers, rows };
+  return {
+    extraColumns,
+    headers,
+    rows: [
+      ...rows,
+      // Title-block fields first, then the notes paragraph below them.
+      ...titleFieldRows(annotations, headers.length),
+      ...notesRows(annotations, headers.length),
+    ],
+  };
+}
+
+/** Blank rows separating the dimension table from the title-block fields. */
+const TITLE_GAP_ROWS = 3;
+
+/**
+ * The configured "Keywords to look for" and the value read for each, written
+ * under the dimension rows: keyword in the Label column, value in the Value
+ * column.
+ *
+ * Every configured keyword gets a row, including ones the OCR could not find —
+ * a blank value is a prompt to fill the field in by hand, where dropping the
+ * row would hide the miss entirely.
+ */
+function titleFieldRows(annotations: Annotation[], width: number): string[][] {
+  const keywords = getTitleKeywords().filter(
+    (keyword) => metadataFieldForTitleLabel(keyword) === null
+  );
+  if (keywords.length === 0) return [];
+
+  const found = annotations.filter(
+    (a) => a.type === "Title Block" && !isMetadataTitleAnnotation(a)
+  );
+  const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+
+  const blank = () => Array<string>(width).fill("");
+  const rows = keywords.map((keyword) => {
+    const match = found.find((a) => norm(a.label).startsWith(norm(keyword)));
+    const row = blank();
+    row[1] = match ? oneLine(match.label) : keyword; // Label column
+    row[2] = match ? oneLine(match.value) : ""; // Value column
+    return row;
+  });
+
+  return [...Array.from({ length: TITLE_GAP_ROWS }, blank), ...rows];
+}
+
+/** Flatten a multi-line read onto one sheet line. A dimension never contains a
+ * newline; a notes block kept inline does, and it renders as one very tall cell
+ * in Excel if left as-is. */
+function oneLine(s: string): string {
+  return s.replace(/\s*\n\s*/g, " ").trim();
+}
+
+/** Blank rows separating the dimension table from the NOTES block below it. */
+const NOTES_GAP_ROWS = 6;
+
+/**
+ * The NOTES block appended under the dimension rows: a gap, a "NOTES" heading,
+ * then one row per numbered point with the drawing's own numbering kept in the
+ * text. Returns [] when the drawing has no notes, so sheets without a notes
+ * block are unchanged.
+ *
+ * Notes are additive: the note annotation keeps its balloon and its ordinary
+ * dimension row above, and is expanded point-by-point here.
+ */
+function notesRows(annotations: Annotation[], width: number): string[][] {
+  const points = collectNotePoints(annotations);
+  if (points.length === 0) return [];
+
+  const blank = () => Array<string>(width).fill("");
+  const textRow = (text: string) => {
+    const row = blank();
+    row[1] = text; // Label column
+    return row;
+  };
+
+  return [
+    ...Array.from({ length: NOTES_GAP_ROWS }, blank),
+    textRow("NOTES"),
+    ...points.map(textRow),
+  ];
 }
 
 export interface ProjectBundle {
@@ -233,7 +322,9 @@ export function buildVerificationPayload(
     ...(extraColumns != null
       ? { sheet: buildInspectionSheet(annotations, extraColumns) }
       : {}),
-    items: valueAnnotations(annotations).map((a) => ({
+    items: valueAnnotations(annotations)
+      .filter((annotation) => !isMetadataTitleAnnotation(annotation))
+      .map((a) => ({
       number: a.number,
       label: a.label ?? "",
       value: a.value,
@@ -246,7 +337,7 @@ export function buildVerificationPayload(
       page: a.page,
       confidence: a.confidence,
       bbox: a.bbox,
-    })),
+      })),
   };
 }
 

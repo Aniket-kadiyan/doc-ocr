@@ -23,6 +23,7 @@ import {
   isScanJobCancelledError,
   preloadOcr,
   runAutoBalloonScan,
+  runPageTitleFields,
   runOCR,
   stopAutoBalloonScan,
 } from "@/lib/clientOcr";
@@ -69,7 +70,11 @@ import { ScanProgressBanner } from "@/components/ScanProgressBanner";
 import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
 import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
-import type { Annotation, BBox } from "@/types/annotation";
+import {
+  mergeTitleAnnotationsIntoMetadata,
+  metadataFieldForTitleLabel,
+} from "@/lib/titleMetadata";
+import type { Annotation, BBox, DimensionType } from "@/types/annotation";
 import {
   DOCUMENT_METADATA_FIELDS,
   normalizeDocumentMetadata,
@@ -83,6 +88,21 @@ import type {
   ScanScopeKind,
 } from "@/types/scanJob";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+
+/**
+ * Scale the page is re-rendered at for scanning, independent of the viewer's
+ * display scale. The display scale is chosen for a screen; OCR wants pixels.
+ * Measured on the benchmark drawings, reading the displayed canvas rather than
+ * a 250dpi render costs a match or two per sheet (47630 16/19 -> 15/19,
+ * BS1801006.020 11/12 -> 10/12) and loses slanted callouts outright: "0.5x45°"
+ * came back as "6". Coordinates map back through displayScale, which exists
+ * for exactly this, so annotations still land in viewer space.
+ *
+ * 250dpi specifically: it is what the accuracy fixtures render at and it
+ * measured best of the scales tried. 216dpi was uneven — better on two
+ * drawings, worse on 56103-0182B (14/24 -> 12/24).
+ */
+const OCR_RENDER_SCALE = 250 / 72;
 
 const MIN_BOX = 8;
 const DRAWING_BACKGROUND_NAME = "drawing-background";
@@ -187,6 +207,9 @@ export function DrawingViewer() {
   const resetDocumentMetadata = useDocumentMetadataStore(
     (s) => s.resetMetadata
   );
+  const setPageCanvasProvider = useAnnotationStore(
+    (s) => s.setPageCanvasProvider
+  );
 
   const pageAnnotations = annotations.filter(
     (annotation) =>
@@ -274,6 +297,26 @@ export function DrawingViewer() {
     return () => clearTimeout(t);
   }, [annotations, projectId]);
 
+  // Hand the Export menu a way to re-render any page. The ballooned PDF/PNG
+  // exports draw balloons over the drawing, so they need the page bitmap
+  // without owning the PDF document themselves.
+  const renderPageCanvas = useCallback(
+    async (page: number): Promise<HTMLCanvasElement | null> => {
+      if (pdfDoc) {
+        const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
+        return canvas;
+      }
+      // Single-page image: only page 1 exists, and it is already rendered.
+      return page === 1 ? sourceCanvasRef.current : null;
+    },
+    [pdfDoc]
+  );
+
+  useEffect(() => {
+    setPageCanvasProvider(konvaImage ? renderPageCanvas : null);
+    return () => setPageCanvasProvider(null);
+  }, [konvaImage, renderPageCanvas, setPageCanvasProvider]);
+
   // Expose the current project id so Export can retrieve the original drawing
   // blob and create a durable backend checksheet snapshot.
   useEffect(() => {
@@ -321,7 +364,6 @@ export function DrawingViewer() {
     });
     setProjectId(recent.id);
     setProjectName(recent.name.replace(/\.[^.]+$/, ""));
-    setDocumentMetadata(recent.metadata);
     sourceFileRef.current = {
       fileName: recent.fileName,
       mimeType: file.type,
@@ -329,12 +371,20 @@ export function DrawingViewer() {
       dataUrl: await fileToDataUrl(file),
     };
     await loadSource(file);
-    const migration = normalizeLegacyAnnotations(
+    const legacyMigration = normalizeLegacyAnnotations(
       await loadAnnotations(recent.id)
     );
+    const migration = mergeTitleAnnotationsIntoMetadata(
+      legacyMigration.annotations,
+      recent.metadata
+    );
+    setDocumentMetadata(migration.metadata);
     setAnnotations(migration.annotations);
-    await saveAnnotations(recent.id, migration.annotations);
-    const warning = legacyMigrationWarning(migration.orphanLabelCount);
+    await Promise.all([
+      saveAnnotations(recent.id, migration.annotations),
+      saveProjectMetadata(recent.id, migration.metadata),
+    ]);
+    const warning = legacyMigrationWarning(legacyMigration.orphanLabelCount);
     if (warning) setSelectionError(warning);
   }, [loadSource, setAnnotations, setDocumentMetadata, setProjectName]);
 
@@ -445,7 +495,6 @@ export function DrawingViewer() {
       setProjectId(id);
       sourceFileRef.current = bundle.source;
       setProjectName(bundle.projectName);
-      setDocumentMetadata(bundle.metadata);
       const srcFile = dataUrlToFile(
         bundle.source.dataUrl,
         bundle.source.fileName,
@@ -454,9 +503,14 @@ export function DrawingViewer() {
       await loadSource(srcFile);
       setSelectedId(null);
       setEditingValueId(null);
-      const migration = normalizeLegacyAnnotations(bundle.annotations);
+      const legacyMigration = normalizeLegacyAnnotations(bundle.annotations);
+      const migration = mergeTitleAnnotationsIntoMetadata(
+        legacyMigration.annotations,
+        bundle.metadata
+      );
+      setDocumentMetadata(migration.metadata);
       setAnnotations(migration.annotations);
-      const warning = legacyMigrationWarning(migration.orphanLabelCount);
+      const warning = legacyMigrationWarning(legacyMigration.orphanLabelCount);
       if (warning) setSelectionError(warning);
       // Persist so the loaded project reopens on the next visit too.
       await saveProject({
@@ -466,7 +520,7 @@ export function DrawingViewer() {
         fileType: bundle.source.fileType,
         mimeType: bundle.source.mimeType,
         fileBlob: srcFile,
-        metadata: bundle.metadata,
+        metadata: migration.metadata,
         updatedAt: Date.now(),
       });
       await saveAnnotations(id, migration.annotations);
@@ -646,6 +700,9 @@ export function DrawingViewer() {
           bbox,
           page: currentPage,
           ocrResult,
+          suggestedType: ocrResult.category as DimensionType | undefined,
+          suggestedSubtype: ocrResult.subtype,
+          suggestedLabel: ocrResult.label,
         });
       } catch (err) {
         const message =
@@ -686,6 +743,25 @@ export function DrawingViewer() {
       if (!source) {
         setSelectionError("No drawing is available to scan.");
         return { status: "failed" };
+      }
+
+      // Scan a higher-resolution render than the one on screen. Falls back to
+      // the displayed canvas for an image file, or if the re-render fails.
+      let scanCanvas = source;
+      let scanScale = 1;
+      if (pdfDoc) {
+        try {
+          const { canvas: hi } = await renderPdfPage(
+            pdfDoc,
+            scanPage,
+            OCR_RENDER_SCALE
+          );
+          scanCanvas = hi;
+          scanScale = OCR_RENDER_SCALE / PDF_RENDER_SCALE;
+        } catch {
+          scanCanvas = source;
+          scanScale = 1;
+        }
       }
 
       const projectAtStart = projectIdRef.current;
@@ -731,11 +807,11 @@ export function DrawingViewer() {
       });
       try {
         const scanResult = await runAutoBalloonScan({
-          sourceCanvas: source,
+          sourceCanvas: scanCanvas,
           bbox,
           page: scanPage,
           scopeKind,
-          displayScale: 1,
+          displayScale: scanScale,
           existingValueBoxes: useAnnotationStore
             .getState()
             .annotations.filter(
@@ -779,17 +855,24 @@ export function DrawingViewer() {
         const newAnnotations: Annotation[] = filtered.accepted
           .map((r) => {
             const cleanValue = r.text.trim();
-            const type = classifyDimension(cleanValue);
+            // Prefer the backend rule engine, which also sees the detected
+            // symbols and geometry; fall back to the local text-only rules.
+            const type = ((r.category as DimensionType) ||
+              classifyDimension(cleanValue)) as DimensionType;
             return {
               id: uuidv4(),
               // number is assigned sequentially by addAnnotations
               number: 0,
-              label: "",
+              label: r.label?.trim() || "",
               value: cleanValue,
               type,
+              subtype: r.subtype,
               confidence: r.confidence,
               bbox: r.valueBox,
               rotation: r.rotation,
+              // Slanted callouts draw along their leader line; the loose
+              // axis-aligned valueBox stays the anchor for overlap tests.
+              orientedBox: r.orientedBox,
               page: scanPage,
               createdAt: now,
               kind: "dimension",
@@ -838,6 +921,61 @@ export function DrawingViewer() {
         const pageReviewCount = mergedReviews.candidates.filter(
           (candidate) => candidate.page === scanPage
         ).length;
+
+        // Title-block fields ("DWG NO.", "REV") are read from the WHOLE page,
+        // not this scan's scope: the title block sits at a fixed spot on the
+        // sheet, so which fields turn up must not depend on the section being
+        // scanned. Fields already present are skipped, so running more than one
+        // section — or re-scanning — never duplicates them.
+        if (scopeKind === "page") {
+          const existingFields = new Set(
+            useAnnotationStore
+              .getState()
+              .annotations.filter((a) => a.type === "Title Block")
+              .map((a) => (a.label ?? "").trim().toUpperCase())
+          );
+          try {
+            const fields = await runPageTitleFields(source);
+            const nextMetadata = {
+              ...useDocumentMetadataStore.getState().metadata,
+            };
+            let metadataChanged = false;
+            for (const f of fields) {
+              if (!f.value.trim()) continue;
+              const metadataField = metadataFieldForTitleLabel(f.label);
+              if (metadataField) {
+                if (!nextMetadata[metadataField].trim()) {
+                  nextMetadata[metadataField] = f.value.trim();
+                  metadataChanged = true;
+                }
+                continue;
+              }
+              if (!f.bbox) continue;
+              if (existingFields.has(f.label.trim().toUpperCase())) continue;
+              newAnnotations.push({
+                id: uuidv4(),
+                number: 0,
+                label: f.label,
+                value: f.value.trim(),
+                type: "Title Block" as DimensionType,
+                confidence: f.confidence,
+                bbox: f.bbox,
+                rotation: 0,
+                page: scanPage,
+                createdAt: now,
+                kind: "dimension",
+              });
+            }
+            if (metadataChanged) {
+              setDocumentMetadata(nextMetadata);
+              await saveProjectMetadata(projectAtStart, nextMetadata);
+            }
+          } catch {
+            // The balloons are the point of the scan; a failed title-block read
+            // must not throw them away. The export still lists every configured
+            // keyword, with an empty value to fill in by hand.
+          }
+        }
 
         if (newAnnotations.length > 0) {
           // Atomic per-section commit: save these balloons before the queue is
@@ -907,6 +1045,8 @@ export function DrawingViewer() {
       replaceScanReviewCandidates,
       setIsProcessing,
       setIsSegmenting,
+      pdfDoc,
+      setDocumentMetadata,
     ]
   );
 
@@ -1038,6 +1178,10 @@ export function DrawingViewer() {
         reviewReason:
           candidate.reviewReason ||
           "Recognition remained uncertain after bounded recovery.",
+        suggestedType: candidate.category as DimensionType | undefined,
+        suggestedSubtype: candidate.subtype,
+        suggestedLabel: candidate.label,
+        orientedBox: candidate.orientedBox,
         ocrResult: {
           text: candidate.text,
           confidence: candidate.confidence,
@@ -1047,6 +1191,9 @@ export function DrawingViewer() {
           engine: "paddleocr",
           agreement: undefined,
           needsReview: true,
+          category: candidate.category,
+          subtype: candidate.subtype,
+          label: candidate.label,
           valueBox: candidate.valueBox,
         },
       });
@@ -1450,13 +1597,19 @@ export function DrawingViewer() {
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
+                      // Slanted callouts carry a tight rotated rectangle; draw
+                      // that (Konva rotates about x,y clockwise) instead of the
+                      // loose axis-aligned bbox so the box hugs the diagonal text.
+                      const box = ann.orientedBox ?? ann.bbox;
+                      const boxRotation = ann.orientedBox?.rotation ?? 0;
                       return (
                         <Rect
                           key={ann.id}
-                          x={ann.bbox.x}
-                          y={ann.bbox.y}
-                          width={ann.bbox.width}
-                          height={ann.bbox.height}
+                          x={box.x}
+                          y={box.y}
+                          width={box.width}
+                          height={box.height}
+                          rotation={boxRotation}
                           stroke={stroke}
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.

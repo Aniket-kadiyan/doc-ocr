@@ -278,6 +278,30 @@ def parse_tolerance_text(tolerance_text: str) -> tuple[float, float] | None:
     )
 
 
+# A numbered point at the start of a line or after a space: "1.", "2)".
+# A digit must NOT follow the separator, so a decimal ("1.5") never matches.
+_NOTE_POINT_MARKER = re.compile(r"(?:^|\s)(\d{1,2})\s*[.)]\s*(?=\D)")
+
+
+def is_notes_text(text: str) -> bool:
+    """
+    Whether a value reads as a drawing NOTES block rather than a dimension.
+
+    A ballooned notes paragraph arrives here as an ordinary row, and it is
+    prose: its first number is a point marker ("1.") and almost any note
+    carries a hyphen after it ("ASTM B633-LATEST REV."), which looks exactly
+    like an unreadable minus tolerance and aborted the whole conversion.
+    Recognised by its markers, which must start a list and climb — a lone
+    "1." inside a sentence is not a notes block.
+    """
+    marks = [int(m.group(1)) for m in _NOTE_POINT_MARKER.finditer(str(text or ""))]
+    if len(marks) < 2:
+        return False
+    return marks[0] <= 2 and all(
+        later > earlier for earlier, later in zip(marks, marks[1:])
+    )
+
+
 def _has_embedded_tolerance_intent(text: str) -> bool:
     """Return whether text after its nominal number contains tolerance signs."""
     nominal_match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
@@ -292,7 +316,7 @@ def _has_embedded_tolerance_intent(text: str) -> bool:
 def parse_range_from_value_text(value_text: str) -> dict[str, int | float] | None:
     """Parse ranges embedded directly in a value/specification string."""
     text = str(value_text or "").strip()
-    if not text or contains_angle_symbols(text):
+    if not text or contains_angle_symbols(text) or is_notes_text(text):
         return None
 
     range_match = re.search(
@@ -373,6 +397,10 @@ def parse_range(
     """Parse a range and use zero only when no tolerance was supplied."""
     value_text = str(value_text or "").strip()
     tolerance_text = str(tolerance_text or "").strip()
+    # Prose has no nominal, so it gets no measured range at all: the default
+    # below would otherwise hand a notes row the range of its "1." marker.
+    if is_notes_text(value_text):
+        return None
 
     nominal = nominal_value_for_range(value_text)
     parsed_tolerance = parse_tolerance_text(tolerance_text)
