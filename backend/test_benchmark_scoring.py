@@ -19,6 +19,7 @@ from benchmarks.scoring import (
     digits_of,
     load_document,
     normalize,
+    requirement_failures,
     score_document,
     similarity,
 )
@@ -26,13 +27,43 @@ from benchmarks.scoring import (
 DOCUMENTS = Path(__file__).parent / "benchmarks" / "documents"
 
 
-def _item(item_id, accept, type_=None):
+def _item(
+    item_id,
+    accept,
+    type_=None,
+    *,
+    disposition="accepted",
+    page=None,
+    bbox=None,
+):
     accept = (accept,) if isinstance(accept, str) else tuple(accept)
-    return ExpectedItem(id=item_id, accept=accept, type=type_)
+    return ExpectedItem(
+        id=item_id,
+        accept=accept,
+        type=type_,
+        disposition=disposition,
+        page=page,
+        bbox=bbox,
+    )
 
 
-def _region(text, type_=None):
-    return {"text": text, "type": type_}
+def _region(text, type_=None, *, disposition="accepted", page=None, bbox=None):
+    region = {
+        "text": text,
+        "type": type_,
+        "benchmark_disposition": disposition,
+    }
+    if page is not None:
+        region["page"] = page
+    if bbox is not None:
+        region.update(
+            {
+                "bbox": bbox,
+                "_benchmark_page_width": 1000,
+                "_benchmark_page_height": 1000,
+            }
+        )
+    return region
 
 
 # --- normalising a reading ---------------------------------------------------
@@ -146,6 +177,60 @@ def test_wrong_type_still_matches_text_but_is_flagged():
     assert report.items[0].type_ok is False
 
 
+def test_symbol_loss_can_match_text_but_is_not_semantically_exact():
+    expected = [_item(1, "Ø30-0.2", "diameter")]
+    report = score_document(expected, [_region("30-0.2", "diameter")])
+    assert report.matched == 1
+    assert report.semantic_exact == 0
+
+
+def test_expected_other_detection_scores_without_becoming_an_auto_balloon():
+    expected = [
+        _item(1, "SCALE 1:1", "note", disposition="other"),
+    ]
+    report = score_document(
+        expected,
+        [_region("SCALE 1:1", "note", disposition="other")],
+    )
+    assert report.matched == 1
+    assert report.disposition_correct == 1
+    assert report.unexpected_accepted == []
+    assert report.disposition_summary("other") == {
+        "expected": 1,
+        "matched": 1,
+        "semantic_exact": 1,
+        "disposition_correct": 1,
+    }
+
+
+def test_wrong_disposition_is_reported_even_when_text_matches():
+    expected = [_item(1, "SYMBOL1", disposition="other")]
+    report = score_document(expected, [_region("SYMBOL1")])
+    assert report.matched == 1
+    assert report.items[0].disposition_ok is False
+
+
+def test_page_number_prevents_cross_page_pairing():
+    expected = [_item(1, "25", page=2)]
+    report = score_document(expected, [_region("25", page=1)])
+    assert report.missed == 1
+
+
+def test_normalized_bbox_breaks_ties_between_repeated_values():
+    expected = [
+        _item(1, "R19", bbox=(0.1, 0.1, 0.1, 0.1)),
+        _item(2, "R19", bbox=(0.7, 0.7, 0.1, 0.1)),
+    ]
+    regions = [
+        _region("R19 ", bbox={"x": 700, "y": 700, "width": 100, "height": 100}),
+        _region(" R19", bbox={"x": 100, "y": 100, "width": 100, "height": 100}),
+    ]
+    report = score_document(expected, regions)
+    assert report.items[0].detected == " R19"
+    assert report.items[1].detected == "R19 "
+    assert report.matched == 2
+
+
 def test_thresholds_are_configurable():
     """Same digits, a missing symbol: whether that passes is the caller's call."""
     expected = [_item(1, "Ø23.5-0.05")]
@@ -189,6 +274,14 @@ def test_report_renders_and_serialises():
     payload = report.to_dict()
     assert payload["totals"]["expected"] == 2
     assert payload["totals"]["missed"] == 1
+    assert payload["totals"]["semantic_exact"] == 1
+    assert payload["totals"]["disposition_correct"] == 1
+    assert payload["totals"]["by_expected_disposition"]["accepted"] == {
+        "expected": 2,
+        "matched": 1,
+        "semantic_exact": 1,
+        "disposition_correct": 1,
+    }
     assert len(payload["items"]) == 2
     json.dumps(payload)  # must be serialisable for stored results
 
@@ -208,6 +301,8 @@ def test_fixture_is_well_formed(fixture):
     spec = load_document(fixture)
     items = spec["expected"]
     assert items, "a fixture with no expected callouts proves nothing"
+    assert spec.get("schema_version") == 2
+    assert spec.get("coverage") in {"curated", "exhaustive"}
     ids = [item.id for item in items]
     assert len(ids) == len(set(ids)), f"duplicate ids in {fixture.name}"
     # Either the composed kind or a displayed category is a valid fixture type.
@@ -216,6 +311,7 @@ def test_fixture_is_well_formed(fixture):
         "basic", "reference", "gd&t", "datum", "thread", "hole", "chamfer",
         "taper", "material", "heat treatment", "coating", "general note",
         "surface finish", "weld", "note", "unknown", None,
+        "existing callout", "specification",
     }
     for item in items:
         assert item.accept and all(a.strip() for a in item.accept)
@@ -223,6 +319,13 @@ def test_fixture_is_well_formed(fixture):
         assert allowed in known_types, f"unknown type {item.type!r}"
     requires = spec.get("requires", {})
     assert requires.get("matched", 0) <= len(items)
+    assert spec.get("route", "page") in {"page", "legacy_segment"}
+    assert spec.get("profile", "dimensional") in {
+        "dimensional",
+        "full_inspection",
+    }
+    drawing = Path(__file__).parent.parent / spec["document"]
+    assert drawing.is_file(), f"missing benchmark drawing {spec['document']}"
 
 
 def test_digits_of_ignores_symbols():
@@ -246,3 +349,25 @@ def test_wrong_category_and_kind_is_flagged():
     report = score_document(expected, [region])
     assert report.matched == 1
     assert report.typed_correct == 0
+
+
+def test_requirement_failures_cover_accuracy_semantics_and_disposition():
+    report = score_document(
+        [_item(1, "Ø30-0.2", "diameter", disposition="other")],
+        [_region("30-0.2", "diameter", disposition="accepted")],
+    )
+    failures = requirement_failures(
+        report,
+        {
+            "matched": 1,
+            "semantic_exact": 1,
+            "disposition_correct": 1,
+            "accepted_disposition_correct": 1,
+            "max_unexpected": 0,
+        },
+    )
+    assert any("semantic exact" in failure for failure in failures)
+    assert any("disposition correct" in failure for failure in failures)
+    assert any(
+        "accepted disposition correct" in failure for failure in failures
+    )

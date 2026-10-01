@@ -9,12 +9,12 @@ and reports per callout how much of the expected string came back.
     # the whole suite (renders and OCRs, minutes per drawing)
     .venv/bin/python scripts/run_benchmark.py
 
-    # one drawing, saving its regions so it can be re-scored for free
-    .venv/bin/python scripts/run_benchmark.py BS1801006.020 --save-regions
+    # one drawing, saving its complete candidate lifecycle for re-scoring
+    .venv/bin/python scripts/run_benchmark.py BS1801006.020 --save-snapshot
 
-    # re-score a saved run after changing the scoring or the fixture
+    # re-score a saved snapshot after changing scoring or ground truth
     .venv/bin/python scripts/run_benchmark.py BS1801006.020 --regions \\
-        benchmarks/results/BS1801006.020.regions.json
+        benchmarks/results/BS1801006.020.scan.json
 """
 
 from __future__ import annotations
@@ -28,7 +28,15 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
-from benchmarks.scoring import load_document, score_document  # noqa: E402
+from benchmarks.accounting import (  # noqa: E402
+    candidates_from_snapshot,
+    evaluate_snapshot_accounting,
+)
+from benchmarks.scoring import (  # noqa: E402
+    load_document,
+    requirement_failures,
+    score_document,
+)
 
 DOCUMENTS = BACKEND / "benchmarks" / "documents"
 RESULTS = BACKEND / "benchmarks" / "results"
@@ -61,42 +69,90 @@ def render_pages(path: Path, dpi: int):
         yield pdf[index].render(scale=dpi / 72).to_pil().convert("RGB")
 
 
-def segment_document(
-    path: Path, dpi: int, *, page_route: bool = False
-) -> tuple[list[dict], float]:
-    """
-    Segment every page of a drawing.
+def _json_safe(value):
+    """Convert NumPy scalars, tuples, and nested scan data to JSON values."""
 
-    ``page_route`` selects :meth:`OcrPipeline.segment_page`, which is what a
-    whole-page Auto-Balloon scan actually runs. :meth:`segment` is the
-    section-scan route. The two give very different numbers on the same sheet,
-    so the benchmark has to be explicit about which one it is measuring.
-    """
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "tolist"):
+        try:
+            return _json_safe(value.tolist())
+        except (TypeError, ValueError):
+            pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
+def segment_document(path: Path, dpi: int, *, route: str = "page") -> dict:
+    """Run every page and retain the complete result for lifecycle scoring."""
+
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
-    regions: list[dict] = []
+    pages: list[dict] = []
     started = time.time()
     for page_no, image in enumerate(render_pages(path, dpi), start=1):
         result = (
-            pipeline.segment_page(image) if page_route else pipeline.segment(image)
+            pipeline.segment_page(image)
+            if route == "page"
+            else pipeline.segment(image)
         )
-        for region in result["regions"]:
-            regions.append({**region, "page": page_no})
-    return regions, time.time() - started
+        pages.append(
+            {
+                "page": page_no,
+                "width": image.width,
+                "height": image.height,
+                "result": _json_safe(result),
+            }
+        )
+    return {
+        "schema_version": 2,
+        "route": route,
+        "dpi": dpi,
+        "seconds": time.time() - started,
+        "pages": pages,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("names", nargs="*", help="fixture names (default: all)")
-    parser.add_argument("--regions", help="score this saved regions JSON instead of running OCR")
-    parser.add_argument("--save-regions", action="store_true", help="write the regions for re-scoring")
+    parser.add_argument(
+        "--regions",
+        help="score a legacy regions JSON or full scan snapshot instead of OCR",
+    )
+    parser.add_argument(
+        "--save-regions",
+        action="store_true",
+        help="write flattened candidates for legacy re-scoring",
+    )
+    parser.add_argument(
+        "--save-snapshot",
+        action="store_true",
+        help="write accepted, review, other, counts, reasons, and geometry",
+    )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
+    parser.add_argument(
+        "--ignore-gates",
+        action="store_true",
+        help="report scores without returning failure for fixture gates",
+    )
     parser.add_argument("--dpi", type=int, default=None, help="override the fixture's render DPI")
+    parser.add_argument(
+        "--route",
+        choices=("page", "legacy_segment"),
+        help="override the fixture route; page is the production Auto-Balloon route",
+    )
     parser.add_argument(
         "--page",
         action="store_true",
-        help="measure segment_page (the whole-page Auto-Balloon route) instead of segment",
+        help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
 
@@ -120,33 +176,85 @@ def main() -> int:
     for fixture in fixtures:
         spec = load_document(fixture)
         if args.regions:
-            regions = json.loads(Path(args.regions).read_text(encoding="utf-8"))
-            seconds = None
+            snapshot = json.loads(
+                Path(args.regions).read_text(encoding="utf-8")
+            )
         else:
             path = resolve_document(spec["document"])
-            regions, seconds = segment_document(
-                path, args.dpi or spec.get("dpi", 250), page_route=args.page
+            route = args.route or (
+                "page" if args.page else spec.get("route", "page")
             )
+            snapshot = segment_document(
+                path,
+                args.dpi or spec.get("dpi", 250),
+                route=route,
+            )
+            snapshot["fixture"] = fixture.name
+            snapshot["document"] = spec["document"]
+            snapshot["title"] = spec.get("title") or fixture.stem
+
+        candidates = candidates_from_snapshot(snapshot)
+        accounting = evaluate_snapshot_accounting(snapshot)
+        seconds = (
+            float(snapshot["seconds"])
+            if isinstance(snapshot, dict)
+            and isinstance(snapshot.get("seconds"), (int, float))
+            else None
+        )
+
+        if not args.regions:
             if args.save_regions:
                 RESULTS.mkdir(parents=True, exist_ok=True)
                 target = RESULTS / f"{fixture.stem}.regions.json"
-                target.write_text(json.dumps(regions, indent=1, ensure_ascii=False), encoding="utf-8")
+                legacy_candidates = [
+                    {
+                        key: value
+                        for key, value in candidate.items()
+                        if not key.startswith("_benchmark_")
+                    }
+                    for candidate in candidates
+                ]
+                target.write_text(
+                    json.dumps(legacy_candidates, indent=1, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"wrote {target}")
+            if args.save_snapshot:
+                RESULTS.mkdir(parents=True, exist_ok=True)
+                target = RESULTS / f"{fixture.stem}.scan.json"
+                target.write_text(
+                    json.dumps(snapshot, indent=1, ensure_ascii=False),
+                    encoding="utf-8",
+                )
                 print(f"wrote {target}")
 
         report = score_document(
             spec["expected"],
-            regions,
+            candidates,
             document=spec.get("title") or fixture.stem,
             noise_patterns=spec.get("noise_patterns", ()),
             match_threshold=spec.get("match_threshold", 0.9),
             partial_threshold=spec.get("partial_threshold", 0.6),
             seconds=seconds,
         )
-        reports.append(report.to_dict())
+        failures = requirement_failures(
+            report,
+            spec.get("requires", {}),
+            accounting=accounting,
+        )
+        payload = report.to_dict()
+        payload["accounting"] = accounting.to_dict()
+        payload["gate_failures"] = failures
+        reports.append(payload)
         if not args.json:
             print(report.format_text())
+            print(accounting.format_text())
+            if failures:
+                print("gate failures:")
+                for failure in failures:
+                    print(f"  - {failure}")
             print()
-        if report.missed:
+        if failures and not args.ignore_gates:
             failed = True
 
     if args.json:

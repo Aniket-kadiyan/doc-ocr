@@ -1,0 +1,286 @@
+{
+  "schema_version": 2,
+  "document": "docs/129E01-13300-ID.pdf",
+  "title": "PIPE, EXH PRESSURE, drawing 129E01-13300-ID",
+  "route": "page",
+  "profile": "dimensional",
+  "coverage": "curated",
+  "baseline_status": "pending_full_snapshot",
+  "dpi": 250,
+  "match_threshold": 0.9,
+  "partial_threshold": 0.6,
+  "requires": {
+    "accounting_balanced": true,
+    "max_accounting_errors": 0
+  },
+  "notes": [
+    "Curated directly from the supplied drawing. Normalized anchors come from the supplied saved document and disambiguate repeated values.",
+    "The supplied pre-milestone run auto-accepted 37 regions and exposed no review or excluded candidates. It is retained as a historical accepted-only result, not used as a passing accuracy gate.",
+    "Dimensional profile: drawing dimensions and GD&T are accepted; title-block summaries, notes, stamps, and existing circled item callouts belong in other detections.",
+    "No recognition threshold is set until a complete schema-v2 production snapshot is recorded on the validated OCR environment."
+  ],
+  "expected": [
+    {
+      "id": 1,
+      "accept": ["64±1"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.504187, "y": 0.107268, "width": 0.017991, "height": 0.012972}
+    },
+    {
+      "id": 2,
+      "accept": ["L190×W100×H137"],
+      "type": "note",
+      "disposition": "other",
+      "page": 1,
+      "bbox": {"x": 0.632068, "y": 0.115259, "width": 0.0544, "height": 0.025439},
+      "note": "Fixture summary in the title area, not an inspection balloon."
+    },
+    {
+      "id": 3,
+      "accept": ["39±0.7"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.415762, "y": 0.131745, "width": 0.024221, "height": 0.012972}
+    },
+    {
+      "id": 4,
+      "accept": ["16.8±0.7"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.437906, "y": 0.156125, "width": 0.019898, "height": 0.012732}
+    },
+    {
+      "id": 5,
+      "accept": ["25"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.372664, "y": 0.219326, "width": 0.009855, "height": 0.017617}
+    },
+    {
+      "id": 6,
+      "accept": ["R19"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.41714, "y": 0.277329, "width": 0.017481, "height": 0.015668},
+      "note": "Left R19."
+    },
+    {
+      "id": 7,
+      "accept": ["R19"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.497957, "y": 0.28272, "width": 0.016613, "height": 0.015162},
+      "note": "Right R19."
+    },
+    {
+      "id": 8,
+      "accept": ["R10"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.534638, "y": 0.403105, "width": 0.018162, "height": 0.016149}
+    },
+    {
+      "id": 9,
+      "accept": ["108"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.425447, "y": 0.445174, "width": 0.015404, "height": 0.013694}
+    },
+    {
+      "id": 10,
+      "accept": ["177.5"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.476153, "y": 0.468664, "width": 0.024749, "height": 0.013935}
+    },
+    {
+      "id": 11,
+      "accept": ["Ø10±0.3"],
+      "type": "diameter",
+      "page": 1,
+      "bbox": {"x": 0.376732, "y": 0.494465, "width": 0.020732, "height": 0.046787}
+    },
+    {
+      "id": 12,
+      "accept": ["Ø8.2±0.6"],
+      "type": "diameter",
+      "page": 1,
+      "bbox": {"x": 0.382655, "y": 0.501901, "width": 0.03394, "height": 0.066113}
+    },
+    {
+      "id": 13,
+      "accept": ["Ø3.8±0.3"],
+      "type": "diameter",
+      "page": 1,
+      "bbox": {"x": 0.415591, "y": 0.502888, "width": 0.052579, "height": 0.050277}
+    },
+    {
+      "id": 14,
+      "accept": ["NOTES"],
+      "type": "general note",
+      "disposition": "other",
+      "page": 1,
+      "bbox": {"x": 0.715574, "y": 0.577136, "width": 0.192, "height": 0.080385}
+    },
+    {
+      "id": 15,
+      "accept": ["47.4±0.7"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.582026, "y": 0.618051, "width": 0.009889, "height": 0.047076}
+    },
+    {
+      "id": 16,
+      "accept": ["R5"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.157549, "y": 0.627918, "width": 0.013923, "height": 0.020674}
+    },
+    {
+      "id": 17,
+      "accept": ["69.3°"],
+      "type": "reference",
+      "page": 1,
+      "bbox": {"x": 0.271847, "y": 0.645872, "width": 0.010621, "height": 0.01574}
+    },
+    {
+      "id": 18,
+      "accept": ["90°+0.6"],
+      "type": "angle",
+      "page": 1,
+      "bbox": {"x": 0.294826, "y": 0.653983, "width": 0.007472, "height": 0.027557},
+      "note": "Single-sided angular tolerance; the omitted lower bound is zero during export."
+    },
+    {
+      "id": 19,
+      "accept": ["R4.5"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.43954, "y": 0.709458, "width": 0.021651, "height": 0.033213}
+    },
+    {
+      "id": 20,
+      "accept": ["R25"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.476783, "y": 0.711937, "width": 0.018383, "height": 0.025993}
+    },
+    {
+      "id": 21,
+      "accept": ["18±0.5"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.070553, "y": 0.712298, "width": 0.009226, "height": 0.039856}
+    },
+    {
+      "id": 22,
+      "accept": ["32"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.226094, "y": 0.714513, "width": 0.009736, "height": 0.016486}
+    },
+    {
+      "id": 23,
+      "accept": ["3.5±0.3"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.303234, "y": 0.732298, "width": 0.034502, "height": 0.013718}
+    },
+    {
+      "id": 24,
+      "accept": ["24±0.1"],
+      "type": "tolerance",
+      "page": 1,
+      "bbox": {"x": 0.127438, "y": 0.734176, "width": 0.024187, "height": 0.012298}
+    },
+    {
+      "id": 25,
+      "accept": ["3D-CAD"],
+      "type": "note",
+      "disposition": "other",
+      "page": 1,
+      "bbox": {"x": 0.015915, "y": 0.751408, "width": 0.029055, "height": 0.012298}
+    },
+    {
+      "id": 26,
+      "accept": ["R4"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.401532, "y": 0.760963, "width": 0.017345, "height": 0.018869}
+    },
+    {
+      "id": 27,
+      "accept": ["⊥0.3 A"],
+      "type": "gd&t",
+      "page": 1,
+      "bbox": {"x": 0.111268, "y": 0.767389, "width": 0.01566, "height": 0.013767}
+    },
+    {
+      "id": 28,
+      "accept": ["12"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.463098, "y": 0.803321, "width": 0.014043, "height": 0.015211}
+    },
+    {
+      "id": 29,
+      "accept": ["R25"],
+      "type": "radius",
+      "page": 1,
+      "bbox": {"x": 0.561055, "y": 0.820987, "width": 0.015949, "height": 0.014946},
+      "note": "Lower-right R25."
+    },
+    {
+      "id": 30,
+      "accept": ["24"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.454774, "y": 0.828087, "width": 0.0104, "height": 0.011769}
+    },
+    {
+      "id": 31,
+      "accept": ["44"],
+      "type": "linear",
+      "page": 1,
+      "bbox": {"x": 0.454247, "y": 0.851576, "width": 0.012306, "height": 0.012996}
+    },
+    {
+      "id": 32,
+      "accept": ["GENERAL TOLERANCE"],
+      "type": "note",
+      "disposition": "other",
+      "page": 1,
+      "bbox": {"x": 0.021311, "y": 0.901227, "width": 0.014791, "height": 0.008375}
+    },
+    {
+      "id": 33,
+      "accept": ["3"],
+      "type": "existing callout",
+      "disposition": "other",
+      "page": 1,
+      "bbox": {"x": 0.534706, "y": 0.928544, "width": 0.003302, "height": 0.0071},
+      "note": "Existing circled assembly item marker."
+    },
+    {
+      "id": 34,
+      "accept": ["JOINT"],
+      "type": "material",
+      "disposition": "other",
+      "page": 1,
+      "note": "BOM row in the dimensional profile."
+    }
+  ],
+  "noise_patterns": [
+    "^DWG",
+    "^FILE",
+    "^PART",
+    "^MATERIAL",
+    "^NOTES",
+    "^REMARKS",
+    "^SCALE",
+    "YANMAR",
+    "PRESSURE TEST",
+    "FURNACE BRAZING"
+  ]
+}

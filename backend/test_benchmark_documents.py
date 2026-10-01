@@ -18,7 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.scoring import load_document, score_document
+from benchmarks.accounting import (
+    candidates_from_snapshot,
+    evaluate_snapshot_accounting,
+)
+from benchmarks.scoring import (
+    load_document,
+    requirement_failures,
+    score_document,
+)
 
 BACKEND = Path(__file__).resolve().parent
 DOCUMENTS = BACKEND / "benchmarks" / "documents"
@@ -66,26 +74,47 @@ def test_document_accuracy(fixture):
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
-    regions = []
-    for image in _render(drawing, spec.get("dpi", 250)):
-        regions.extend(pipeline.segment(image)["regions"])
+    route = spec.get("route", "page")
+    pages = []
+    for page_number, image in enumerate(
+        _render(drawing, spec.get("dpi", 250)), start=1
+    ):
+        result = (
+            pipeline.segment_page(image)
+            if route == "page"
+            else pipeline.segment(image)
+        )
+        pages.append(
+            {
+                "page": page_number,
+                "width": image.width,
+                "height": image.height,
+                "result": result,
+            }
+        )
+
+    snapshot = {
+        "schema_version": 2,
+        "route": route,
+        "dpi": spec.get("dpi", 250),
+        "pages": pages,
+    }
+    candidates = candidates_from_snapshot(snapshot)
+    accounting = evaluate_snapshot_accounting(snapshot)
 
     report = score_document(
         spec["expected"],
-        regions,
+        candidates,
         document=spec.get("title") or fixture.stem,
         noise_patterns=spec.get("noise_patterns", ()),
         match_threshold=spec.get("match_threshold", 0.9),
         partial_threshold=spec.get("partial_threshold", 0.6),
     )
-    detail = "\n" + report.format_text()
+    detail = "\n" + report.format_text() + "\n" + accounting.format_text()
 
-    requires = spec.get("requires", {})
-    if "matched" in requires:
-        assert report.matched >= requires["matched"], detail
-    if "mean_percent" in requires:
-        assert report.mean_score * 100 >= requires["mean_percent"], detail
-    if "type_correct" in requires:
-        assert report.typed_correct >= requires["type_correct"], detail
-    if "max_unexpected" in requires:
-        assert len(report.extras) <= requires["max_unexpected"], detail
+    failures = requirement_failures(
+        report,
+        spec.get("requires", {}),
+        accounting=accounting,
+    )
+    assert not failures, "\n".join([detail, "gate failures:", *failures])

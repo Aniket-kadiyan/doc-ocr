@@ -145,8 +145,10 @@ integration tests are intentionally separate:
 npm run test:ocr
 ```
 
-See [docs/TESTING.md](docs/TESTING.md) for the command matrix, Windows manual
-acceptance checklist, and explicitly deferred follow-ups.
+See [docs/TESTING.md](docs/TESTING.md) for the command matrix and manual
+acceptance checklist. The real-drawing corpus, lifecycle accounting, saved
+snapshot format, and baseline workflow are in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Project layout
 

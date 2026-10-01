@@ -31,7 +31,7 @@ backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
 | `npm run lint` | Next.js/TypeScript source through ESLint CLI |
 | `npm run typecheck` | TypeScript without emitting files |
 | `npm run test:frontend` | Value/tolerance, numbering, state, migration, exports, and balloon geometry |
-| `npm run test:backend` | Fast Python parsing, conversion, clustering, and balloon-builder regressions |
+| `npm run test:backend` | Fast Python parsing, benchmark accounting/scoring, conversion, clustering, and balloon-builder regressions |
 | `npm run test:ocr` | OpenCV region refinement and synthetic PaddleOCR integration; may load models |
 | `npm run verify` | Lint, typecheck, frontend tests, and fast Python tests |
 | `npm run build` | Production Next.js build; run before a release |
@@ -95,9 +95,29 @@ The fast suite verifies:
 - Section scans return every non-empty recognized object after clustering and
   duplicate suppression, without table, length, numeric, syntax, confidence,
   or whole-page eligibility filters.
+- Benchmark fixtures validate profile/disposition ground truth, normalized
+  location anchors, semantic-exact scoring, and the three-state candidate
+  accounting invariant without loading OCR models.
 
-Automated tests do not claim OCR accuracy on real manufacturing drawings or
-pixel-perfect browser rendering. Those remain manual acceptance checks.
+The fast automated suite does not claim OCR accuracy on real manufacturing
+drawings or pixel-perfect browser rendering. Real-drawing OCR is an opt-in
+benchmark because it loads models and can take minutes per page. See
+[BENCHMARKS.md](BENCHMARKS.md) for the six-drawing corpus, profiles, complete
+snapshot format, commands, and recorded baselines.
+
+## Opt-in real-drawing benchmark
+
+Run one document and save all accepted, review, and excluded outcomes:
+
+```bash
+backend/.venv/bin/python backend/scripts/run_benchmark.py \
+  129E01-13300-ID --save-snapshot
+```
+
+On Windows use `backend\.venv\Scripts\python` and backslashes. To exercise every
+fixture through pytest, set `RUN_DOC_BENCHMARKS=1` before running
+`backend/test_benchmark_documents.py`. Use the validated OCR environment; saved
+schema-v2 snapshots can then be re-scored without reloading the models.
 
 ## Windows manual acceptance checklist
 

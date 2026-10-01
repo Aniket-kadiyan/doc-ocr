@@ -1,0 +1,594 @@
+[
+  {
+    "candidate_id": "ab56a211-2b95-40a0-8779-f7160bf3488f",
+    "text": "64±1",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.999244749546051,
+    "bbox": {
+      "x": 1279.6272,
+      "y": 192.5424,
+      "width": 45.6624,
+      "height": 23.284799999999997
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+1, -1"
+  },
+  {
+    "candidate_id": "e2d96b15-e270-4aff-af58-2e1b597e49fb",
+    "text": "L190XW100",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9788478016853333,
+    "bbox": {
+      "x": 1604.1888,
+      "y": 206.88479999999998,
+      "width": 138.0672,
+      "height": 45.6624
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "104f0aeb-caa4-4261-81ac-7eba4eda4e03",
+    "text": "39±0.7",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9999847412109375,
+    "bbox": {
+      "x": 1055.2032,
+      "y": 236.4768,
+      "width": 61.473600000000005,
+      "height": 23.284799999999997
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.7, -0.7"
+  },
+  {
+    "candidate_id": "493f2044-b476-410c-933c-1a509dc6aa82",
+    "text": "16.8",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999710321426392,
+    "bbox": {
+      "x": 1111.4063999999998,
+      "y": 280.2384,
+      "width": 50.5008,
+      "height": 22.8528
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "940dab58-76c8-4942-9c37-4f11d6e0aa8c",
+    "text": "25",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.8417118191719055,
+    "bbox": {
+      "x": 945.8208,
+      "y": 393.68159999999995,
+      "width": 25.0128,
+      "height": 31.6224
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "f6c4cf93-d144-4e4a-bbea-249cb3e10bdc",
+    "text": "R19",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9896116852760315,
+    "bbox": {
+      "x": 1058.7024,
+      "y": 497.79359999999997,
+      "width": 44.3664,
+      "height": 28.123199999999997
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "e4303519-7a5e-4937-a2bf-69dd70ab85b2",
+    "text": "R19",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9854145050048828,
+    "bbox": {
+      "x": 1263.816,
+      "y": 507.4704,
+      "width": 42.163199999999996,
+      "height": 27.215999999999998
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "049e3ea1-63b3-4da0-891d-a60e9d1e5ea2",
+    "text": "2",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9298002123832703,
+    "bbox": {
+      "x": 1184.76,
+      "y": 566.3088,
+      "width": 22.8528,
+      "height": 27.215999999999998
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "e3f8c057-0403-40b1-8be3-f031dc450820",
+    "text": "R10",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.8081679344177246,
+    "bbox": {
+      "x": 1356.912,
+      "y": 723.5568000000001,
+      "width": 46.0944,
+      "height": 28.987199999999998
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "30817d6b-b4ab-40d2-89f0-685a47a5524c",
+    "text": "108",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999750256538391,
+    "bbox": {
+      "x": 1079.7839999999999,
+      "y": 799.0704,
+      "width": 39.096,
+      "height": 24.5808
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "d2232da4-5d87-4fe1-a383-335dd021de72",
+    "text": "177.5",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999497532844543,
+    "bbox": {
+      "x": 1208.4768,
+      "y": 841.2335999999999,
+      "width": 62.8128,
+      "height": 25.0128
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "9fcf0ea8-3ff3-450f-a59e-a175f7a1bbd3",
+    "text": "Ø10±0.3",
+    "type": "diameter",
+    "category": "Diameter",
+    "confidence": 0.9996366500854492,
+    "bbox": {
+      "x": 956.1456000000001,
+      "y": 887.544,
+      "width": 52.617599999999996,
+      "height": 83.9808
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.3, -0.3"
+  },
+  {
+    "candidate_id": "92fae1b8-abcb-4530-8449-44b1e5cf8b7a",
+    "text": "8.2±0.6",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9844015836715698,
+    "bbox": {
+      "x": 971.1791999999999,
+      "y": 900.8928,
+      "width": 86.1408,
+      "height": 118.67039999999999
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.6, -0.6"
+  },
+  {
+    "candidate_id": "84729a8c-0d0f-4555-9790-e2a7e3bc53af",
+    "text": "3.8±0.3",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9954138100147247,
+    "bbox": {
+      "x": 1054.7712,
+      "y": 902.664,
+      "width": 133.4448,
+      "height": 90.2448
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.3, -0.3"
+  },
+  {
+    "candidate_id": "3bc9c1b6-d358-4401-8b74-5aea4c9f1818",
+    "text": "I.FREE FROM BURRS AND SHARP EDGES\n2.TO BE APPLIEED * MARKED AT THE BOTH SIDES OF PIPE\n3.SURFACE TREATMENT:APPLY ZINC COATING \"Ep-Fe/Zn 5\"\nWITH TRIVALENT CHROMIUM REQUIRED CM2 GRADE\nFOR AFTER TREATMENT.(WHITE COLOR)\n4.PRESSURE TEST:O.2MPa",
+    "type": "general note",
+    "category": "General Notes",
+    "confidence": 0.991,
+    "bbox": {
+      "x": 1816.128,
+      "y": 1035.936,
+      "width": 487.296,
+      "height": 144.28799999999998
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": null
+  },
+  {
+    "candidate_id": "5844fdd7-5630-4bbc-a8e0-6b331a7a83ff",
+    "text": "47.4±0.7",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9999850988388062,
+    "bbox": {
+      "x": 1477.1808,
+      "y": 1109.376,
+      "width": 25.0992,
+      "height": 84.4992
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.7, -0.7"
+  },
+  {
+    "candidate_id": "8865c059-4a93-4c9b-b779-c7f6e6a1a8ac",
+    "text": "R5",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9346714019775391,
+    "bbox": {
+      "x": 399.8592,
+      "y": 1127.088,
+      "width": 35.337599999999995,
+      "height": 37.1088
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "0a827501-9b2d-4ed8-95e5-dfb1ee86d576",
+    "text": "69.J",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.6394368410110474,
+    "bbox": {
+      "x": 689.9472,
+      "y": 1159.3152,
+      "width": 26.956799999999998,
+      "height": 28.2528
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "9e964e8c-0f35-4e1c-b01d-f249a9711013",
+    "text": "+0.60",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.892705887556076,
+    "bbox": {
+      "x": 748.2671999999999,
+      "y": 1173.8736000000001,
+      "width": 18.9648,
+      "height": 49.464
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "1a02f994-cfdb-4c26-ba0e-f7803e0300bb",
+    "text": "R4.5",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9998501539230347,
+    "bbox": {
+      "x": 1115.5536,
+      "y": 1273.4496000000001,
+      "width": 54.9504,
+      "height": 59.616
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "0096493a-f989-407a-b465-25e4773901d9",
+    "text": "R25",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9998290538787842,
+    "bbox": {
+      "x": 1210.0752,
+      "y": 1277.8991999999998,
+      "width": 46.656,
+      "height": 46.656
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "429bea5e-5805-4de1-a020-7b3f1e6b9bd0",
+    "text": "18±0.5",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9999148845672607,
+    "bbox": {
+      "x": 179.064,
+      "y": 1278.5472,
+      "width": 23.4144,
+      "height": 71.5392
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.5, -0.5"
+  },
+  {
+    "candidate_id": "15bf59ff-c36e-4603-9f3e-3ec6322e6132",
+    "text": "32",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9770485758781433,
+    "bbox": {
+      "x": 573.8256,
+      "y": 1282.5216,
+      "width": 24.7104,
+      "height": 29.592
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "106ae10a-c012-4dbf-9896-eada473135e3",
+    "text": "0.5",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999599456787109,
+    "bbox": {
+      "x": 980.8128,
+      "y": 1301.6591999999998,
+      "width": 25.5312,
+      "height": 48.859199999999994
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "5aeeaa32-5d47-4cca-9811-df0216c61b62",
+    "text": "3.5±0.3",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9998807907104492,
+    "bbox": {
+      "x": 769.608,
+      "y": 1314.4463999999998,
+      "width": 87.56639999999999,
+      "height": 24.624
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.3, -0.3"
+  },
+  {
+    "candidate_id": "5e2cc599-ab18-4582-b866-adcf8a5048fb",
+    "text": "24±0.1",
+    "type": "tolerance",
+    "category": "Toleranced Dimension",
+    "confidence": 0.9999663233757019,
+    "bbox": {
+      "x": 323.4384,
+      "y": 1317.816,
+      "width": 61.38719999999999,
+      "height": 22.0752
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "+0.1, -0.1"
+  },
+  {
+    "candidate_id": "10a030da-c6fa-4c66-ae1b-b0c64d1e2152",
+    "text": "30-CAD",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999642968177795,
+    "bbox": {
+      "x": 40.391999999999996,
+      "y": 1348.7472,
+      "width": 73.74239999999999,
+      "height": 22.0752
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": null
+  },
+  {
+    "candidate_id": "ccfd1cbb-9ecf-425a-9795-65eefdcd16a9",
+    "text": "R4.",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9914205074310303,
+    "bbox": {
+      "x": 1019.088,
+      "y": 1365.8976,
+      "width": 44.0208,
+      "height": 33.8688
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "a9c41569-bba4-4207-babe-d7729cb8cb75",
+    "text": "0.3",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999885559082031,
+    "bbox": {
+      "x": 282.39840000000004,
+      "y": 1377.432,
+      "width": 39.744,
+      "height": 24.7104
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "62a32034-89c9-4ae2-86d2-f41d4cd6112d",
+    "text": "190",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.6948962211608887,
+    "bbox": {
+      "x": 979.0416,
+      "y": 1391.8608,
+      "width": 27.7344,
+      "height": 47.088
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "11d6fca2-2c34-42b1-923a-5848b030c32d",
+    "text": "SYMBOL1",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.6085669249296188,
+    "bbox": {
+      "x": 88.992,
+      "y": 1419.8544,
+      "width": 32.6592,
+      "height": 18.1008
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "ec696a1f-5dcb-4ea8-846f-7b3287b85b10",
+    "text": "12",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9974451065063477,
+    "bbox": {
+      "x": 1175.3424,
+      "y": 1441.9296,
+      "width": 35.64,
+      "height": 27.302400000000002
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "f51fa723-6ada-4896-97d4-e70041ae8640",
+    "text": "R25",
+    "type": "radius",
+    "category": "Radius",
+    "confidence": 0.9999954104423523,
+    "bbox": {
+      "x": 1423.9584,
+      "y": 1473.6383999999998,
+      "width": 40.4784,
+      "height": 26.8272
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "9c93188d-5f77-4c37-954f-b0fb6e103bd7",
+    "text": "24",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999993443489075,
+    "bbox": {
+      "x": 1154.2176,
+      "y": 1486.3824,
+      "width": 26.3952,
+      "height": 21.1248
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "81726879-1370-4c0c-9d91-63fabfac0a4d",
+    "text": "44",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.999998152256012,
+    "bbox": {
+      "x": 1152.8783999999998,
+      "y": 1528.5456,
+      "width": 31.2336,
+      "height": 23.328
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "63851f2b-5c1c-4561-b23e-c9e31f3a8611",
+    "text": "10111TOLERANCE",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.8644191026687622,
+    "bbox": {
+      "x": 54.0864,
+      "y": 1617.6671999999999,
+      "width": 37.540800000000004,
+      "height": 15.033599999999998
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  },
+  {
+    "candidate_id": "fd3f678f-9774-4e77-a7d9-8eb324d14e88",
+    "text": "3",
+    "type": "linear",
+    "category": "Linear Dimension",
+    "confidence": 0.9999961853027344,
+    "bbox": {
+      "x": 1357.0848,
+      "y": 1666.6992,
+      "width": 8.380799999999999,
+      "height": 12.744
+    },
+    "page": 1,
+    "needs_review": false,
+    "range": "0"
+  }
+]

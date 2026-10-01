@@ -1,6 +1,10 @@
 {
-  "document": "Docs/56103-0182B.pdf",
+  "schema_version": 2,
+  "document": "docs/56103-0182B.pdf",
   "title": "INLINE LOCKNUT, drawing 56103-0182 rev B",
+  "route": "page",
+  "profile": "dimensional",
+  "coverage": "curated",
   "dpi": 250,
   "match_threshold": 0.9,
   "partial_threshold": 0.6,
@@ -8,7 +12,9 @@
     "matched": 15,
     "mean_percent": 78.0,
     "type_correct": 17,
-    "max_unexpected": 6
+    "max_unexpected": 6,
+    "accounting_balanced": true,
+    "max_accounting_errors": 0
   },
   "notes": [
     "Expected values are the ones recorded from the app's unmapped list. Where that reading is imperfect the drawing's true value is listed as a second accepted form, so the benchmark keeps passing when the read improves rather than locking the error in.",
