@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mapPageSegmentRegions,
+  mapSegmentCandidateOutcomes,
   mapSegmentRegions,
 } from "@/lib/paddleOcrClient";
 
@@ -168,5 +169,43 @@ describe("scan result coordinate mapping", () => {
     expect(mapped.needsReview).toBe(true);
     expect(mapped.reviewReason).toContain("stable consensus");
     expect(mapped.recoveryAttempted).toBe(true);
+  });
+
+  it("maps excluded outcomes with raw OCR and filter evidence intact", () => {
+    const [mapped] = mapSegmentCandidateOutcomes(
+      [
+        {
+          candidate_id: "C0043",
+          bbox: { x: 260, y: 480, width: 100, height: 24 },
+          state: "excluded",
+          text: "REV A",
+          raw_text: "REV 4",
+          preliminary_text: "REY 4",
+          confidence: 0.74,
+          recognized: true,
+          reason: "Title-block text is not a drawing value",
+          rule: "title_block",
+          category: "Title Block",
+          orientation: "horizontal",
+          rotation: 0,
+          authoritative_reread: true,
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      2,
+      "page"
+    );
+
+    expect(mapped).toMatchObject({
+      candidateId: "C0043",
+      outcomeState: "excluded",
+      text: "REV A",
+      rawText: "REV 4",
+      preliminaryText: "REY 4",
+      outcomeRule: "title_block",
+      category: "Title Block",
+      authoritativeReread: true,
+      valueBox: { x: 130, y: 240, width: 50, height: 12 },
+    });
   });
 });

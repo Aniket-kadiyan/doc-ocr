@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -94,6 +95,22 @@ def _revision_metadata(
     return metadata
 
 
+def _revision_candidates(
+    connection: sqlite3.Connection,
+    revision_id: str,
+) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT payload_json
+        FROM checksheet_revision_candidates
+        WHERE revision_id = ?
+        ORDER BY position ASC
+        """,
+        (revision_id,),
+    ).fetchall()
+    return [json.loads(str(row["payload_json"])) for row in rows]
+
+
 class ChecksheetStorage:
     """Owns all checksheet mutations and keeps browser state out of the model."""
 
@@ -180,6 +197,24 @@ class ChecksheetStorage:
                         PRIMARY KEY (revision_id, field_key),
                         UNIQUE (revision_id, position)
                     );
+
+                    CREATE TABLE IF NOT EXISTS checksheet_revision_candidates (
+                        id TEXT PRIMARY KEY,
+                        revision_id TEXT NOT NULL
+                            REFERENCES checksheet_revisions(id) ON DELETE CASCADE,
+                        candidate_id TEXT NOT NULL,
+                        page INTEGER NOT NULL CHECK (page >= 1),
+                        state TEXT NOT NULL
+                            CHECK (state IN ('review', 'other', 'ignored')),
+                        position INTEGER NOT NULL CHECK (position >= 0),
+                        payload_json TEXT NOT NULL,
+                        UNIQUE (revision_id, candidate_id),
+                        UNIQUE (revision_id, position)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_checksheet_candidates_revision
+                        ON checksheet_revision_candidates
+                        (revision_id, state, position);
 
                     CREATE TABLE IF NOT EXISTS checksheet_columns (
                         id TEXT PRIMARY KEY,
@@ -422,6 +457,26 @@ class ChecksheetStorage:
                 VALUES (?, ?, ?, ?)
                 """,
                 (str(uuid4()), revision_id, name, position),
+            )
+        for position, candidate in enumerate(snapshot.scan_candidates):
+            connection.execute(
+                """
+                INSERT INTO checksheet_revision_candidates (
+                    id, revision_id, candidate_id, page, state,
+                    position, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    revision_id,
+                    candidate.candidate_id,
+                    candidate.page,
+                    candidate.state,
+                    position,
+                    json.dumps(
+                        candidate.model_dump(mode="json", exclude_none=True)
+                    ),
+                ),
             )
         for position, item in enumerate(snapshot.items):
             connection.execute(
@@ -729,7 +784,9 @@ class ChecksheetStorage:
                 """
                 SELECT r.*,
                     (SELECT COUNT(*) FROM checksheet_items i
-                        WHERE i.revision_id = r.id) AS row_count
+                        WHERE i.revision_id = r.id) AS row_count,
+                    (SELECT COUNT(*) FROM checksheet_revision_candidates c
+                        WHERE c.revision_id = r.id) AS candidate_count
                 FROM checksheet_revisions r
                 WHERE r.checksheet_id = ?
                 ORDER BY r.revision_number DESC
@@ -764,6 +821,7 @@ class ChecksheetStorage:
                     "id": str(row["id"]),
                     "revision_number": int(row["revision_number"]),
                     "row_count": int(row["row_count"]),
+                    "candidate_count": int(row["candidate_count"]),
                     "created_at": str(row["created_at"]),
                     "metadata": revision_metadata[str(row["id"])],
                 }
@@ -836,6 +894,10 @@ class ChecksheetStorage:
                 (run_id,),
             ).fetchall()
             metadata = _revision_metadata(connection, str(row["revision_id"]))
+            scan_candidates = _revision_candidates(
+                connection,
+                str(row["revision_id"]),
+            )
         readings: dict[str, dict[str, str]] = {}
         for reading in reading_rows:
             readings.setdefault(str(reading["item_id"]), {})[
@@ -853,6 +915,7 @@ class ChecksheetStorage:
                 "revision_number": int(row["revision_number"]),
                 "pdf_render_scale": float(row["pdf_render_scale"]),
                 "metadata": metadata,
+                "scan_candidates": scan_candidates,
             },
             "run": {
                 "id": str(row["id"]),
@@ -1190,6 +1253,32 @@ class ChecksheetStorage:
                         metadata_row["field_key"],
                         metadata_row["value"],
                         metadata_row["position"],
+                    ),
+                )
+            candidate_rows = connection.execute(
+                """
+                SELECT candidate_id, page, state, position, payload_json
+                FROM checksheet_revision_candidates
+                WHERE revision_id = ? ORDER BY position
+                """,
+                (revision["id"],),
+            ).fetchall()
+            for candidate_row in candidate_rows:
+                connection.execute(
+                    """
+                    INSERT INTO checksheet_revision_candidates (
+                        id, revision_id, candidate_id, page, state,
+                        position, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        new_revision_id,
+                        candidate_row["candidate_id"],
+                        candidate_row["page"],
+                        candidate_row["state"],
+                        candidate_row["position"],
+                        candidate_row["payload_json"],
                     ),
                 )
             columns = connection.execute(

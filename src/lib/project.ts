@@ -1,4 +1,5 @@
 import type { Annotation } from "@/types/annotation";
+import type { ScanCandidate } from "@/types/scanCandidate";
 import { balloonLabel } from "@/lib/featureLabel";
 import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
@@ -14,12 +15,12 @@ import {
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
- * the file is portable) plus every annotation and a verification payload that a
- * remote checking server can consume directly. Saving produces one `.docbox.json`
- * file; loading restores both the drawing and its annotations.
+ * the file is portable), accepted annotations, unresolved scan candidates, and
+ * metadata. Saving produces one `.docbox.json` file; loading restores the full
+ * review state without putting unresolved objects into exports.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 1;
+export const PROJECT_VERSION = 2;
 
 export interface ProjectSource {
   fileName: string;
@@ -299,6 +300,8 @@ export interface ProjectBundle {
   savedAt: number;
   source: ProjectSource;
   annotations: Annotation[];
+  /** Unaccepted detector outcomes; never included in inspection exports. */
+  scanCandidates: ScanCandidate[];
   metadata: DocumentMetadata;
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
@@ -346,11 +349,12 @@ export function verificationEndpoint(): string {
   return process.env.NEXT_PUBLIC_VERIFY_API_URL ?? "";
 }
 
-/** Serialize a full project (drawing + annotations + verification) to JSON. */
+/** Serialize a full project (drawing + accepted and unresolved state) to JSON. */
 export function buildProjectBundle(args: {
   projectName: string;
   source: ProjectSource;
   annotations: Annotation[];
+  scanCandidates?: ScanCandidate[];
   metadata?: Partial<DocumentMetadata> | null;
   savedAt: number;
 }): string {
@@ -361,6 +365,7 @@ export function buildProjectBundle(args: {
     savedAt: args.savedAt,
     source: args.source,
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
+    scanCandidates: args.scanCandidates ?? [],
     metadata: normalizeDocumentMetadata(args.metadata),
   };
   return JSON.stringify(bundle, null, 2);
@@ -386,6 +391,8 @@ export function parseProjectBundle(text: string): ProjectBundle {
   }
   return {
     ...(b as ProjectBundle),
+    version: Number(b.version) || 1,
+    scanCandidates: Array.isArray(b.scanCandidates) ? b.scanCandidates : [],
     metadata: normalizeDocumentMetadata(b.metadata),
   };
 }

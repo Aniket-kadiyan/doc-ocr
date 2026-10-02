@@ -1,5 +1,6 @@
 import type { BBox, DimensionType } from "@/types/annotation";
 import type { DocumentMetadata } from "@/types/documentMetadata";
+import type { ScanCandidateState } from "@/types/scanCandidate";
 
 export type ChecksheetRunStatus = "draft" | "completed";
 
@@ -25,8 +26,39 @@ export interface ChecksheetSnapshotPayload {
   source_file_type: "pdf" | "image";
   pdf_render_scale: number;
   metadata: DocumentMetadata;
+  scan_candidates: ChecksheetScanCandidate[];
   reading_columns: string[];
   items: ChecksheetSnapshotItem[];
+}
+
+export interface ChecksheetScanCandidate {
+  candidate_id: string;
+  source_candidate_id?: string;
+  page: number;
+  order: number;
+  state: ScanCandidateState;
+  restore_state?: "review" | "other";
+  text: string;
+  raw_text: string;
+  preliminary_text?: string;
+  confidence: number;
+  recognized: boolean;
+  reason: string;
+  rule?: string;
+  type?: string;
+  category?: string;
+  subtype?: string;
+  label?: string;
+  orientation: "horizontal" | "vertical" | "rotated";
+  rotation: number;
+  recovery_attempted: boolean;
+  authoritative_reread: boolean;
+  bbox: BBox;
+  oriented_box?: (BBox & { rotation: number }) | null;
+  duplicate_source_ids: string[];
+  duplicate_count: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface ChecksheetColumn {
@@ -64,6 +96,7 @@ export interface ChecksheetRunResponse {
     revision_number: number;
     pdf_render_scale: number;
     metadata: DocumentMetadata;
+    scan_candidates: ChecksheetScanCandidate[];
   };
   run: {
     id: string;
@@ -128,6 +161,7 @@ export interface ChecksheetDetail {
     id: string;
     revision_number: number;
     row_count: number;
+    candidate_count: number;
     created_at: string;
     metadata: DocumentMetadata;
   }>;

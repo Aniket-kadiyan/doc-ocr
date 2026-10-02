@@ -41,8 +41,9 @@ export function AnnotationPopup({
 
   const confidence = pending.ocrResult.confidence;
   const needsReview = pending.ocrResult.needsReview ?? false;
-  const isScanReview =
-    pending.source === "scan_review" && Boolean(pending.reviewCandidateId);
+  const isScanCandidate =
+    (pending.source === "scan_review" || pending.source === "scan_candidate") &&
+    Boolean(pending.reviewCandidateId);
 
   // A manual tolerance remains editable, but the next Value change deliberately
   // derives it again so corrections such as adding a missed prime stay in sync.
@@ -90,18 +91,18 @@ export function AnnotationPopup({
       page: pending.page,
       createdAt: Date.now(),
       kind: "dimension",
-      needsReview: isScanReview ? false : needsReview,
+      needsReview: isScanCandidate ? false : needsReview,
       range: range.trim() || undefined,
     };
     addAnnotation(annotation);
-    if (isScanReview && pending.reviewCandidateId) {
+    if (isScanCandidate && pending.reviewCandidateId) {
       onReviewResolved?.(pending.reviewCandidateId, "accepted");
     }
     resetForm();
   };
 
   const handleIgnore = () => {
-    if (isScanReview && pending.reviewCandidateId) {
+    if (isScanCandidate && pending.reviewCandidateId) {
       onReviewResolved?.(pending.reviewCandidateId, "ignored");
     }
     setPending(null);
@@ -109,7 +110,7 @@ export function AnnotationPopup({
   };
 
   const handleCancel = () => {
-    if (isScanReview && pending.reviewCandidateId) {
+    if (isScanCandidate && pending.reviewCandidateId) {
       onReviewCancelled?.(pending.reviewCandidateId);
     }
     setPending(null);
@@ -128,7 +129,11 @@ export function AnnotationPopup({
             id="annotation-dialog-title"
             className="text-lg font-semibold text-slate-900"
           >
-            {isScanReview ? "Review Detected Value" : "Extracted Value"}
+            {pending.scanCandidateState === "other"
+              ? "Inspect Other Detection"
+              : isScanCandidate
+                ? "Review Detected Value"
+                : "Extracted Value"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             {value.trim()
@@ -138,9 +143,16 @@ export function AnnotationPopup({
         </div>
 
         <div className="space-y-4 px-5 py-4">
-          {needsReview && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-              ⚠ {pending.reviewReason ||
+          {(needsReview || isScanCandidate) && (
+            <div
+              className={`rounded-lg border px-3 py-2 text-xs font-medium ${
+                pending.scanCandidateState === "other"
+                  ? "border-slate-300 bg-slate-50 text-slate-700"
+                  : "border-amber-300 bg-amber-50 text-amber-800"
+              }`}
+            >
+              {pending.scanCandidateState === "other" ? "ℹ" : "⚠"}{" "}
+              {pending.reviewReason ||
                 "Low-confidence read — please verify the text before saving."}
             </div>
           )}
@@ -188,7 +200,7 @@ export function AnnotationPopup({
 
         <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-4">
           <div>
-            {isScanReview && (
+            {isScanCandidate && (
               <button
                 type="button"
                 onClick={handleIgnore}

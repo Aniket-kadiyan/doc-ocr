@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
 import type { ProjectRecord } from "@/lib/db";
 import { makeAnnotation } from "@/test/annotationFixture";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
 const project: ProjectRecord = {
   id: "project-1",
@@ -11,6 +12,28 @@ const project: ProjectRecord = {
   fileBlob: new Blob(["drawing"], { type: "image/png" }),
   mimeType: "image/png",
   updatedAt: 1,
+};
+
+const otherCandidate: ScanCandidate = {
+  id: "candidate-1",
+  sourceCandidateId: "C0012",
+  page: 1,
+  order: 2,
+  state: "other",
+  text: "REV B",
+  rawText: "REV B",
+  preliminaryText: "REV 8",
+  confidence: 0.72,
+  recognized: true,
+  reason: "Title-block text is not a dimension",
+  rule: "title_block",
+  orientation: "horizontal",
+  rotation: 0,
+  valueBox: { x: 90, y: 120, width: 40, height: 10 },
+  duplicateCount: 1,
+  duplicateSourceIds: ["C0012", "C0013"],
+  createdAt: 100,
+  updatedAt: 200,
 };
 
 describe("checksheet creation snapshot", () => {
@@ -52,6 +75,31 @@ describe("checksheet creation snapshot", () => {
     });
 
     expect(Object.values(creation.payload.metadata)).toEqual(["", "", ""]);
+  });
+
+  it("sends candidates separately from accepted checksheet rows", () => {
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "Candidate snapshot",
+      readingColumns: ["Part 1"],
+      annotations: [makeAnnotation()],
+      scanCandidates: [otherCandidate],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project,
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.items).toHaveLength(1);
+    expect(creation.payload.scan_candidates).toHaveLength(1);
+    expect(creation.payload.scan_candidates[0]).toMatchObject({
+      candidate_id: "candidate-1",
+      source_candidate_id: "C0012",
+      state: "other",
+      raw_text: "REV B",
+      bbox: otherCandidate.valueBox,
+      duplicate_count: 1,
+    });
+    expect(JSON.stringify(creation.payload.items)).not.toContain("candidate-1");
   });
 
   it("keeps oriented geometry and completes one-sided tolerance bounds", () => {

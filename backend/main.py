@@ -426,17 +426,29 @@ def _map_section_result_to_page(
     mapped_outcomes: list[dict[str, Any]] = []
     for outcome in list(seg.get("candidate_outcomes", [])):
         local = dict(outcome.get("bbox", {}))
-        mapped_outcomes.append(
-            {
-                **outcome,
-                "bbox": {
-                    "x": round(origin_x + float(local.get("x", 0.0)), 1),
-                    "y": round(origin_y + float(local.get("y", 0.0)), 1),
-                    "width": round(float(local.get("width", 0.0)), 1),
-                    "height": round(float(local.get("height", 0.0)), 1),
-                },
+        mapped_outcome = {
+            **outcome,
+            "bbox": {
+                "x": round(origin_x + float(local.get("x", 0.0)), 1),
+                "y": round(origin_y + float(local.get("y", 0.0)), 1),
+                "width": round(float(local.get("width", 0.0)), 1),
+                "height": round(float(local.get("height", 0.0)), 1),
+            },
+        }
+        oriented = outcome.get("oriented_box")
+        if isinstance(oriented, dict):
+            mapped_outcome["oriented_box"] = {
+                **oriented,
+                "x": round(
+                    origin_x + float(oriented.get("x", 0.0)),
+                    1,
+                ),
+                "y": round(
+                    origin_y + float(oriented.get("y", 0.0)),
+                    1,
+                ),
             }
-        )
+        mapped_outcomes.append(mapped_outcome)
 
     # Review candidates carry geometry too. They were always empty while the
     # section scan used the light pipeline, so passing them through untouched
@@ -445,17 +457,29 @@ def _map_section_result_to_page(
     mapped_reviews: list[dict[str, Any]] = []
     for candidate in list(seg.get("review_candidates", [])):
         local = dict(candidate.get("bbox", {}))
-        mapped_reviews.append(
-            {
-                **candidate,
-                "bbox": {
-                    "x": round(origin_x + float(local.get("x", 0.0)), 1),
-                    "y": round(origin_y + float(local.get("y", 0.0)), 1),
-                    "width": round(float(local.get("width", 0.0)), 1),
-                    "height": round(float(local.get("height", 0.0)), 1),
-                },
+        mapped_candidate = {
+            **candidate,
+            "bbox": {
+                "x": round(origin_x + float(local.get("x", 0.0)), 1),
+                "y": round(origin_y + float(local.get("y", 0.0)), 1),
+                "width": round(float(local.get("width", 0.0)), 1),
+                "height": round(float(local.get("height", 0.0)), 1),
+            },
+        }
+        oriented = candidate.get("oriented_box")
+        if isinstance(oriented, dict):
+            mapped_candidate["oriented_box"] = {
+                **oriented,
+                "x": round(
+                    origin_x + float(oriented.get("x", 0.0)),
+                    1,
+                ),
+                "y": round(
+                    origin_y + float(oriented.get("y", 0.0)),
+                    1,
+                ),
             }
-        )
+        mapped_reviews.append(mapped_candidate)
 
     return (
         {

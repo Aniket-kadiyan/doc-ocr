@@ -8,18 +8,20 @@ import type {
   DocumentMetadata,
   DocumentMetadataField,
 } from "@/types/documentMetadata";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
 interface SidebarProps {
   annotations: Annotation[];
-  reviewCandidates: ReviewSidebarItem[];
+  scanCandidates: ScanCandidate[];
   metadata: DocumentMetadata;
   activeMetadataField: DocumentMetadataField | null;
   drawingAvailable: boolean;
   disabled?: boolean;
   selectedId: string | null;
-  selectedReviewCandidateId: string | null;
+  selectedScanCandidateId: string | null;
   onSelect: (id: string) => void;
-  onSelectReview: (candidateId: string) => void;
+  onSelectScanCandidate: (candidateId: string) => void;
+  onRestoreScanCandidate: (candidateId: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onMove: (id: string, targetNumber: number) => void;
@@ -29,27 +31,20 @@ interface SidebarProps {
   onMetadataClear: (field: DocumentMetadataField) => void;
 }
 
-export interface ReviewSidebarItem {
-  candidateId: string;
-  text: string;
-  page: number;
-  reviewReason?: string;
-  reviewOrder: number;
-}
-
 /** One sidebar record per ballooned value. Label, method, and tool are optional
  * metadata on that same record rather than separate annotations. */
 export function Sidebar({
   annotations,
-  reviewCandidates,
+  scanCandidates,
   metadata,
   activeMetadataField,
   drawingAvailable,
   disabled = false,
   selectedId,
-  selectedReviewCandidateId,
+  selectedScanCandidateId,
   onSelect,
-  onSelectReview,
+  onSelectScanCandidate,
+  onRestoreScanCandidate,
   onEdit,
   onDelete,
   onMove,
@@ -63,11 +58,21 @@ export function Sidebar({
   );
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
   const values = annotations
     .filter((annotation) => annotation.kind !== "label")
     .sort((left, right) => left.number - right.number);
-  const reviews = [...reviewCandidates].sort(
-    (left, right) => left.reviewOrder - right.reviewOrder
+  const orderedCandidates = [...scanCandidates].sort(
+    (left, right) => left.order - right.order
+  );
+  const reviews = orderedCandidates.filter(
+    (candidate) => candidate.state === "review"
+  );
+  const others = orderedCandidates.filter(
+    (candidate) => candidate.state === "other"
+  );
+  const ignored = orderedCandidates.filter(
+    (candidate) => candidate.state === "ignored"
   );
   const metadataValueCount = Object.values(metadata).filter(
     (value) => value.trim() !== ""
@@ -96,6 +101,8 @@ export function Sidebar({
           <span className="mt-0.5 block text-[10px] font-normal">
             {values.length} value{values.length === 1 ? "" : "s"}
             {reviews.length > 0 ? ` · ${reviews.length} review` : ""}
+            {others.length > 0 ? ` · ${others.length} other` : ""}
+            {ignored.length > 0 ? ` · ${ignored.length} ignored` : ""}
           </span>
         </button>
         <button
@@ -127,7 +134,7 @@ export function Sidebar({
             onSelect={onMetadataSelect}
             onClear={onMetadataClear}
           />
-        ) : values.length === 0 && reviews.length === 0 ? (
+        ) : values.length === 0 && scanCandidates.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-slate-500">
             Choose Draw Value, then draw a box around a value on the drawing.
           </p>
@@ -337,15 +344,15 @@ export function Sidebar({
                 <ul>
                   {reviews.map((candidate) => {
                     const selected =
-                      selectedReviewCandidateId === candidate.candidateId;
+                      selectedScanCandidateId === candidate.id;
                     return (
-                      <li key={candidate.candidateId} className="mb-2">
+                      <li key={candidate.id} className="mb-2">
                         <button
                           type="button"
                           disabled={balloonControlsDisabled}
-                          onClick={() => onSelectReview(candidate.candidateId)}
+                          onClick={() => onSelectScanCandidate(candidate.id)}
                           title={
-                            candidate.reviewReason ||
+                            candidate.reason ||
                             "Review this detected value"
                           }
                           className={`w-full rounded-lg border border-dashed px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -360,12 +367,18 @@ export function Sidebar({
                             </span>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate font-mono text-xs text-slate-800">
-                                {candidate.text.trim() || "Unread"}
+                                {candidate.text.trim() ||
+                                  (candidate.rawText.trim()
+                                    ? `Unread · raw: ${candidate.rawText.trim()}`
+                                    : "Unread")}
                               </span>
                               <span className="mt-1 block text-[10px] text-slate-400">
                                 Page {candidate.page}
-                                {candidate.reviewReason
-                                  ? ` · ${candidate.reviewReason}`
+                                {(candidate.duplicateCount ?? 0) > 0
+                                  ? ` · ${candidate.duplicateCount} merged reread${candidate.duplicateCount === 1 ? "" : "s"}`
+                                  : ""}
+                                {candidate.reason
+                                  ? ` · ${candidate.reason}`
                                   : ""}
                               </span>
                             </span>
@@ -375,6 +388,92 @@ export function Sidebar({
                     );
                   })}
                 </ul>
+              </section>
+            )}
+
+            {others.length > 0 && (
+              <section className="mt-4 border-t border-slate-200 pt-3">
+                <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                  Other detections · {others.length}
+                </h3>
+                <p className="px-2 pb-2 text-[10px] text-slate-500">
+                  Filtered by the automatic rules; retained for inspection.
+                </p>
+                <ul>
+                  {others.map((candidate) => {
+                    const selected = selectedScanCandidateId === candidate.id;
+                    return (
+                      <li key={candidate.id} className="mb-2">
+                        <button
+                          type="button"
+                          disabled={balloonControlsDisabled}
+                          onClick={() => onSelectScanCandidate(candidate.id)}
+                          title={candidate.reason || "Inspect this detection"}
+                          className={`w-full rounded-lg border border-dashed px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                            selected
+                              ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300"
+                              : "border-slate-200 bg-slate-100/70 hover:bg-slate-100"
+                          }`}
+                        >
+                          <span className="block truncate font-mono text-xs text-slate-700">
+                            {candidate.text.trim() ||
+                              candidate.rawText.trim() ||
+                              "Unread"}
+                          </span>
+                          <span className="mt-1 block text-[10px] text-slate-400">
+                            Page {candidate.page}
+                            {(candidate.duplicateCount ?? 0) > 0
+                              ? ` · ${candidate.duplicateCount} merged reread${candidate.duplicateCount === 1 ? "" : "s"}`
+                              : ""}
+                            {candidate.rule ? ` · ${candidate.rule}` : ""}
+                            {candidate.reason ? ` · ${candidate.reason}` : ""}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
+            {ignored.length > 0 && (
+              <section className="mt-4 border-t border-slate-200 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setIgnoredOpen((open) => !open)}
+                  className="flex w-full items-center justify-between px-2 pb-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  <span>Ignored · {ignored.length}</span>
+                  <span>{ignoredOpen ? "Hide" : "Show"}</span>
+                </button>
+                {ignoredOpen && (
+                  <ul>
+                    {ignored.map((candidate) => (
+                      <li
+                        key={candidate.id}
+                        className="mb-2 rounded-lg border border-slate-200 bg-white px-3 py-2 opacity-75"
+                      >
+                        <span className="block truncate font-mono text-xs text-slate-600">
+                          {candidate.text.trim() ||
+                            candidate.rawText.trim() ||
+                            "Unread"}
+                        </span>
+                        <span className="mt-1 block text-[10px] text-slate-400">
+                          Page {candidate.page}
+                          {candidate.reason ? ` · ${candidate.reason}` : ""}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={balloonControlsDisabled}
+                          onClick={() => onRestoreScanCandidate(candidate.id)}
+                          className="mt-2 text-[10px] font-medium text-blue-600 hover:underline disabled:opacity-50"
+                        >
+                          Restore to {candidate.restoreState === "review" ? "Review" : "Other"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
             )}
           </>

@@ -5378,8 +5378,11 @@ class OcrPipeline:
         filtered_regions: list[dict[str, Any]] = []
         candidate_outcomes: list[dict[str, Any]] = []
         filter_rule_counts: dict[str, int] = {}
-        for region in regions:
+        for candidate_index, region in enumerate(regions, start=1):
             text = normalize_page_value_text(str(region.get("text") or ""))
+            classified_region = {**region, "text": text}
+            self._apply_feature_labels(classified_region)
+            candidate_id = f"S{candidate_index:04d}"
             decision = evaluate_scan_value(
                 PageValueCandidate(text=text, bbox=region["bbox"]),
                 scope_kind="section",
@@ -5392,19 +5395,38 @@ class OcrPipeline:
             state = "eligible" if decision.accepted else "excluded"
             candidate_outcomes.append(
                 {
+                    "candidate_id": candidate_id,
                     "bbox": dict(region["bbox"]),
                     "state": state,
                     "text": text,
+                    "raw_text": str(
+                        region.get("raw_ocr") or region.get("text") or ""
+                    ),
+                    "preliminary_text": str(region.get("text") or ""),
+                    "confidence": float(region.get("confidence") or 0.0),
                     "recognized": True,
                     "reason": decision.reason,
                     "rule": decision.rule_name,
+                    "type": classified_region.get("type"),
+                    "category": classified_region.get("category"),
+                    "subtype": classified_region.get("subtype"),
+                    "label": classified_region.get("label"),
+                    "orientation": region.get("orientation", "horizontal"),
+                    "rotation": float(region.get("rotation") or 0.0),
+                    "oriented_box": region.get("oriented_box"),
+                    "recovery_attempted": bool(
+                        region.get("recovery_attempted")
+                    ),
+                    "authoritative_reread": bool(
+                        region.get("authoritative_reread")
+                    ),
                 }
             )
             if decision.accepted:
                 filtered_regions.append(
                     {
-                        **region,
-                        "text": text,
+                        **classified_region,
+                        "candidate_id": candidate_id,
                         "recognized": True,
                         "page_filter_rule": decision.rule_name,
                         "page_filter_reason": decision.reason,
@@ -7079,6 +7101,11 @@ class OcrPipeline:
                 ),
                 "numeric_conflict": bool(result.get("numeric_conflict")),
             }
+            oriented_box = result.get("oriented_box") or record.get(
+                "oriented_box"
+            )
+            if isinstance(oriented_box, dict):
+                common_region["oriented_box"] = dict(oriented_box)
             self._apply_feature_labels(common_region)
             # A one- or two-character review candidate that the recogniser
             # itself puts below even odds ("3" at 0.15, "2" at 0.24) is a
@@ -7105,15 +7132,29 @@ class OcrPipeline:
                 "polygon": [list(point) for point in candidate.polygon],
                 "state": final_state,
                 "text": published_text,
+                "raw_text": str(
+                    result.get("raw_ocr")
+                    or result.get("text")
+                    or record.get("text")
+                    or ""
+                ),
                 "preliminary_text": str(
-                    (record.get("preliminary_result") or {}).get("text")
+                    (record.get("preliminary_result") or {}).get("raw_ocr")
+                    or (record.get("preliminary_result") or {}).get("text")
                     or record.get("preliminary_text")
                     or ""
                 ),
                 "confidence": float(result.get("confidence") or 0.0),
                 "recognized": record["recognized"],
-                "reason": final_reason,
+                "reason": final_reason or decision.reason,
                 "rule": decision.rule_name,
+                "type": common_region.get("type"),
+                "category": common_region.get("category"),
+                "subtype": common_region.get("subtype"),
+                "label": common_region.get("label"),
+                "orientation": common_region.get("orientation", "horizontal"),
+                "rotation": float(common_region.get("rotation") or 0.0),
+                "oriented_box": common_region.get("oriented_box"),
                 "recovery_attempted": bool(result.get("recovery_attempted")),
                 "authoritative_reread": bool(
                     result.get("authoritative_reread")

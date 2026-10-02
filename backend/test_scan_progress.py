@@ -130,6 +130,12 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     assert result["detected_count"] == result["recognized_count"] == 1
     assert result["eligible_count"] == 1
     assert result["excluded_count"] == result["review_count"] == 0
+    assert result["regions"][0]["candidate_id"] == "S0001"
+    outcome = result["candidate_outcomes"][0]
+    assert outcome["candidate_id"] == "S0001"
+    assert outcome["state"] == "eligible"
+    assert outcome["text"] == outcome["raw_text"] == "50"
+    assert outcome["recognized"] is True
     assert events[0]["stage"] == "preparing"
     assert events[-1]["stage"] == "finalizing"
     detection_events = [
@@ -434,6 +440,19 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         "scale_information": 1,
     }
     assert len(result["candidate_outcomes"]) == result["detected_count"]
+    assert all(
+        {
+            "candidate_id",
+            "raw_text",
+            "preliminary_text",
+            "confidence",
+            "reason",
+            "rule",
+            "orientation",
+            "rotation",
+        }.issubset(outcome)
+        for outcome in result["candidate_outcomes"]
+    )
 
 
 def test_page_scan_never_falls_back_to_full_ocr_for_detection() -> None:

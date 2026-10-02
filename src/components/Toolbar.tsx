@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { ExportPanel } from "@/components/ExportPanel";
 import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
 interface ToolbarProps {
   isSelectingScanArea: boolean;
@@ -33,6 +34,7 @@ interface ToolbarProps {
   onLoadProject: () => void;
   onRemoveDrawing: () => void;
   canSaveProject: boolean;
+  scanCandidates: ScanCandidate[];
 }
 
 export function Toolbar({
@@ -58,6 +60,7 @@ export function Toolbar({
   onLoadProject,
   onRemoveDrawing,
   canSaveProject,
+  scanCandidates,
 }: ToolbarProps) {
   const [debugDump, setDebugDump] = useState(false);
 
@@ -122,7 +125,10 @@ export function Toolbar({
         Saved Checksheets
       </a>
 
-      <ExportPanel disabled={isProcessing} />
+      <ExportPanel
+        disabled={isProcessing}
+        scanCandidates={scanCandidates}
+      />
 
       <KeywordSettings />
 

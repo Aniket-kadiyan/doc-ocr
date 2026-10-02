@@ -11,9 +11,11 @@ import type {
 import {
   getOcrApiUrl,
   mapPageSegmentRegions,
+  mapSegmentCandidateOutcomes,
   mapSegmentRegions,
   type ApiSegmentResponse,
   type SegmentRegion,
+  type SegmentCandidateOutcome,
 } from "@/lib/paddleOcrClient";
 import {
   isOcrDebugDumpEnabled,
@@ -94,7 +96,8 @@ export interface ScanJobResult {
   reviewRequired: number;
   unread: number;
   skippedExisting: number;
-  reviewCandidates: SegmentRegion[];
+  reviewCandidates: SegmentCandidateOutcome[];
+  otherCandidates: SegmentCandidateOutcome[];
   filterRuleCounts: Record<string, number>;
 }
 
@@ -340,7 +343,17 @@ export async function runScanJob({
         bbox,
         displayScale
       );
-  const reviewCandidates = snapshot.result.coordinate_space === "page"
+  const coordinateSpace = snapshot.result.coordinate_space ?? "scope";
+  const mappedOutcomes = mapSegmentCandidateOutcomes(
+    snapshot.result.candidate_outcomes ?? [],
+    bbox,
+    displayScale,
+    coordinateSpace
+  );
+  const outcomeReviews = mappedOutcomes.filter(
+    (candidate) => candidate.outcomeState === "review"
+  );
+  const legacyReviewRegions = coordinateSpace === "page"
     ? mapPageSegmentRegions(
         snapshot.result.review_candidates ?? [],
         bbox,
@@ -351,6 +364,19 @@ export async function runScanJob({
         bbox,
         displayScale
       );
+  const reviewCandidates: SegmentCandidateOutcome[] =
+    outcomeReviews.length > 0
+      ? outcomeReviews
+      : legacyReviewRegions.map((candidate) => ({
+          ...candidate,
+          outcomeState: "review",
+          rawText: candidate.text,
+          outcomeReason: candidate.reviewReason ?? "",
+          outcomeRule: candidate.pageFilterRule,
+        }));
+  const otherCandidates = mappedOutcomes.filter(
+    (candidate) => candidate.outcomeState === "excluded"
+  );
   const detected = snapshot.result.detected_count ?? regions.length;
   const recognized =
     snapshot.result.recognized_count ??
@@ -375,6 +401,7 @@ export async function runScanJob({
     unread,
     skippedExisting,
     reviewCandidates,
+    otherCandidates,
     filterRuleCounts,
   };
 }

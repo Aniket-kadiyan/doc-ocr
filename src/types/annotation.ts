@@ -157,9 +157,10 @@ export interface PendingSelection {
   bbox: BBox;
   page: number;
   ocrResult: OCRResult;
-  source?: "manual" | "scan_review";
+  source?: "manual" | "scan_review" | "scan_candidate";
   reviewCandidateId?: string;
   reviewReason?: string;
+  scanCandidateState?: "review" | "other";
   suggestedType?: DimensionType;
   suggestedSubtype?: string;
   suggestedLabel?: string;

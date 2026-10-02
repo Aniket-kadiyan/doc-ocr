@@ -29,7 +29,11 @@ import {
 } from "@/lib/clientOcr";
 import { classifyDimension } from "@/lib/dimensionClassifier";
 import { filterNewScanRegions } from "@/lib/scanCandidates";
-import { mergePageReviewCandidates } from "@/lib/scanReviewCandidates";
+import {
+  ignoreScanCandidate,
+  mergeScanCandidates,
+  restoreScanCandidate,
+} from "@/lib/scanCandidateLifecycle";
 import {
   runSectionScanQueue,
   type QueuedScanSection,
@@ -47,6 +51,8 @@ import {
 import {
   saveAnnotations,
   loadAnnotations,
+  saveScanCandidates,
+  loadScanCandidates,
   saveProject,
   saveProjectMetadata,
   getMostRecentProject,
@@ -75,12 +81,13 @@ import {
   metadataFieldForTitleLabel,
 } from "@/lib/titleMetadata";
 import type { Annotation, BBox, DimensionType } from "@/types/annotation";
+import type { ScanCandidate } from "@/types/scanCandidate";
 import {
   DOCUMENT_METADATA_FIELDS,
   normalizeDocumentMetadata,
   type DocumentMetadataField,
 } from "@/types/documentMetadata";
-import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type { SegmentCandidateOutcome } from "@/lib/paddleOcrClient";
 import type {
   ScanCompletionSummary,
   ScanDebugOverlay as ScanDebugOverlayModel,
@@ -106,12 +113,6 @@ const OCR_RENDER_SCALE = 250 / 72;
 
 const MIN_BOX = 8;
 const DRAWING_BACKGROUND_NAME = "drawing-background";
-
-type PageScanReviewCandidate = Omit<SegmentRegion, "candidateId"> & {
-  candidateId: string;
-  page: number;
-  reviewOrder: number;
-};
 
 interface AutoBalloonRunOptions {
   manageProcessing?: boolean;
@@ -146,7 +147,7 @@ export function DrawingViewer() {
   const [projectId, setProjectId] = useState(() => uuidv4());
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedReviewCandidateId, setSelectedReviewCandidateId] = useState<
+  const [selectedScanCandidateId, setSelectedScanCandidateId] = useState<
     string | null
   >(null);
   const [currentBox, setCurrentBox] = useState<BBox | null>(null);
@@ -159,11 +160,9 @@ export function DrawingViewer() {
     useState<ScanDebugOverlayModel | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
-  const [scanReviewCandidates, setScanReviewCandidates] = useState<
-    PageScanReviewCandidate[]
-  >([]);
-  const scanReviewCandidatesRef = useRef<PageScanReviewCandidate[]>([]);
-  const reviewOrderRef = useRef(0);
+  const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
+  const scanCandidatesRef = useRef<ScanCandidate[]>([]);
+  const candidateOrderRef = useRef(0);
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
@@ -224,8 +223,9 @@ export function DrawingViewer() {
   const balloonsVisible =
     valueAnnotations.length > 0 &&
     valueAnnotations.every((annotation) => !annotation.hidden);
-  const pageScanReviewCandidates = scanReviewCandidates.filter(
-    (candidate) => candidate.page === currentPage
+  const pageScanCandidates = scanCandidates.filter(
+    (candidate) =>
+      candidate.page === currentPage && candidate.state !== "ignored"
   );
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
@@ -234,12 +234,24 @@ export function DrawingViewer() {
     ({ key }) => key === activeMetadataField
   )?.label;
 
-  const replaceScanReviewCandidates = useCallback(
-    (next: PageScanReviewCandidate[]) => {
-      scanReviewCandidatesRef.current = next;
-      setScanReviewCandidates(next);
+  const replaceScanCandidates = useCallback(
+    (next: ScanCandidate[]) => {
+      scanCandidatesRef.current = next;
+      setScanCandidates(next);
     },
     []
+  );
+
+  const restoreScanCandidates = useCallback(
+    (next: ScanCandidate[]) => {
+      replaceScanCandidates(next);
+      candidateOrderRef.current =
+        next.reduce(
+          (largest, candidate) => Math.max(largest, candidate.order + 1),
+          0
+        );
+    },
+    [replaceScanCandidates]
   );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
@@ -276,14 +288,6 @@ export function DrawingViewer() {
     // Overlay geometry belongs to one exact page/project and is never persisted.
     setScanOverlay(null);
   }, [currentPage, projectId]);
-
-  useEffect(() => {
-    // Review boxes are temporary scan output, never project data.
-    replaceScanReviewCandidates([]);
-    reviewOrderRef.current = 0;
-    setSelectedReviewCandidateId(null);
-    setSelectedScanSections([]);
-  }, [projectId, replaceScanReviewCandidates]);
 
   useEffect(() => {
     void preloadOcr();
@@ -371,22 +375,31 @@ export function DrawingViewer() {
       dataUrl: await fileToDataUrl(file),
     };
     await loadSource(file);
-    const legacyMigration = normalizeLegacyAnnotations(
-      await loadAnnotations(recent.id)
-    );
+    const [storedAnnotations, storedCandidates] = await Promise.all([
+      loadAnnotations(recent.id),
+      loadScanCandidates(recent.id),
+    ]);
+    const legacyMigration = normalizeLegacyAnnotations(storedAnnotations);
     const migration = mergeTitleAnnotationsIntoMetadata(
       legacyMigration.annotations,
       recent.metadata
     );
     setDocumentMetadata(migration.metadata);
     setAnnotations(migration.annotations);
+    restoreScanCandidates(storedCandidates);
     await Promise.all([
       saveAnnotations(recent.id, migration.annotations),
       saveProjectMetadata(recent.id, migration.metadata),
     ]);
     const warning = legacyMigrationWarning(legacyMigration.orphanLabelCount);
     if (warning) setSelectionError(warning);
-  }, [loadSource, setAnnotations, setDocumentMetadata, setProjectName]);
+  }, [
+    loadSource,
+    restoreScanCandidates,
+    setAnnotations,
+    setDocumentMetadata,
+    setProjectName,
+  ]);
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -400,7 +413,9 @@ export function DrawingViewer() {
     setProjectId(id);
     setAnnotations([]);
     setSelectedId(null);
-    setSelectedReviewCandidateId(null);
+    replaceScanCandidates([]);
+    candidateOrderRef.current = 0;
+    setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
@@ -431,8 +446,8 @@ export function DrawingViewer() {
     await loadSource(file);
   };
 
-  // Save the whole project — drawing + annotations + verification block — as one
-  // portable `.docbox.json` the app can reload later.
+  // Save the drawing, accepted balloons, and unresolved candidate lifecycle as
+  // one portable `.docbox.json` the app can reload later.
   const handleSaveProject = () => {
     const source = sourceFileRef.current;
     if (!source || !source.dataUrl) {
@@ -446,6 +461,7 @@ export function DrawingViewer() {
       projectName,
       source,
       annotations,
+      scanCandidates,
       metadata,
       savedAt: Date.now(),
     });
@@ -462,7 +478,9 @@ export function DrawingViewer() {
     sourceFileRef.current = null;
     setAnnotations([]);
     setSelectedId(null);
-    setSelectedReviewCandidateId(null);
+    replaceScanCandidates([]);
+    candidateOrderRef.current = 0;
+    setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
@@ -484,7 +502,9 @@ export function DrawingViewer() {
     setSelectionError(null);
     setScanProgress(null);
     setScanSummary(null);
-    setSelectedReviewCandidateId(null);
+    setSelectedScanCandidateId(null);
+    replaceScanCandidates([]);
+    candidateOrderRef.current = 0;
     setSelectedScanSections([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -508,8 +528,16 @@ export function DrawingViewer() {
         legacyMigration.annotations,
         bundle.metadata
       );
+      // Importing the same portable project twice creates two local projects.
+      // Give candidate rows fresh local keys so Dexie's global primary key
+      // cannot move the first project's audit records into the second one.
+      const importedCandidates = bundle.scanCandidates.map((candidate) => ({
+        ...candidate,
+        id: `${id}:${uuidv4()}`,
+      }));
       setDocumentMetadata(migration.metadata);
       setAnnotations(migration.annotations);
+      restoreScanCandidates(importedCandidates);
       const warning = legacyMigrationWarning(legacyMigration.orphanLabelCount);
       if (warning) setSelectionError(warning);
       // Persist so the loaded project reopens on the next visit too.
@@ -523,7 +551,10 @@ export function DrawingViewer() {
         metadata: migration.metadata,
         updatedAt: Date.now(),
       });
-      await saveAnnotations(id, migration.annotations);
+      await Promise.all([
+        saveAnnotations(id, migration.annotations),
+        saveScanCandidates(id, importedCandidates),
+      ]);
     } catch (err) {
       setSelectionError(
         err instanceof Error ? err.message : "Could not open project file."
@@ -534,7 +565,7 @@ export function DrawingViewer() {
   // Select an annotation and follow it to its page so it's actually on screen.
   const handleSelect = useCallback(
     (id: string | null) => {
-      setSelectedReviewCandidateId(null);
+      setSelectedScanCandidateId(null);
       if (!id) {
         setSelectedId(null);
         return;
@@ -616,7 +647,7 @@ export function DrawingViewer() {
       setScanSummary(null);
       setSelectedScanSections([]);
       setSelectedId(null);
-      setSelectedReviewCandidateId(null);
+      setSelectedScanCandidateId(null);
       setPending(null);
       setIsDrawingValue(false);
       setIsSegmenting(false);
@@ -881,45 +912,76 @@ export function DrawingViewer() {
             };
           });
 
-        // Review candidates stay outside the annotation store. Filter them
-        // against both existing balloons and this scan's atomic insert so a
-        // resolved object is never shown again as a grey review box.
-        const reviewExisting = [...liveAnnotations, ...newAnnotations];
-        const filteredReview = filterNewScanRegions(
-          scanResult.reviewCandidates,
-          reviewExisting,
-          scanPage,
-          undefined,
-          scopeKind
-        );
-        const reviewCandidates: PageScanReviewCandidate[] =
-          filteredReview.accepted.map((candidate) => ({
-            ...candidate,
-            candidateId: [
-              projectAtStart,
-              scanPage,
-              scanRunId,
-              candidate.candidateId ?? uuidv4(),
-            ].join(":"),
-            page: scanPage,
-            reviewOrder: reviewOrderRef.current++,
-          }));
-
-        const mergedReviews = mergePageReviewCandidates({
-          existing: scanReviewCandidatesRef.current,
-          incoming: reviewCandidates,
-          newAnnotations,
+        // Keep every unaccepted detector outcome outside the annotation store.
+        // Review and filtered "Other" objects share one durable lifecycle;
+        // geometry-equivalent rescans merge into an audit trail rather than
+        // disappearing silently.
+        const toScanCandidate = (
+          candidate: SegmentCandidateOutcome,
+          state: "review" | "other"
+        ): ScanCandidate => ({
+          id: [
+            projectAtStart,
+            scanPage,
+            scanRunId,
+            candidate.candidateId ?? uuidv4(),
+          ].join(":"),
+          sourceCandidateId: candidate.candidateId,
           page: scanPage,
-          scopeKind,
+          order: candidateOrderRef.current++,
+          state,
+          text: candidate.text,
+          rawText: candidate.rawText,
+          preliminaryText: candidate.preliminaryText,
+          confidence: candidate.confidence,
+          recognized: candidate.recognized,
+          reason:
+            candidate.outcomeReason ||
+            candidate.reviewReason ||
+            candidate.pageFilterReason ||
+            "Automatic scan did not accept this object.",
+          rule: candidate.outcomeRule || candidate.pageFilterRule,
+          type: candidate.type,
+          category: candidate.category,
+          subtype: candidate.subtype,
+          label: candidate.label,
+          orientation: candidate.orientation,
+          rotation: candidate.rotation,
+          recoveryAttempted: candidate.recoveryAttempted,
+          authoritativeReread: candidate.authoritativeReread,
+          valueBox: candidate.valueBox,
+          orientedBox: candidate.orientedBox,
+          createdAt: now,
+          updatedAt: now,
         });
-        const incomingReviewIds = new Set(
-          reviewCandidates.map((candidate) => candidate.candidateId)
+        const incomingCandidates = [
+          ...scanResult.reviewCandidates.map((candidate) =>
+            toScanCandidate(candidate, "review")
+          ),
+          ...scanResult.otherCandidates.map((candidate) =>
+            toScanCandidate(candidate, "other")
+          ),
+        ].sort(
+          (left, right) =>
+            left.valueBox.y - right.valueBox.y ||
+            left.valueBox.x - right.valueBox.x
         );
-        const addedReviewCount = mergedReviews.candidates.filter((candidate) =>
-          incomingReviewIds.has(candidate.candidateId)
+        const acceptedAnnotations = [...liveAnnotations, ...newAnnotations];
+        const mergedCandidates = mergeScanCandidates({
+          existing: scanCandidatesRef.current,
+          incoming: incomingCandidates,
+          acceptedAnnotations,
+        });
+        const incomingCandidateIds = new Set(
+          incomingCandidates.map((candidate) => candidate.id)
+        );
+        const addedCandidateCount = mergedCandidates.candidates.filter(
+          (candidate) => incomingCandidateIds.has(candidate.id)
         ).length;
-        const pageReviewCount = mergedReviews.candidates.filter(
-          (candidate) => candidate.page === scanPage
+        const addedReviewCount = mergedCandidates.candidates.filter(
+          (candidate) =>
+            incomingCandidateIds.has(candidate.id) &&
+            candidate.state === "review"
         ).length;
 
         // Title-block fields ("DWG NO.", "REV") are read from the WHOLE page,
@@ -986,7 +1048,8 @@ export function DrawingViewer() {
             useAnnotationStore.getState().annotations
           );
         }
-        replaceScanReviewCandidates(mergedReviews.candidates);
+        replaceScanCandidates(mergedCandidates.candidates);
+        await saveScanCandidates(projectAtStart, mergedCandidates.candidates);
         setScanOverlay(null);
         const summary: ScanCompletionSummary = {
           scopeKind,
@@ -995,23 +1058,21 @@ export function DrawingViewer() {
           recognized: scanResult.recognized,
           eligible: scanResult.eligible,
           excluded: scanResult.excluded,
-          reviewRequired:
-            scopeKind === "section" ? pageReviewCount : addedReviewCount,
+          reviewRequired: addedReviewCount,
           unread: scanResult.unread,
           skippedExisting:
             scanResult.skippedExisting +
             filtered.skippedExisting +
-            filteredReview.skippedExisting,
+            mergedCandidates.skippedAccepted,
           skippedDuplicates:
             filtered.skippedDuplicates +
-            filteredReview.skippedDuplicates +
-            mergedReviews.skippedDuplicates,
+            mergedCandidates.mergedDuplicates,
         };
         setScanSummary(summary);
-        if (newAnnotations.length === 0 && addedReviewCount === 0) {
+        if (newAnnotations.length === 0 && addedCandidateCount === 0) {
           setSelectionError(
             scopeKind === "page"
-              ? "No eligible numeric values remained after whole-page filtering."
+              ? "No new accepted or unresolved detections were found."
               : "No values were detected in the selected section."
           );
         }
@@ -1042,7 +1103,7 @@ export function DrawingViewer() {
     },
     [
       addAnnotations,
-      replaceScanReviewCandidates,
+      replaceScanCandidates,
       setIsProcessing,
       setIsSegmenting,
       pdfDoc,
@@ -1164,20 +1225,20 @@ export function DrawingViewer() {
   }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
   );
 
-  const openScanReviewCandidate = useCallback(
-    (candidate: PageScanReviewCandidate) => {
+  const openScanCandidate = useCallback(
+    (candidate: ScanCandidate) => {
       setSelectionError(null);
       setSelectedId(null);
-      setSelectedReviewCandidateId(candidate.candidateId);
+      setSelectedScanCandidateId(candidate.id);
       if (candidate.page !== currentPage) setCurrentPage(candidate.page);
       setPending({
         bbox: candidate.valueBox,
         page: candidate.page,
-        source: "scan_review",
-        reviewCandidateId: candidate.candidateId,
-        reviewReason:
-          candidate.reviewReason ||
-          "Recognition remained uncertain after bounded recovery.",
+        source: "scan_candidate",
+        reviewCandidateId: candidate.id,
+        reviewReason: candidate.reason || "Review this detected object.",
+        scanCandidateState:
+          candidate.state === "review" ? "review" : "other",
         suggestedType: candidate.category as DimensionType | undefined,
         suggestedSubtype: candidate.subtype,
         suggestedLabel: candidate.label,
@@ -1190,7 +1251,7 @@ export function DrawingViewer() {
           words: [],
           engine: "paddleocr",
           agreement: undefined,
-          needsReview: true,
+          needsReview: candidate.state === "review",
           category: candidate.category,
           subtype: candidate.subtype,
           label: candidate.label,
@@ -1201,27 +1262,34 @@ export function DrawingViewer() {
     [currentPage, setCurrentPage, setPending]
   );
 
-  const selectScanReviewCandidate = useCallback(
+  const selectScanCandidate = useCallback(
     (candidateId: string) => {
-      const candidate = scanReviewCandidatesRef.current.find(
-        (item) => item.candidateId === candidateId
+      const candidate = scanCandidatesRef.current.find(
+        (item) => item.id === candidateId
       );
-      if (candidate) openScanReviewCandidate(candidate);
+      if (candidate && candidate.state !== "ignored") {
+        openScanCandidate(candidate);
+      }
     },
-    [openScanReviewCandidate]
+    [openScanCandidate]
   );
 
-  const resolveScanReviewCandidate = useCallback(
+  const resolveScanCandidate = useCallback(
     (candidateId: string, action: "accepted" | "ignored") => {
-      const resolved = scanReviewCandidatesRef.current.find(
-        (candidate) => candidate.candidateId === candidateId
+      const resolved = scanCandidatesRef.current.find(
+        (candidate) => candidate.id === candidateId
       );
-      replaceScanReviewCandidates(
-        scanReviewCandidatesRef.current.filter(
-          (candidate) => candidate.candidateId !== candidateId
-        )
-      );
-      setSelectedReviewCandidateId((current) =>
+      const next =
+        action === "accepted"
+          ? scanCandidatesRef.current.filter(
+              (candidate) => candidate.id !== candidateId
+            )
+          : ignoreScanCandidate(scanCandidatesRef.current, candidateId);
+      replaceScanCandidates(next);
+      void saveScanCandidates(projectIdRef.current, next).catch(() => {
+        setSelectionError("Could not save the candidate decision locally.");
+      });
+      setSelectedScanCandidateId((current) =>
         current === candidateId ? null : current
       );
       if (resolved?.page === currentPage) {
@@ -1229,14 +1297,44 @@ export function DrawingViewer() {
           summary
             ? {
                 ...summary,
-                reviewRequired: Math.max(0, summary.reviewRequired - 1),
+                reviewRequired:
+                  resolved.state === "review"
+                    ? Math.max(0, summary.reviewRequired - 1)
+                    : summary.reviewRequired,
                 added: summary.added + (action === "accepted" ? 1 : 0),
               }
             : null
         );
       }
     },
-    [currentPage, replaceScanReviewCandidates]
+    [currentPage, replaceScanCandidates]
+  );
+
+  const handleRestoreScanCandidate = useCallback(
+    (candidateId: string) => {
+      const restored = scanCandidatesRef.current.find(
+        (candidate) => candidate.id === candidateId
+      );
+      const next = restoreScanCandidate(
+        scanCandidatesRef.current,
+        candidateId
+      );
+      replaceScanCandidates(next);
+      void saveScanCandidates(projectIdRef.current, next).catch(() => {
+        setSelectionError("Could not restore the candidate locally.");
+      });
+      if (
+        restored?.page === currentPage &&
+        restored.restoreState === "review"
+      ) {
+        setScanSummary((summary) =>
+          summary
+            ? { ...summary, reviewRequired: summary.reviewRequired + 1 }
+            : null
+        );
+      }
+    },
+    [currentPage, replaceScanCandidates]
   );
 
   const isCompletingDraw = useRef(false);
@@ -1384,7 +1482,8 @@ export function DrawingViewer() {
           {" · "}
           {scanSummary.eligible} eligible
           {" · "}
-          {scanSummary.excluded} excluded
+          {scanSummary.excluded} other detection
+          {scanSummary.excluded === 1 ? "" : "s"}
           {" · "}
           {scanSummary.reviewRequired} review required
           {" · "}
@@ -1398,15 +1497,15 @@ export function DrawingViewer() {
             <>
               {" · "}
               {scanSummary.skippedDuplicates} duplicate candidate
-              {scanSummary.skippedDuplicates === 1 ? "" : "s"} skipped
+              {scanSummary.skippedDuplicates === 1 ? "" : "s"} merged
             </>
           )}
         </div>
       )}
-      {pageScanReviewCandidates.length > 0 && scanProgress === null && (
+      {pageScanCandidates.length > 0 && scanProgress === null && (
         <div className="bg-slate-100 px-4 py-1.5 text-center text-xs text-slate-700">
-          Click a grey dashed box to correct and accept it, ignore it, or cancel
-          and leave it for later.
+          Amber boxes need review. Muted boxes are filtered detections retained
+          under Other. Click either to accept, edit, ignore, or leave it for later.
         </div>
       )}
       {scanProgress && (
@@ -1530,6 +1629,7 @@ export function DrawingViewer() {
         onLoadProject={() => loadProjectInputRef.current?.click()}
         onRemoveDrawing={() => void handleRemoveDrawing()}
         canSaveProject={konvaImage !== null}
+        scanCandidates={scanCandidates}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -1607,7 +1707,7 @@ export function DrawingViewer() {
                           // When something is selected, fade the other values.
                           opacity={
                             (selectedId && !highlighted) ||
-                            selectedReviewCandidateId !== null
+                            selectedScanCandidateId !== null
                               ? 0.15
                               : 1
                           }
@@ -1617,14 +1717,14 @@ export function DrawingViewer() {
                       );
                     })}
 
-                    {pageScanReviewCandidates.length > 0 &&
+                    {pageScanCandidates.length > 0 &&
                       scanProgress === null && (
                       <ScanReviewOverlay
-                        candidates={pageScanReviewCandidates}
+                        candidates={pageScanCandidates}
                         scale={scale}
                         disabled={drawingActive || isProcessing}
-                        selectedCandidateId={selectedReviewCandidateId}
-                        onSelect={openScanReviewCandidate}
+                        selectedCandidateId={selectedScanCandidateId}
+                        onSelect={openScanCandidate}
                       />
                     )}
 
@@ -1675,7 +1775,7 @@ export function DrawingViewer() {
                         selected={selectedId === ann.id}
                         dimmed={
                           (!!selectedId && selectedId !== ann.id) ||
-                          selectedReviewCandidateId !== null
+                          selectedScanCandidateId !== null
                         }
                         listening={!drawingActive}
                         onSelect={handleSelect}
@@ -1690,15 +1790,16 @@ export function DrawingViewer() {
 
         <Sidebar
           annotations={annotations}
-          reviewCandidates={scanReviewCandidates}
+          scanCandidates={scanCandidates}
           metadata={metadata}
           activeMetadataField={activeMetadataField}
           drawingAvailable={konvaImage !== null}
           disabled={isSegmenting || isProcessing || konvaImage === null}
           selectedId={selectedId}
-          selectedReviewCandidateId={selectedReviewCandidateId}
+          selectedScanCandidateId={selectedScanCandidateId}
           onSelect={(id) => handleSelect(id)}
-          onSelectReview={selectScanReviewCandidate}
+          onSelectScanCandidate={selectScanCandidate}
+          onRestoreScanCandidate={handleRestoreScanCandidate}
           onDelete={handleDelete}
           onMove={handleMoveAnnotation}
           onToggleVisibility={toggleAnnotationVisibility}
@@ -1713,7 +1814,7 @@ export function DrawingViewer() {
       </div>
 
       <AnnotationPopup
-        onReviewResolved={resolveScanReviewCandidate}
+        onReviewResolved={resolveScanCandidate}
       />
 
       {(() => {

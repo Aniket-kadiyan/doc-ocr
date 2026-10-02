@@ -40,9 +40,11 @@ import {
   type ExcelExportValues,
 } from "@/components/ExcelExportDialog";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
 interface ExportPanelProps {
   disabled?: boolean;
+  scanCandidates?: ScanCandidate[];
 }
 
 async function loadCompanyLogo(): Promise<string> {
@@ -57,7 +59,10 @@ async function loadCompanyLogo(): Promise<string> {
   });
 }
 
-export function ExportPanel({ disabled = false }: ExportPanelProps) {
+export function ExportPanel({
+  disabled = false,
+  scanCandidates = [],
+}: ExportPanelProps) {
   const { style: balloonStyle, artworkImage } = useBalloonStyle();
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
@@ -195,6 +200,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         projectName,
         project,
         metadata,
+        scanCandidates,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(

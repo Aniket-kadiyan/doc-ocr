@@ -1,28 +1,28 @@
 "use client";
 
 import { Group, Rect, Text } from "react-konva";
-import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
-interface ScanReviewOverlayProps<T extends SegmentRegion> {
-  candidates: T[];
+interface ScanReviewOverlayProps {
+  candidates: ScanCandidate[];
   scale: number;
   disabled?: boolean;
   selectedCandidateId?: string | null;
-  onSelect: (candidate: T) => void;
+  onSelect: (candidate: ScanCandidate) => void;
 }
 
 /**
- * Post-scan review geometry. These boxes are deliberately separate from
- * annotations, so they are never persisted or exported until the user accepts
- * one through the existing value/tolerance popup.
+ * Persistent post-scan candidate geometry. Review candidates use amber and
+ * filtered "Other" detections use a quieter slate treatment. Ignored records
+ * are retained in storage/sidebar but are intentionally absent from this layer.
  */
-export function ScanReviewOverlay<T extends SegmentRegion>({
+export function ScanReviewOverlay({
   candidates,
   scale,
   disabled = false,
   selectedCandidateId = null,
   onSelect,
-}: ScanReviewOverlayProps<T>) {
+}: ScanReviewOverlayProps) {
   const safeScale = Math.max(scale, 0.01);
   const hasSelection = selectedCandidateId !== null;
 
@@ -32,9 +32,12 @@ export function ScanReviewOverlay<T extends SegmentRegion>({
         const bbox = candidate.valueBox;
         const box = candidate.orientedBox ?? bbox;
         const key =
-          candidate.candidateId ??
-          `review-${bbox.x}-${bbox.y}-${bbox.width}-${bbox.height}-${index}`;
-        const selected = candidate.candidateId === selectedCandidateId;
+          candidate.id ||
+          `candidate-${bbox.x}-${bbox.y}-${bbox.width}-${bbox.height}-${index}`;
+        const selected = candidate.id === selectedCandidateId;
+        const review = candidate.state === "review";
+        const idleFill = review ? "#d97706" : "#64748b";
+        const idleStroke = review ? "#b45309" : "#475569";
         return (
           <Group
             key={key}
@@ -46,9 +49,9 @@ export function ScanReviewOverlay<T extends SegmentRegion>({
               width={box.width}
               height={box.height}
               rotation={candidate.orientedBox?.rotation ?? 0}
-              fill={selected ? "#2563eb" : "#64748b"}
-              opacity={selected ? 0.28 : 0.12}
-              stroke={selected ? "#1d4ed8" : "#475569"}
+              fill={selected ? "#2563eb" : idleFill}
+              opacity={selected ? 0.28 : review ? 0.14 : 0.08}
+              stroke={selected ? "#1d4ed8" : idleStroke}
               strokeWidth={(selected ? 4 : 2.5) / safeScale}
               dash={[6 / safeScale, 4 / safeScale]}
               shadowColor="#2563eb"
@@ -69,8 +72,8 @@ export function ScanReviewOverlay<T extends SegmentRegion>({
             <Text
               x={bbox.x + 2 / safeScale}
               y={bbox.y + 1 / safeScale}
-              text="?"
-              fill={selected ? "#1d4ed8" : "#334155"}
+              text={review ? "?" : "·"}
+              fill={selected ? "#1d4ed8" : idleStroke}
               fontStyle="bold"
               fontSize={(selected ? 16 : 12) / safeScale}
               listening={false}

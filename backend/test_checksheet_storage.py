@@ -14,6 +14,7 @@ def _snapshot(
     *,
     name: str = "Bracket inspection",
     metadata: dict[str, str] | None = None,
+    with_candidate: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -47,6 +48,31 @@ def _snapshot(
     }
     if metadata is not None:
         payload["metadata"] = metadata
+    if with_candidate:
+        payload["scan_candidates"] = [
+            {
+                "candidate_id": "candidate-1",
+                "source_candidate_id": "C0007",
+                "page": 1,
+                "order": 0,
+                "state": "ignored",
+                "restore_state": "other",
+                "text": "REV A",
+                "raw_text": "REV A",
+                "preliminary_text": "REV 4",
+                "confidence": 0.81,
+                "recognized": True,
+                "reason": "Title block text",
+                "rule": "title_block",
+                "orientation": "horizontal",
+                "rotation": 0,
+                "bbox": {"x": 80, "y": 90, "width": 40, "height": 12},
+                "duplicate_source_ids": ["C0007", "C0008"],
+                "duplicate_count": 1,
+                "created_at": 100,
+                "updated_at": 200,
+            }
+        ]
     return ChecksheetSnapshot.model_validate(payload)
 
 
@@ -156,6 +182,47 @@ def test_missing_metadata_defaults_to_blank_values(tmp_path: Path) -> None:
         "documentNumber": "",
         "revisionNumber": "",
     }
+
+
+def test_candidates_are_revision_data_not_checksheet_rows(tmp_path: Path) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(storage, _snapshot(with_candidate=True))
+
+    assert len(created["rows"]) == 1
+    assert created["revision"]["scan_candidates"] == [
+        {
+            "candidate_id": "candidate-1",
+            "source_candidate_id": "C0007",
+            "page": 1,
+            "order": 0,
+            "state": "ignored",
+            "restore_state": "other",
+            "text": "REV A",
+            "raw_text": "REV A",
+            "preliminary_text": "REV 4",
+            "confidence": 0.81,
+            "recognized": True,
+            "reason": "Title block text",
+            "rule": "title_block",
+            "orientation": "horizontal",
+            "rotation": 0.0,
+            "recovery_attempted": False,
+            "authoritative_reread": False,
+            "bbox": {"x": 80.0, "y": 90.0, "width": 40.0, "height": 12.0},
+            "duplicate_source_ids": ["C0007", "C0008"],
+            "duplicate_count": 1,
+            "created_at": 100,
+            "updated_at": 200,
+        }
+    ]
+    detail = storage.get_checksheet(created["checksheet"]["id"])
+    assert detail["revisions"][0]["row_count"] == 1
+    assert detail["revisions"][0]["candidate_count"] == 1
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["revision"]["scan_candidates"] == created["revision"][
+        "scan_candidates"
+    ]
 
 
 def test_existing_database_without_metadata_table_migrates_to_blanks(

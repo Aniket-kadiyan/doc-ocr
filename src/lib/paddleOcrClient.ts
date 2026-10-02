@@ -200,14 +200,38 @@ export interface ApiSegmentResponse {
   coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
-  candidate_outcomes?: Array<{
-    candidate_id?: string;
-    bbox: BBox;
-    state: "eligible" | "excluded" | "review";
-    text?: string;
-    reason?: string;
-    rule?: string;
-  }>;
+  candidate_outcomes?: ApiCandidateOutcome[];
+}
+
+export interface ApiCandidateOutcome {
+  candidate_id?: string;
+  bbox: BBox;
+  state: "eligible" | "excluded" | "review";
+  text?: string;
+  raw_text?: string;
+  preliminary_text?: string;
+  confidence?: number;
+  recognized?: boolean;
+  reason?: string;
+  rule?: string;
+  type?: string;
+  category?: string;
+  subtype?: string;
+  label?: string;
+  orientation?: "horizontal" | "vertical" | "rotated";
+  rotation?: number;
+  oriented_box?: BBox & { rotation: number };
+  recovery_attempted?: boolean;
+  authoritative_reread?: boolean;
+}
+
+export interface SegmentCandidateOutcome extends SegmentRegion {
+  outcomeState: ApiCandidateOutcome["state"];
+  rawText: string;
+  preliminaryText?: string;
+  outcomeReason: string;
+  outcomeRule?: string;
+  authoritativeReread?: boolean;
 }
 
 function mappedSegmentRegion(
@@ -339,6 +363,51 @@ export function mapPageSegmentRegions(
         : undefined;
 
     return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
+  });
+}
+
+/** Map the detector accounting stream through the same geometry path as rows. */
+export function mapSegmentCandidateOutcomes(
+  outcomes: ApiCandidateOutcome[],
+  bounds: BBox,
+  scale: number,
+  coordinateSpace: "scope" | "page"
+): SegmentCandidateOutcome[] {
+  const apiRegions: ApiSegmentRegion[] = outcomes.map((outcome) => ({
+    candidate_id: outcome.candidate_id,
+    bbox: outcome.bbox,
+    text: outcome.text ?? "",
+    confidence: outcome.confidence ?? 0,
+    type: outcome.type,
+    category: outcome.category,
+    subtype: outcome.subtype,
+    label: outcome.label,
+    orientation: outcome.orientation,
+    rotation: outcome.rotation,
+    oriented_box: outcome.oriented_box,
+    needs_review: outcome.state === "review",
+    recognized: outcome.recognized,
+    page_filter_rule: outcome.rule,
+    page_filter_reason: outcome.reason,
+    review_reason: outcome.state === "review" ? outcome.reason : undefined,
+    recovery_attempted: outcome.recovery_attempted,
+  }));
+  const mapped =
+    coordinateSpace === "page"
+      ? mapPageSegmentRegions(apiRegions, bounds, scale)
+      : mapSegmentRegions(apiRegions, bounds, scale);
+
+  return mapped.map((region, index) => {
+    const outcome = outcomes[index];
+    return {
+      ...region,
+      outcomeState: outcome.state,
+      rawText: outcome.raw_text ?? outcome.text ?? "",
+      preliminaryText: outcome.preliminary_text,
+      outcomeReason: outcome.reason ?? "",
+      outcomeRule: outcome.rule,
+      authoritativeReread: outcome.authoritative_reread,
+    };
   });
 }
 

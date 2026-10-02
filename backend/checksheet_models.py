@@ -33,6 +33,38 @@ class ChecksheetSnapshotItem(BaseModel):
     dimension_type: str = Field(default="Unknown", max_length=100)
 
 
+class ChecksheetScanCandidate(BaseModel):
+    """Unaccepted detector outcome retained with a checksheet revision."""
+
+    candidate_id: str = Field(min_length=1, max_length=256)
+    source_candidate_id: str | None = Field(default=None, max_length=256)
+    page: int = Field(ge=1)
+    order: int = Field(ge=0)
+    state: Literal["review", "other", "ignored"]
+    restore_state: Literal["review", "other"] | None = None
+    text: str = Field(default="", max_length=4000)
+    raw_text: str = Field(default="", max_length=4000)
+    preliminary_text: str | None = Field(default=None, max_length=4000)
+    confidence: float = 0
+    recognized: bool = False
+    reason: str = Field(default="", max_length=4000)
+    rule: str | None = Field(default=None, max_length=500)
+    type: str | None = Field(default=None, max_length=200)
+    category: str | None = Field(default=None, max_length=200)
+    subtype: str | None = Field(default=None, max_length=500)
+    label: str | None = Field(default=None, max_length=1000)
+    orientation: Literal["horizontal", "vertical", "rotated"] = "horizontal"
+    rotation: float = 0
+    recovery_attempted: bool = False
+    authoritative_reread: bool = False
+    bbox: ChecksheetBBox
+    oriented_box: ChecksheetOrientedBox | None = None
+    duplicate_source_ids: list[str] = Field(default_factory=list, max_length=100)
+    duplicate_count: int = Field(default=0, ge=0)
+    created_at: int = Field(ge=0)
+    updated_at: int = Field(ge=0)
+
+
 class ChecksheetMetadata(BaseModel):
     """Drawing metadata snapshotted with one checksheet revision."""
 
@@ -63,6 +95,10 @@ class ChecksheetSnapshot(BaseModel):
     source_file_type: Literal["pdf", "image"]
     pdf_render_scale: float = Field(default=1.5, gt=0, le=10)
     metadata: ChecksheetMetadata = Field(default_factory=ChecksheetMetadata)
+    scan_candidates: list[ChecksheetScanCandidate] = Field(
+        default_factory=list,
+        max_length=10000,
+    )
     reading_columns: list[str] = Field(min_length=1, max_length=20)
     items: list[ChecksheetSnapshotItem] = Field(min_length=1, max_length=5000)
 
@@ -86,6 +122,17 @@ class ChecksheetSnapshot(BaseModel):
         if len(folded) != len(set(folded)):
             raise ValueError("reading column names must be unique")
         return normalized
+
+    @field_validator("scan_candidates")
+    @classmethod
+    def validate_scan_candidates(
+        cls,
+        values: list[ChecksheetScanCandidate],
+    ) -> list[ChecksheetScanCandidate]:
+        candidate_ids = [value.candidate_id for value in values]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("scan candidate IDs must be unique")
+        return sorted(values, key=lambda value: (value.order, value.candidate_id))
 
     @field_validator("items")
     @classmethod
