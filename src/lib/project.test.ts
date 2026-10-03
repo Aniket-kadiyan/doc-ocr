@@ -24,6 +24,15 @@ const retainedCandidate: ScanCandidate = {
   rule: "title_block",
   orientation: "horizontal",
   rotation: 0,
+  recognitionEvidence: {
+    selectedSource: "ocr",
+    sources: ["native_pdf", "ocr"],
+    nativeText: "REV A",
+    ocrText: "REV 4",
+    agreement: 0.8,
+    conflict: true,
+    nativeSpanIds: ["P1:S00007"],
+  },
   valueBox: { x: 100, y: 200, width: 40, height: 12 },
   createdAt: 10,
   updatedAt: 10,
@@ -211,6 +220,35 @@ describe("project and integration exports", () => {
       documentNumber: "DB-1042",
       revisionNumber: "C",
     });
+  });
+
+  it("round-trips native PDF and OCR evidence with its annotation", () => {
+    const annotation = makeAnnotation({
+      recognitionEvidence: {
+        selectedSource: "native_pdf+ocr",
+        sources: ["native_pdf", "ocr"],
+        nativeText: "50±0.2",
+        ocrText: "Ø500.2",
+        agreement: 0.91,
+        conflict: false,
+        nativeSpanIds: ["P1:S00008"],
+        nativeBBox: { x: 10, y: 20, width: 30, height: 12 },
+      },
+    });
+    const serialized = buildProjectBundle({
+      projectName: "Evidence test",
+      source: {
+        fileName: "drawing.pdf",
+        mimeType: "application/pdf",
+        fileType: "pdf",
+        dataUrl: "data:application/pdf;base64,AA==",
+      },
+      annotations: [annotation],
+      savedAt: 123,
+    });
+
+    expect(parseProjectBundle(serialized).annotations[0].recognitionEvidence)
+      .toEqual(annotation.recognitionEvidence);
   });
 
   it("round-trips unresolved candidates without adding them to exports", () => {

@@ -138,6 +138,8 @@ export function DrawingViewer() {
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Original drawing bytes, kept so a saved project can embed them. */
   const sourceFileRef = useRef<ProjectSource | null>(null);
+  /** Original PDF file supplied to native-text evidence during page scans. */
+  const sourceDocumentRef = useRef<File | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const projectIdRef = useRef("");
 
@@ -332,7 +334,10 @@ export function DrawingViewer() {
   // so both paths render at the same scale and produce matching bbox coords.
   const loadSource = useCallback(
     async (file: File) => {
-      if (file.type === "application/pdf") {
+      const isPdf =
+        file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+      sourceDocumentRef.current = isPdf ? file : null;
+      if (isPdf) {
         const doc = await loadPdfDocument(file);
         setPdfDoc(doc);
         setTotalPages(doc.numPages);
@@ -476,6 +481,7 @@ export function DrawingViewer() {
     setPdfDoc(null);
     sourceCanvasRef.current = null;
     sourceFileRef.current = null;
+    sourceDocumentRef.current = null;
     setAnnotations([]);
     setSelectedId(null);
     replaceScanCandidates([]);
@@ -839,6 +845,7 @@ export function DrawingViewer() {
       try {
         const scanResult = await runAutoBalloonScan({
           sourceCanvas: scanCanvas,
+          sourceDocument: sourceDocumentRef.current ?? undefined,
           bbox,
           page: scanPage,
           scopeKind,
@@ -908,6 +915,7 @@ export function DrawingViewer() {
               createdAt: now,
               kind: "dimension",
               needsReview: r.needsReview || !r.recognized,
+              recognitionEvidence: r.recognitionEvidence,
               range: deriveRange(cleanValue) || undefined,
             };
           });
@@ -949,6 +957,7 @@ export function DrawingViewer() {
           rotation: candidate.rotation,
           recoveryAttempted: candidate.recoveryAttempted,
           authoritativeReread: candidate.authoritativeReread,
+          recognitionEvidence: candidate.recognitionEvidence,
           valueBox: candidate.valueBox,
           orientedBox: candidate.orientedBox,
           createdAt: now,
@@ -1256,6 +1265,7 @@ export function DrawingViewer() {
           subtype: candidate.subtype,
           label: candidate.label,
           valueBox: candidate.valueBox,
+          recognitionEvidence: candidate.recognitionEvidence,
         },
       });
     },

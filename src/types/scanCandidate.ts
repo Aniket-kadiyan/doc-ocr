@@ -1,4 +1,8 @@
-import type { BBox, DimensionType } from "@/types/annotation";
+import type {
+  BBox,
+  DimensionType,
+  RecognitionEvidence,
+} from "@/types/annotation";
 
 export type ScanCandidateState = "review" | "other" | "ignored";
 export type RestorableScanCandidateState = Exclude<
@@ -38,6 +42,8 @@ export interface ScanCandidate {
   rotation: number;
   recoveryAttempted?: boolean;
   authoritativeReread?: boolean;
+  /** Native-PDF/OCR readings retained while this object awaits disposition. */
+  recognitionEvidence?: RecognitionEvidence;
   valueBox: BBox;
   orientedBox?: BBox & { rotation: number };
   /** Audit trail for geometry-equivalent reads merged during rescans. */
@@ -46,4 +52,3 @@ export interface ScanCandidate {
   createdAt: number;
   updatedAt: number;
 }
-

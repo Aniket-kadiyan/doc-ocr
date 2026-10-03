@@ -79,6 +79,8 @@ interface ApiScanJobSnapshot {
 
 export interface RunScanJobOptions {
   sourceCanvas: HTMLCanvasElement;
+  /** Original PDF bytes; omitted for image drawings and legacy callers. */
+  sourceDocument?: File;
   bbox: BBox;
   page: number;
   scopeKind: ScanScopeKind;
@@ -99,6 +101,8 @@ export interface ScanJobResult {
   reviewCandidates: SegmentCandidateOutcome[];
   otherCandidates: SegmentCandidateOutcome[];
   filterRuleCounts: Record<string, number>;
+  sourceProfile?: ApiSegmentResponse["source_profile"];
+  recognitionSourceCounts: Record<string, number>;
 }
 
 export class ScanJobCancelledError extends Error {
@@ -238,6 +242,7 @@ export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
  */
 export async function runScanJob({
   sourceCanvas,
+  sourceDocument,
   bbox,
   page,
   scopeKind,
@@ -254,6 +259,12 @@ export async function runScanJob({
 
   const form = new FormData();
   form.append("file", blob, "scan-page.png");
+  const sourceIsPdf =
+    sourceDocument?.type === "application/pdf" ||
+    Boolean(sourceDocument && /\.pdf$/i.test(sourceDocument.name));
+  if (sourceDocument && sourceIsPdf) {
+    form.append("source_document", sourceDocument, sourceDocument.name);
+  }
   form.append("scope_kind", scopeKind);
   form.append("page", String(page));
   // The uploaded image is the crop taken at displayScale, so everything
@@ -403,5 +414,8 @@ export async function runScanJob({
     reviewCandidates,
     otherCandidates,
     filterRuleCounts,
+    sourceProfile: snapshot.result.source_profile,
+    recognitionSourceCounts:
+      snapshot.result.recognition_source_counts ?? {},
   };
 }

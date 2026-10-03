@@ -39,6 +39,11 @@ from page_layout import (
 )
 from page_layout_cache import PageLayoutCache
 from page_value_filters import normalize_page_value_text
+from pdf_evidence import (
+    PdfPageEvidence,
+    crop_pdf_page_evidence,
+    extract_pdf_page_evidence,
+)
 from scan_jobs import ProgressReporter, ScanJobManager
 
 # Draw config from the project's root .env.local / .env (same file the frontend
@@ -58,6 +63,7 @@ app.include_router(checksheet_router)
 scan_job_manager = ScanJobManager(max_workers=1)
 page_layout_cache = PageLayoutCache(max_entries=8)
 MAX_EXISTING_VALUE_BOXES = 5000
+MAX_SOURCE_PDF_BYTES = 64 * 1024 * 1024
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -362,6 +368,13 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "skipped_existing_count": int(seg.get("skipped_existing_count", 0)),
         "filter_rule_counts": filter_rule_counts,
         "coordinate_space": str(seg.get("coordinate_space", "scope")),
+        "source_profile": dict(seg.get("source_profile", {})),
+        "recognition_source_counts": {
+            str(name): int(count)
+            for name, count in dict(
+                seg.get("recognition_source_counts", {})
+            ).items()
+        },
         "regions": regions,
         "review_candidates": review_candidates,
         "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
@@ -550,6 +563,7 @@ def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
 @app.post("/ocr/scan-jobs", status_code=202)
 async def create_scan_job(
     file: UploadFile = File(...),
+    source_document: UploadFile | None = File(None),
     scope_kind: str = Form("section"),
     page: int = Form(1),
     scope_x: float = Form(0),
@@ -579,6 +593,17 @@ async def create_scan_job(
         raise HTTPException(status_code=422, detail="The scan image is empty")
     saved_value_boxes = _parse_existing_value_boxes(existing_value_boxes)
 
+    source_pdf_bytes: bytes | None = None
+    source_pdf_error: str | None = None
+    if source_document is not None:
+        source_bytes = await source_document.read(MAX_SOURCE_PDF_BYTES + 1)
+        if len(source_bytes) > MAX_SOURCE_PDF_BYTES:
+            source_pdf_error = "The source PDF exceeds the 64 MB evidence limit"
+        elif not source_bytes.startswith(b"%PDF-"):
+            source_pdf_error = "The attached source document is not a PDF"
+        elif source_bytes:
+            source_pdf_bytes = source_bytes
+
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = (
@@ -602,6 +627,46 @@ async def create_scan_job(
             or scope_y + scope_height <= 0
         ):
             raise ValueError("The scan scope does not intersect the uploaded page")
+
+        native_evidence: PdfPageEvidence | None = None
+        if source_pdf_bytes is not None:
+            report_progress(
+                stage="source",
+                message="Reading positioned text from the original PDF",
+                percent=2,
+                completed=0,
+                total=1,
+                operation_label="Native PDF evidence",
+            )
+            try:
+                native_evidence = extract_pdf_page_evidence(
+                    source_pdf_bytes,
+                    page_number=page,
+                    target_size=image.size,
+                )
+            except (RuntimeError, ValueError, OSError) as error:
+                native_evidence = PdfPageEvidence.raster_fallback(
+                    page_number=page,
+                    target_size=image.size,
+                    error=str(error)[:240],
+                )
+            report_progress(
+                stage="source",
+                message=(
+                    f"Prepared {len(native_evidence.spans)} native PDF text "
+                    f"spans ({native_evidence.profile} page)"
+                ),
+                percent=2,
+                completed=1,
+                total=1,
+                operation_label="Native PDF evidence ready",
+            )
+        elif source_pdf_error:
+            native_evidence = PdfPageEvidence.raster_fallback(
+                page_number=page,
+                target_size=image.size,
+                error=source_pdf_error,
+            )
 
         report_progress(
             stage="layout",
@@ -642,6 +707,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
                 existing_value_boxes=saved_value_boxes,
+                native_evidence=native_evidence,
             )
             seg["coordinate_space"] = "page"
         else:
@@ -687,6 +753,19 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_section_progress,
                 existing_value_boxes=section_existing_boxes,
+                native_evidence=(
+                    crop_pdf_page_evidence(
+                        native_evidence,
+                        {
+                            "x": section_origin[0],
+                            "y": section_origin[1],
+                            "width": section_image.width,
+                            "height": section_image.height,
+                        },
+                    )
+                    if native_evidence is not None
+                    else None
+                ),
             )
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
@@ -723,6 +802,7 @@ async def create_scan_job(
             # stop/resume design a stable identity for the complete page.
             "page_fingerprint": fingerprint,
             "existing_value_box_count": len(saved_value_boxes),
+            "native_pdf_supplied": source_pdf_bytes is not None,
         },
     )
 

@@ -59,6 +59,20 @@ export interface BBox {
   height: number;
 }
 
+export type RecognitionSource = "native_pdf" | "ocr" | "native_pdf+ocr";
+
+/** Independent readings retained for audit and later review. */
+export interface RecognitionEvidence {
+  selectedSource: RecognitionSource;
+  sources: Array<"native_pdf" | "ocr">;
+  nativeText: string;
+  ocrText: string;
+  agreement: number;
+  conflict: boolean;
+  nativeSpanIds: string[];
+  nativeBBox?: BBox;
+}
+
 /** Legacy label metadata retained only so older saved projects can be read. */
 export type LabelSource = "manual" | "ocr";
 
@@ -101,6 +115,8 @@ export interface Annotation {
   kind?: AnnotationKind;
   /** Backend flagged the OCR read as uncertain. */
   needsReview?: boolean;
+  /** Native-PDF/OCR readings and the source selected for this value. */
+  recognitionEvidence?: RecognitionEvidence;
   /** Presentation-only per-balloon visibility. Hidden values remain numbered,
    * persisted, exported, and active for duplicate prevention. */
   hidden?: boolean;
@@ -142,6 +158,8 @@ export interface OCRResult {
   agreement?: number;
   /** Backend flagged this read as uncertain — prompt the user to verify. */
   needsReview?: boolean;
+  /** Native-PDF/OCR readings and the source selected for this value. */
+  recognitionEvidence?: RecognitionEvidence;
   /** Rule-engine classification returned by manual region OCR. */
   category?: string;
   subtype?: string;

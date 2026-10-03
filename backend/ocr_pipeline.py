@@ -5551,6 +5551,7 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
+        native_evidence: Any | None = None,
     ) -> dict[str, Any]:
         """Scan a whole page through the bounded technical-value route.
 
@@ -5613,6 +5614,14 @@ class OcrPipeline:
             needs_expanded_filter_context,
             normalize_page_value_text,
         )
+        from pdf_evidence import (
+            PdfPageEvidence,
+            fuse_native_with_ocr,
+            match_native_spans,
+            native_match_is_authoritative,
+            native_result,
+            ocr_evidence,
+        )
         from segment_quality import (
             count_dimension_values,
             dedupe_regions,
@@ -5674,6 +5683,25 @@ class OcrPipeline:
         # with existing callers. Page mode deliberately performs no grouping.
         _ = (cluster_margin, debug_dump, debug_dump_force)
         page_size = image.size
+        if native_evidence is not None and not isinstance(
+            native_evidence, PdfPageEvidence
+        ):
+            raise TypeError("segment_page native_evidence must be PdfPageEvidence")
+        source_profile = (
+            native_evidence.profile_dict()
+            if native_evidence is not None
+            else {
+                "kind": "raster",
+                "page": 0,
+                "page_count": 0,
+                "native_text_available": False,
+                "native_span_count": 0,
+                "native_character_count": 0,
+                "raster_coverage": 1.0,
+                "vector_object_count": 0,
+            }
+        )
+        native_spans = native_evidence.spans if native_evidence is not None else ()
         if layout is None:
             layout = analyze_page_layout(image)
         if not isinstance(layout, PageLayout):
@@ -6033,24 +6061,59 @@ class OcrPipeline:
         # and the tolerance tables held 60 of 204 detected objects. They keep
         # their record (the state invariant counts every detection) but skip
         # every recognition, recovery and reread batch.
+        native_matches = {
+            index: match
+            for index, candidate in enumerate(final_candidates)
+            if (
+                match := match_native_spans(candidate.bbox, native_spans)
+            ) is not None
+        }
+        native_primary_indexes = {
+            index
+            for index, match in native_matches.items()
+            if not (
+                EXCLUDE_TABLE_REGIONS
+                and candidate_is_in_table(
+                    final_candidates[index].bbox,
+                    table_masks,
+                )
+            )
+            and native_match_is_authoritative(
+                match,
+                validator=lambda text: is_complete_engineering_value(
+                    normalize_page_value_text(text)
+                ),
+            )
+        }
         recognition_indexes = [
             index
             for index, candidate in enumerate(final_candidates)
-            if not (
+            if index not in native_primary_indexes
+            and not (
                 EXCLUDE_TABLE_REGIONS
                 and candidate_is_in_table(candidate.bbox, table_masks)
             )
         ]
         recognition_total = len(recognition_indexes)
-        table_skipped_count = detected_count - recognition_total
-        ocr_records: list[dict[str, Any]] = [
-            {
-                "candidate": candidate,
-                "candidate_id": candidate.candidate_id,
-                "bbox": candidate.bbox,
-                "polygon": [list(point) for point in candidate.polygon],
-                "text": "",
-                "result": {
+        table_skipped_count = detected_count - recognition_total - len(
+            native_primary_indexes
+        )
+        ocr_records: list[dict[str, Any]] = []
+        for index, candidate in enumerate(final_candidates):
+            table_excluded = bool(
+                EXCLUDE_TABLE_REGIONS
+                and candidate_is_in_table(candidate.bbox, table_masks)
+            )
+            native_authoritative = (
+                index in native_primary_indexes and not table_excluded
+            )
+            if native_authoritative:
+                result = native_result(native_matches[index])
+                text = normalize_page_value_text(str(result.get("text") or ""))
+                result["text"] = text
+                primary_recognized_count += int(bool(text))
+            else:
+                result = {
                     "text": "",
                     "raw_ocr": "",
                     "confidence": 0.0,
@@ -6061,14 +6124,28 @@ class OcrPipeline:
                     "orientation": "horizontal",
                     "rotation": 0,
                     "symbols_detected": None,
-                    "ocr_profile": "table_region_skipped",
-                },
-                "recognized": False,
-                "context_text": "",
-                "table_excluded": True,
-            }
-            for candidate in final_candidates
-        ]
+                    "ocr_profile": (
+                        "table_region_skipped"
+                        if table_excluded
+                        else "batch_recognition"
+                    ),
+                }
+                text = ""
+            ocr_records.append(
+                {
+                    "candidate": candidate,
+                    "candidate_id": candidate.candidate_id,
+                    "bbox": candidate.bbox,
+                    "polygon": [list(point) for point in candidate.polygon],
+                    "text": text,
+                    "result": result,
+                    "recognized": bool(text),
+                    "context_text": "",
+                    "table_excluded": table_excluded,
+                    "native_match": native_matches.get(index),
+                    "native_authoritative": native_authoritative,
+                }
+            )
         candidate_crops: dict[int, Image.Image] = {}
         for index in recognition_indexes:
             bbox = final_candidates[index].bbox
@@ -6103,10 +6180,22 @@ class OcrPipeline:
                     "Page recognition batch returned an unexpected result count"
                 )
             for record_index, result in zip(batch_record_indexes, batch_results):
-                text = str(result.get("text") or "").strip()
+                record = ocr_records[record_index]
+                match = record.get("native_match")
+                if match is not None:
+                    result = fuse_native_with_ocr(
+                        match,
+                        result,
+                        native_authoritative=False,
+                    )
+                else:
+                    result = ocr_evidence(result)
+                text = normalize_page_value_text(
+                    strip_foreign_glyphs(str(result.get("text") or ""))
+                )
+                result["text"] = text
                 if text:
                     primary_recognized_count += 1
-                record = ocr_records[record_index]
                 record["text"] = text
                 record["result"] = result
                 record["recognized"] = bool(text)
@@ -6268,6 +6357,7 @@ class OcrPipeline:
             index
             for index, record in enumerate(ocr_records)
             if not record.get("table_excluded")
+            and not record.get("native_authoritative")
         ]
         selected_recovery_indexes = [
             recoverable_indexes[position]
@@ -6547,7 +6637,9 @@ class OcrPipeline:
             )
 
         for index, record in enumerate(ocr_records):
-            if record.get("table_excluded"):
+            if record.get("table_excluded") or record.get(
+                "native_authoritative"
+            ):
                 continue
             resolved = resolve_recovery_consensus(
                 record["result"],
@@ -6555,7 +6647,6 @@ class OcrPipeline:
                 attempted=index in selected_recovery_set,
                 budget_exhausted=index in budget_exhausted_indexes,
             )
-            record["result"] = resolved
             # The multilingual recogniser emits a CJK character for a stroke
             # cluster it cannot resolve, so "R1.4" can arrive as "月1.4". The
             # section route has always stripped these; the page route did not,
@@ -6564,6 +6655,20 @@ class OcrPipeline:
                 strip_foreign_glyphs(str(resolved.get("text") or ""))
             )
             resolved["text"] = normalized_text
+            match = record.get("native_match")
+            if match is not None:
+                resolved = fuse_native_with_ocr(
+                    match,
+                    resolved,
+                    native_authoritative=False,
+                )
+            else:
+                resolved = ocr_evidence(resolved)
+            normalized_text = normalize_page_value_text(
+                strip_foreign_glyphs(str(resolved.get("text") or ""))
+            )
+            resolved["text"] = normalized_text
+            record["result"] = resolved
             record["text"] = normalized_text
             record["recognized"] = bool(record["text"])
 
@@ -6581,7 +6686,11 @@ class OcrPipeline:
                 ocr_records[index],
                 ocr_records,
             )
-        context_ocr_indexes = context_indexes[:CONTEXT_MAX_CANDIDATES]
+        context_ocr_indexes = [
+            index
+            for index in context_indexes
+            if not ocr_records[index].get("native_authoritative")
+        ][:CONTEXT_MAX_CANDIDATES]
         context_batch_total = (
             (
                 len(context_ocr_indexes)
@@ -6839,7 +6948,9 @@ class OcrPipeline:
             )
             record["preliminary_state"] = preliminary_state
             record["preliminary_reason"] = preliminary_reason
-            if preliminary_state != "excluded":
+            if preliminary_state != "excluded" and not record.get(
+                "native_authoritative"
+            ):
                 authoritative_indexes.append(filter_index - 1)
 
         authoritative_total = len(authoritative_indexes)
@@ -6854,7 +6965,21 @@ class OcrPipeline:
                 previous_result,
                 attempts,
             )
-            accurate_text = str(accurate_result.get("text") or "")
+            match = record.get("native_match")
+            if match is not None:
+                accurate_result = fuse_native_with_ocr(
+                    match,
+                    accurate_result,
+                    native_authoritative=False,
+                    final=True,
+                )
+            else:
+                accurate_result = ocr_evidence(accurate_result)
+            accurate_text = normalize_page_value_text(
+                strip_foreign_glyphs(str(accurate_result.get("text") or ""))
+            )
+            accurate_result["text"] = accurate_text
+            accurate_result["authoritative_reread"] = True
             record["result"] = accurate_result
             record["text"] = accurate_text
             record["recognized"] = bool(accurate_text)
@@ -7056,7 +7181,10 @@ class OcrPipeline:
                 final_state, final_reason = resolve_candidate_state(
                     record,
                     decision,
-                    authoritative=bool(record.get("authoritative_reread")),
+                    authoritative=bool(
+                        record.get("authoritative_reread")
+                        or record.get("native_authoritative")
+                    ),
                 )
             if not record["recognized"] and decision.rule_name != "table_region":
                 filter_rule_counts["unread"] += 1
@@ -7100,6 +7228,13 @@ class OcrPipeline:
                     result.get("authoritative_target_owned")
                 ),
                 "numeric_conflict": bool(result.get("numeric_conflict")),
+                "recognition_source": result.get(
+                    "recognition_source", "ocr"
+                ),
+                "recognition_evidence": dict(
+                    result.get("recognition_evidence") or {}
+                ),
+                "source_conflict": bool(result.get("source_conflict")),
             }
             oriented_box = result.get("oriented_box") or record.get(
                 "oriented_box"
@@ -7159,6 +7294,13 @@ class OcrPipeline:
                 "authoritative_reread": bool(
                     result.get("authoritative_reread")
                 ),
+                "recognition_source": result.get(
+                    "recognition_source", "ocr"
+                ),
+                "recognition_evidence": dict(
+                    result.get("recognition_evidence") or {}
+                ),
+                "source_conflict": bool(result.get("source_conflict")),
             }
             candidate_outcomes.append(outcome)
             filtered_overlay_candidates.append(
@@ -7505,6 +7647,14 @@ class OcrPipeline:
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
         )
+        recognition_source_counts: Counter[str] = Counter(
+            str(
+                record["result"].get("recognition_source")
+                or ("native_pdf" if record.get("native_authoritative") else "ocr")
+            )
+            for record in ocr_records
+            if record.get("recognized") and not record.get("table_excluded")
+        )
         unread_count = detected_count - recognized_count
         eligible_count = len(regions)
         excluded_count = sum(
@@ -7544,6 +7694,10 @@ class OcrPipeline:
             "duplicates_removed": duplicates_removed,
             "skipped_existing_count": skipped_existing_count,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
+            "source_profile": source_profile,
+            "recognition_source_counts": dict(
+                sorted(recognition_source_counts.items())
+            ),
             "regions": regions,
             "review_candidates": review_candidates,
             "candidate_outcomes": candidate_outcomes,

@@ -1,4 +1,9 @@
-import type { BBox, OCRResult } from "@/types/annotation";
+import type {
+  BBox,
+  OCRResult,
+  RecognitionEvidence,
+  RecognitionSource,
+} from "@/types/annotation";
 import { cropRegion, CROP_PAD_PX } from "@/lib/canvasUtils";
 import { fixEngineeringSymbols } from "@/lib/engineeringSymbols";
 import { getTitleKeywords } from "@/lib/titleKeywords";
@@ -145,6 +150,12 @@ export interface SegmentRegion {
   reviewReason?: string;
   /** True when bounded post-detection recovery was attempted. */
   recoveryAttempted?: boolean;
+  /** Reading source selected by the backend. */
+  recognitionSource?: RecognitionSource;
+  /** Both independent readings are retained when native PDF text is present. */
+  recognitionEvidence?: RecognitionEvidence;
+  /** True when native PDF text and final OCR disagree. */
+  sourceConflict?: boolean;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
   /**
@@ -185,6 +196,18 @@ export interface ApiSegmentRegion {
   page_filter_reason?: string;
   review_reason?: string;
   recovery_attempted?: boolean;
+  recognition_source?: RecognitionSource;
+  recognition_evidence?: {
+    selected_source?: RecognitionSource;
+    sources?: Array<"native_pdf" | "ocr">;
+    native_text?: string;
+    ocr_text?: string;
+    agreement?: number;
+    conflict?: boolean;
+    native_span_ids?: string[];
+    native_bbox?: BBox;
+  };
+  source_conflict?: boolean;
 }
 
 export interface ApiSegmentResponse {
@@ -198,6 +221,14 @@ export interface ApiSegmentResponse {
   skipped_existing_count?: number;
   filter_rule_counts?: Record<string, number>;
   coordinate_space?: "scope" | "page";
+  source_profile?: {
+    kind?: "vector" | "raster" | "hybrid";
+    native_text_available?: boolean;
+    native_span_count?: number;
+    native_character_count?: number;
+    fallback_reason?: string;
+  };
+  recognition_source_counts?: Record<string, number>;
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
   candidate_outcomes?: ApiCandidateOutcome[];
@@ -223,6 +254,18 @@ export interface ApiCandidateOutcome {
   oriented_box?: BBox & { rotation: number };
   recovery_attempted?: boolean;
   authoritative_reread?: boolean;
+  recognition_source?: RecognitionSource;
+  recognition_evidence?: {
+    selected_source?: RecognitionSource;
+    sources?: Array<"native_pdf" | "ocr">;
+    native_text?: string;
+    ocr_text?: string;
+    agreement?: number;
+    conflict?: boolean;
+    native_span_ids?: string[];
+    native_bbox?: BBox;
+  };
+  source_conflict?: boolean;
 }
 
 export interface SegmentCandidateOutcome extends SegmentRegion {
@@ -239,6 +282,20 @@ function mappedSegmentRegion(
   valueBox: BBox,
   orientedBox?: BBox & { rotation: number }
 ): SegmentRegion {
+  const evidence = r.recognition_evidence;
+  const recognitionEvidence: RecognitionEvidence | undefined = evidence
+    ? {
+        selectedSource:
+          evidence.selected_source ?? r.recognition_source ?? "ocr",
+        sources: evidence.sources ?? ["ocr"],
+        nativeText: evidence.native_text ?? "",
+        ocrText: evidence.ocr_text ?? "",
+        agreement: evidence.agreement ?? 0,
+        conflict: evidence.conflict ?? r.source_conflict ?? false,
+        nativeSpanIds: evidence.native_span_ids ?? [],
+        nativeBBox: evidence.native_bbox,
+      }
+    : undefined;
   return {
     candidateId: r.candidate_id,
     // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
@@ -259,6 +316,9 @@ function mappedSegmentRegion(
     pageFilterReason: r.page_filter_reason,
     reviewReason: r.review_reason,
     recoveryAttempted: r.recovery_attempted,
+    recognitionSource: r.recognition_source,
+    recognitionEvidence,
+    sourceConflict: r.source_conflict,
     valueBox,
     orientedBox,
   };
@@ -391,6 +451,9 @@ export function mapSegmentCandidateOutcomes(
     page_filter_reason: outcome.reason,
     review_reason: outcome.state === "review" ? outcome.reason : undefined,
     recovery_attempted: outcome.recovery_attempted,
+    recognition_source: outcome.recognition_source,
+    recognition_evidence: outcome.recognition_evidence,
+    source_conflict: outcome.source_conflict,
   }));
   const mapped =
     coordinateSpace === "page"

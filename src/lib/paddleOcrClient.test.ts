@@ -208,4 +208,46 @@ describe("scan result coordinate mapping", () => {
       valueBox: { x: 130, y: 240, width: 50, height: 12 },
     });
   });
+
+  it("maps native PDF and OCR provenance on candidate outcomes", () => {
+    const [mapped] = mapSegmentCandidateOutcomes(
+      [
+        {
+          candidate_id: "C0044",
+          bbox: { x: 260, y: 480, width: 140, height: 28 },
+          state: "review",
+          text: "R1±0.26",
+          confidence: 0.93,
+          recognition_source: "ocr",
+          source_conflict: true,
+          recognition_evidence: {
+            selected_source: "ocr",
+            sources: ["native_pdf", "ocr"],
+            native_text: "R1±0.25",
+            ocr_text: "R1±0.26",
+            agreement: 0.875,
+            conflict: true,
+            native_span_ids: ["P1:S00017"],
+            native_bbox: { x: 260, y: 480, width: 140, height: 28 },
+          },
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      2,
+      "page"
+    );
+
+    expect(mapped.recognitionSource).toBe("ocr");
+    expect(mapped.sourceConflict).toBe(true);
+    expect(mapped.recognitionEvidence).toEqual({
+      selectedSource: "ocr",
+      sources: ["native_pdf", "ocr"],
+      nativeText: "R1±0.25",
+      ocrText: "R1±0.26",
+      agreement: 0.875,
+      conflict: true,
+      nativeSpanIds: ["P1:S00017"],
+      nativeBBox: { x: 260, y: 480, width: 140, height: 28 },
+    });
+  });
 });
