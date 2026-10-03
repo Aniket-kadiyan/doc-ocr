@@ -26,7 +26,6 @@ import {
   runOCR,
   stopAutoBalloonScan,
 } from "@/lib/clientOcr";
-import { classifyDimension } from "@/lib/dimensionClassifier";
 import { filterNewScanRegions } from "@/lib/scanCandidates";
 import { mergePageReviewCandidates } from "@/lib/scanReviewCandidates";
 import {
@@ -35,7 +34,8 @@ import {
   type ScanRunOutcome,
   type SectionQueuePosition,
 } from "@/lib/sectionScanQueue";
-import { deriveRange } from "@/lib/valueFields";
+import { annotationsFromRegions } from "@/lib/scanAnnotations";
+import { readPdfTextLayer, regionsWithin } from "@/lib/pdfTextLayer";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
@@ -144,6 +144,10 @@ export function DrawingViewer() {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanOverlay, setScanOverlay] =
     useState<ScanDebugOverlayModel | null>(null);
+  // The area the overlay is allowed to paint in: the selection for a section
+  // scan, the whole drawing for a page scan. Kept beside the overlay so the
+  // two are always cleared together.
+  const [scanScope, setScanScope] = useState<BBox | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
   const [scanReviewCandidates, setScanReviewCandidates] = useState<
@@ -251,6 +255,7 @@ export function DrawingViewer() {
   useEffect(() => {
     // Overlay geometry belongs to one exact page/project and is never persisted.
     setScanOverlay(null);
+    setScanScope(null);
   }, [currentPage, projectId]);
 
   useEffect(() => {
@@ -375,6 +380,7 @@ export function DrawingViewer() {
     setIsSegmenting(false);
     setScanProgress(null);
     setScanOverlay(null);
+    setScanScope(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = file.type === "application/pdf" ? "pdf" : "image";
@@ -650,6 +656,7 @@ export function DrawingViewer() {
       setSelectionError(null);
       setScanSummary(null);
       setScanOverlay(null);
+      setScanScope(bbox);
       setScanProgress({
         jobId: "",
         status: "queued",
@@ -679,6 +686,67 @@ export function DrawingViewer() {
         overlay: null,
       });
       try {
+        // A vector PDF already carries every callout as text, with exact
+        // digits and exact glyph boxes, so there is nothing to recognise:
+        // the values come back perfect in milliseconds instead of the tens
+        // of seconds a scan takes. Most drawings are scans with no text at
+        // all, and those report back unusable so the scan runs as before.
+        const sourceFile = sourceFileRef.current;
+        if (sourceFile?.fileType === "pdf" && source) {
+          const pageBounds = {
+            x: 0,
+            y: 0,
+            width: source.width,
+            height: source.height,
+          };
+          const textLayer = await readPdfTextLayer(
+            await (await fetch(sourceFile.dataUrl)).blob(),
+            scanPage,
+            pageBounds
+          );
+          if (textLayer.usable) {
+            const scoped =
+              scopeKind === "page"
+                ? textLayer.regions
+                : regionsWithin(textLayer.regions, bbox);
+            const live = useAnnotationStore.getState().annotations;
+            const kept = filterNewScanRegions(
+              scoped,
+              live,
+              scanPage,
+              undefined,
+              scopeKind
+            );
+            const fromText = annotationsFromRegions(kept.accepted, scanPage);
+            if (fromText.length > 0) addAnnotations(fromText);
+            const textSummary: ScanCompletionSummary = {
+              scopeKind,
+              added: fromText.length,
+              detected: scoped.length,
+              recognized: scoped.length,
+              eligible: scoped.length,
+              excluded: 0,
+              // A value the text layer read exactly but could not say what
+              // it measures — a lone deviation, a number whose symbol the
+              // drawing drew rather than wrote — is ballooned and flagged.
+              reviewRequired: fromText.filter(
+                (annotation) => annotation.needsReview
+              ).length,
+              unread: 0,
+              skippedExisting: kept.skippedExisting,
+              skippedDuplicates: kept.skippedDuplicates,
+            };
+            setScanSummary(textSummary);
+            if (fromText.length === 0) {
+              setSelectionError(
+                scopeKind === "page"
+                  ? "The drawing's text carries no values that are not already ballooned."
+                  : "No values were found in the selected section."
+              );
+            }
+            return { status: "succeeded", summary: textSummary };
+          }
+        }
         const scanResult = await runAutoBalloonScan({
           sourceCanvas: scanCanvas,
           bbox,
@@ -725,30 +793,11 @@ export function DrawingViewer() {
           scopeKind
         );
         const now = Date.now();
-        const newAnnotations: Annotation[] = filtered.accepted
-          .map((r) => {
-            const cleanValue = r.text.trim();
-            // Prefer the backend rule engine, which also sees the detected
-            // symbols and geometry; fall back to the local text-only rules.
-            const type = ((r.category as DimensionType) ||
-              classifyDimension(cleanValue)) as DimensionType;
-            return {
-              id: uuidv4(),
-              // number is assigned sequentially by addAnnotations
-              number: 0,
-              label: r.label?.trim() || "",
-              value: cleanValue,
-              type,
-              confidence: r.confidence,
-              bbox: r.valueBox,
-              rotation: r.rotation,
-              page: scanPage,
-              createdAt: now,
-              kind: "dimension",
-              needsReview: r.needsReview || !r.recognized,
-              range: deriveRange(cleanValue) || undefined,
-            };
-          });
+        const newAnnotations: Annotation[] = annotationsFromRegions(
+          filtered.accepted,
+          scanPage,
+          now
+        );
 
         // Review candidates stay outside the annotation store. Filter them
         // against both existing balloons and this scan's atomic insert so a
@@ -840,6 +889,7 @@ export function DrawingViewer() {
         }
         replaceScanReviewCandidates(mergedReviews.candidates);
         setScanOverlay(null);
+        setScanScope(null);
         const summary: ScanCompletionSummary = {
           scopeKind,
           added: newAnnotations.length,
@@ -871,6 +921,7 @@ export function DrawingViewer() {
       } catch (err) {
         if (isScanJobCancelledError(err)) {
           setScanOverlay(null);
+          setScanScope(null);
           setSelectionError(
             options.sectionPosition
               ? sectionLabel +
@@ -1197,7 +1248,10 @@ export function DrawingViewer() {
           {scanOverlay && (
             <button
               type="button"
-              onClick={() => setScanOverlay(null)}
+              onClick={() => {
+                setScanOverlay(null);
+                setScanScope(null);
+              }}
               className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
             >
               Dismiss scan overlay
@@ -1398,7 +1452,12 @@ export function DrawingViewer() {
                     />
 
                     {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
-                      <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
+                      <ScanDebugOverlay
+                        overlay={scanOverlay}
+                        scale={scale}
+                        scope={scanScope ?? { x: 0, y: 0, ...stageSize }}
+                        pageSize={stageSize}
+                      />
                     )}
 
                     {pageScanReviewCandidates.length > 0 &&

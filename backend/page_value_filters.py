@@ -114,7 +114,7 @@ _ANGLE_VALUE = _compile(
     rf"(?:\s*±\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?)"
     rf"|\s*\+\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?)"
     rf"\s*-\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?))?"
-    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
+    r"(?:\s*(?:MAX|MIN|TYP|REF|BASIC)\.?)?$"
 )
 _LINEAR_VALUE = _compile(
     rf"^(?:\d+\s*[X×]\s*)?"
@@ -129,13 +129,26 @@ _LINEAR_VALUE = _compile(
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
-    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC|THRU))?$"
+    r"(?:\s*(?:MAX|MIN|TYP|REF|BASIC|THRU)\.?)?$"
+)
+# A chamfer: the leg length and the angle it cuts, written "1 × 45°" and
+# often prefixed CHF or C. Neither grammar above covers it. The linear one
+# allows a leading count ("4× Ø5") but then wants a plain number, and the
+# angle one allows no prefix at all, so a correctly read chamfer failed the
+# completeness test and every one on the sheet went to review instead of
+# being ballooned. Both orders are standard, and the pattern is tight enough
+# to be safe: it needs the × and the degree mark.
+_CHAMFER_VALUE = _compile(
+    rf"^(?:CHF|C)?\s*(?:"
+    rf"{_NUMBER}\s*[X×]\s*{_ANGLE_MAGNITUDE}"
+    rf"|{_ANGLE_MAGNITUDE}\s*[X×]\s*{_NUMBER}"
+    rf")$"
 )
 _THREAD_VALUE = _compile(
     rf"^M\s*\d+(?:\.\d+)?"
     rf"(?:\s*[X×]\s*{_NUMBER})?"
     r"(?:\s*-\s*[0-9A-Z]+)?"
-    r"(?:\s+(?:THRU|TYP|REF))?$"
+    r"(?:\s*(?:THRU|TYP|REF)\.?)?$"
 )
 _STANDALONE_TOLERANCE = _compile(
     rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
@@ -243,6 +256,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _ANGLE_VALUE.fullmatch(value):
         return True
     if _LINEAR_VALUE.fullmatch(value):
+        return True
+    if _CHAMFER_VALUE.fullmatch(value):
         return True
     if _THREAD_VALUE.fullmatch(value):
         return True

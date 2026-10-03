@@ -261,3 +261,56 @@ def test_mixed_section_rejects_only_candidate_inside_the_table() -> None:
     )
     assert decision.accepted
     assert decision.rule_name == "section_engineering_value"
+
+
+def test_a_chamfer_is_a_complete_value() -> None:
+    # A chamfer matched neither grammar: the linear one takes a leading count
+    # ("4× Ø5") but then wants a plain number, and the angle one takes no
+    # prefix at all. So a correctly read chamfer was judged incomplete and
+    # demoted to review, on every drawing that carries one.
+    for text in (
+        "1×45°",
+        "1.0×45°",
+        "0.25×45°",
+        "2X45°",
+        "1 × 45°",
+        "0.5x30°",
+        "CHF1.0×45°",
+        "CHF0.25×45°",
+        "C1×45°",
+        # Written the other way round, which is equally standard.
+        "45°×1",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, text
+        assert decision.rule_name == "engineering_value", text
+
+
+def test_a_qualifier_needs_no_space_in_front_of_it() -> None:
+    # OCR returns "Ø52.5REF" for "Ø52.5 REF". The space-less form used to pass
+    # only by falling through to the compact-identifier rule, whose character
+    # class has no Ø and no °, so whether a real value was accepted depended
+    # on whether it happened to carry a symbol.
+    for text in (
+        "Ø52.5REF",
+        "Ø52.5 REF",
+        "Ø52.5REF.",
+        "Ø12.5MAX",
+        "30.0°TYP",
+        "R2.5MIN",
+        "8.00THRU",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, text
+
+
+def test_widening_the_grammar_still_rejects_prose() -> None:
+    for text in (
+        "REFERENCE ONLY",
+        "SECTION A-A",
+        "SHEET 1 OF 2",
+        "DO NOT SCALE",
+        "CHAMFER ALL EDGES",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert not decision.accepted, text

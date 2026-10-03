@@ -687,6 +687,67 @@ def cancel_scan_job(job_id: str) -> dict[str, Any]:
     return job
 
 
+@app.post("/ocr/text-layer")
+async def read_pdf_text_layer(
+    file: UploadFile = File(..., description="The drawing PDF itself"),
+    page: int = Form(1, description="1-based page number"),
+    render_scale: float = Form(
+        1.5,
+        description=(
+            "The client's PDF raster scale, so boxes come back in the same "
+            "pixels its annotations already use"
+        ),
+    ),
+) -> dict[str, Any]:
+    """
+    Read one page's callouts from the PDF's own text layer.
+
+    A vector drawing already carries every value as text with exact glyph
+    boxes, so this returns them with no OCR at all — perfectly accurate and
+    about three orders of magnitude faster. ``usable`` is False for a raster
+    scan, which is the signal to run the ordinary scan instead.
+    """
+    from pdf_text_layer import text_layer_regions
+
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be 1 or greater")
+    if not 0.1 <= render_scale <= 20:
+        raise HTTPException(status_code=400, detail="render_scale is out of range")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+
+    try:
+        result = text_layer_regions(data, page - 1, dpi=72.0 * render_scale)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="That page is not in the PDF")
+    except Exception as error:  # a damaged or non-PDF upload
+        raise HTTPException(
+            status_code=400, detail=f"Could not read the PDF text layer: {error}"
+        )
+
+    width, height = result["page_size"]
+    serialized = _serialize_segment_result(
+        {
+            "regions": result["regions"],
+            "review_candidates": [],
+            "coordinate_space": "page",
+            "detected_count": len(result["regions"]) + len(result["excluded"]),
+            "eligible_count": len(result["regions"]),
+            "excluded_count": len(result["excluded"]),
+            "review_count": 0,
+        }
+    )
+    return {
+        **serialized,
+        "usable": result["usable"],
+        "page_width": width,
+        "page_height": height,
+        "fonts": result["fonts"],
+    }
+
+
 @app.post("/ocr/title-fields")
 async def read_title_fields(
     file: UploadFile = File(...),

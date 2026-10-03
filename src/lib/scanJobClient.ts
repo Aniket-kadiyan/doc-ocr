@@ -122,31 +122,52 @@ export function isScanJobCancelledError(
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
-function toDebugOverlay(overlay: ApiScanOverlay | null | undefined): ScanDebugOverlay | null {
+/**
+ * Bring one progress overlay into viewer coordinates.
+ *
+ * The scan reads a higher-resolution render than the one on screen, so the
+ * backend describes this geometry in those larger pixels, exactly like the
+ * region boxes that mapPageSegmentRegions has always divided down. The
+ * overlay was passed through untouched, so on a PDF page every processing
+ * box was drawn about 2.3x too large and too far down and right.
+ *
+ * The page dimensions come down with it: they say which image the geometry
+ * belongs to, which is what lets the viewer refuse to paint a section crop's
+ * coordinates onto the whole page.
+ */
+function toDebugOverlay(
+  overlay: ApiScanOverlay | null | undefined,
+  displayScale = 1
+): ScanDebugOverlay | null {
   if (!overlay?.enabled) return null;
+  const scale = displayScale > 0 ? displayScale : 1;
+  const toViewer = (value: number) => value / scale;
+  const boxToViewer = (box: BBox): BBox => ({
+    x: toViewer(box.x),
+    y: toViewer(box.y),
+    width: toViewer(box.width),
+    height: toViewer(box.height),
+  });
   return {
     enabled: true,
-    pageWidth: overlay.page_width ?? 0,
-    pageHeight: overlay.page_height ?? 0,
+    pageWidth: toViewer(overlay.page_width ?? 0),
+    pageHeight: toViewer(overlay.page_height ?? 0),
     scopeKind: overlay.scope_kind ?? "page",
-    tableMasks: overlay.table_masks ?? [],
+    tableMasks: (overlay.table_masks ?? []).map(boxToViewer),
     panels: (overlay.panels ?? []).map((panel, index) => ({
-      x: panel.x,
-      y: panel.y,
-      width: panel.width,
-      height: panel.height,
+      ...boxToViewer(panel),
       id: panel.id ?? `P${index + 1}`,
       label: panel.label ?? panel.id ?? `P${index + 1}`,
       state: panel.state ?? "pending",
     })),
-    overlaps: overlay.overlaps ?? [],
+    overlaps: (overlay.overlaps ?? []).map(boxToViewer),
     candidates: (overlay.candidates ?? [])
       .filter((candidate): candidate is typeof candidate & { bbox: BBox } =>
         Boolean(candidate.bbox)
       )
       .map((candidate) => ({
         id: candidate.id,
-        bbox: candidate.bbox,
+        bbox: boxToViewer(candidate.bbox),
         state: candidate.state ?? "detected",
         text: candidate.text,
         reason: candidate.reason,
@@ -155,7 +176,10 @@ function toDebugOverlay(overlay: ApiScanOverlay | null | undefined): ScanDebugOv
   };
 }
 
-function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
+function toProgress(
+  snapshot: ApiScanJobSnapshot,
+  displayScale = 1
+): ScanProgress {
   return {
     jobId: snapshot.job_id,
     status: snapshot.status,
@@ -183,7 +207,7 @@ function toProgress(snapshot: ApiScanJobSnapshot): ScanProgress {
     liveness:
       snapshot.liveness ??
       (snapshot.status === "queued" ? "queued" : "working"),
-    overlay: toDebugOverlay(snapshot.overlay),
+    overlay: toDebugOverlay(snapshot.overlay, displayScale),
   };
 }
 
@@ -293,7 +317,7 @@ export async function runScanJob({
   }
 
   let snapshot = (await created.json()) as ApiScanJobSnapshot;
-  onProgress?.(toProgress(snapshot));
+  onProgress?.(toProgress(snapshot, displayScale));
 
   while (
     snapshot.status === "queued" ||
@@ -311,7 +335,7 @@ export async function runScanJob({
       );
     }
     snapshot = (await response.json()) as ApiScanJobSnapshot;
-    onProgress?.(toProgress(snapshot));
+    onProgress?.(toProgress(snapshot, displayScale));
   }
 
   if (snapshot.status === "failed") {

@@ -1,6 +1,8 @@
 "use client";
 
 import { Group, Rect, Text } from "react-konva";
+import { overlayDescribesPage } from "@/lib/scanOverlay";
+import type { BBox } from "@/types/annotation";
 import type {
   ScanDebugOverlay as ScanDebugOverlayModel,
   ScanOverlayCandidateState,
@@ -10,6 +12,10 @@ import type {
 interface ScanDebugOverlayProps {
   overlay: ScanDebugOverlayModel;
   scale: number;
+  /** The area this scan was asked to read, in page coordinates. */
+  scope: BBox;
+  /** The drawing's own size, in the same coordinates. */
+  pageSize: { width: number; height: number };
 }
 
 const panelColor: Record<ScanOverlayPanelState, string> = {
@@ -31,10 +37,27 @@ const candidateColor: Record<ScanOverlayCandidateState, string> = {
  * Temporary, non-exportable processing geometry.  It lives in the same base
  * page coordinate system as annotations, so Stage zoom/pan keeps it aligned.
  */
-export function ScanDebugOverlay({ overlay, scale }: ScanDebugOverlayProps) {
+export function ScanDebugOverlay({
+  overlay,
+  scale,
+  scope,
+  pageSize,
+}: ScanDebugOverlayProps) {
   const safeScale = Math.max(scale, 0.01);
+  if (!overlayDescribesPage(overlay, pageSize)) return null;
   return (
-    <Group listening={false}>
+    // Processing geometry belongs to the area being read, so it is clipped to
+    // it. A section scan then cannot paint a box over the rest of the
+    // drawing, whatever the backend reports.
+    <Group
+      listening={false}
+      clip={{
+        x: scope.x,
+        y: scope.y,
+        width: scope.width,
+        height: scope.height,
+      }}
+    >
       {overlay.overlaps.map((bbox, index) => (
         <Rect
           key={`scan-overlap-${index}`}
