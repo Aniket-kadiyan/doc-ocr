@@ -8,6 +8,7 @@ python-multipart>=0.0.12,<1.0
 # Image processing
 Pillow>=11,<13
 PyMuPDF>=1.26,<2.0
+pypdfium2>=4.30,<5.0
 
 # PaddleX 3.7.2 requires NumPy >=1.24,<2.4.
 # Pinning prevents pip from installing the incompatible NumPy 2.5.x release.

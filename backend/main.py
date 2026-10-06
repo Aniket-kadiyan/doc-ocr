@@ -45,6 +45,12 @@ from pdf_evidence import (
     crop_pdf_page_evidence,
     extract_pdf_page_evidence,
 )
+from pdf_text_first import (
+    crop_text_layer_result,
+    merge_native_and_ocr_results,
+    native_text_segment_result,
+)
+from pdf_text_layer import text_layer_regions
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
 
@@ -438,6 +444,35 @@ def _map_section_result_to_page(
     """Restore light-filtered section values to page coordinates."""
 
     origin_x, origin_y = origin
+
+    def map_evidence(item: dict[str, Any]) -> dict[str, Any]:
+        """Translate the native provenance box with its visible candidate."""
+
+        evidence = item.get("recognition_evidence")
+        if not isinstance(evidence, dict):
+            return item
+        native_bbox = evidence.get("native_bbox")
+        if not isinstance(native_bbox, dict):
+            return item
+        return {
+            **item,
+            "recognition_evidence": {
+                **evidence,
+                "native_bbox": {
+                    "x": round(
+                        origin_x + float(native_bbox.get("x", 0.0)),
+                        1,
+                    ),
+                    "y": round(
+                        origin_y + float(native_bbox.get("y", 0.0)),
+                        1,
+                    ),
+                    "width": round(float(native_bbox.get("width", 0.0)), 1),
+                    "height": round(float(native_bbox.get("height", 0.0)), 1),
+                },
+            },
+        }
+
     mapped_regions: list[dict[str, Any]] = []
     overlay_candidates: list[dict[str, object]] = []
     source_regions = list(seg.get("regions", []))
@@ -483,7 +518,7 @@ def _map_section_result_to_page(
                 "x": round(origin_x + float(oriented.get("x", 0.0)), 1),
                 "y": round(origin_y + float(oriented.get("y", 0.0)), 1),
             }
-        mapped_regions.append(mapped_region)
+        mapped_regions.append(map_evidence(mapped_region))
 
     mapped_outcomes: list[dict[str, Any]] = []
     for outcome in list(seg.get("candidate_outcomes", [])):
@@ -510,7 +545,20 @@ def _map_section_result_to_page(
                     1,
                 ),
             }
-        mapped_outcomes.append(mapped_outcome)
+        mapped_outcomes.append(map_evidence(mapped_outcome))
+
+    if mapped_outcomes:
+        overlay_candidates = [
+            {
+                "id": outcome.get("candidate_id"),
+                "bbox": outcome["bbox"],
+                "state": outcome.get("state", "excluded"),
+                "text": outcome.get("text", ""),
+                "reason": outcome.get("reason", ""),
+                "rule": outcome.get("rule", ""),
+            }
+            for outcome in mapped_outcomes
+        ]
 
     # Review candidates carry geometry too. They were always empty while the
     # section scan used the light pipeline, so passing them through untouched
@@ -541,7 +589,7 @@ def _map_section_result_to_page(
                     1,
                 ),
             }
-        mapped_reviews.append(mapped_candidate)
+        mapped_reviews.append(map_evidence(mapped_candidate))
 
     return (
         {
@@ -678,22 +726,38 @@ async def create_scan_job(
             raise ValueError("The scan scope does not intersect the uploaded page")
 
         native_evidence: PdfPageEvidence | None = None
+        native_text_layer: dict[str, Any] | None = None
         if source_pdf_bytes is not None:
             report_progress(
                 stage="source",
-                message="Reading positioned text from the original PDF",
+                message="Detecting callouts in the original PDF text layer",
                 percent=2,
                 completed=0,
                 total=1,
-                operation_label="Native PDF evidence",
+                operation_label="Native PDF text-first detection",
             )
             try:
+                native_text_layer = text_layer_regions(
+                    source_pdf_bytes,
+                    page - 1,
+                    target_size=image.size,
+                )
                 native_evidence = extract_pdf_page_evidence(
                     source_pdf_bytes,
                     page_number=page,
                     target_size=image.size,
                 )
-            except (RuntimeError, ValueError, OSError) as error:
+                if not bool(native_text_layer.get("usable")):
+                    native_evidence = PdfPageEvidence.raster_fallback(
+                        page_number=page,
+                        target_size=image.size,
+                        error=str(
+                            native_text_layer.get("fallback_reason")
+                            or "PDF text layer is not trustworthy"
+                        ),
+                    )
+            except (ImportError, IndexError, RuntimeError, ValueError, OSError) as error:
+                native_text_layer = None
                 native_evidence = PdfPageEvidence.raster_fallback(
                     page_number=page,
                     target_size=image.size,
@@ -702,13 +766,17 @@ async def create_scan_job(
             report_progress(
                 stage="source",
                 message=(
-                    f"Prepared {len(native_evidence.spans)} native PDF text "
-                    f"spans ({native_evidence.profile} page)"
+                    (
+                        f"Detected {len(native_text_layer.get('regions', []))} "
+                        "native callouts before OCR"
+                    )
+                    if native_text_layer and native_text_layer.get("usable")
+                    else "PDF text is unavailable or untrusted; raster OCR will run"
                 ),
-                percent=2,
+                percent=6,
                 completed=1,
                 total=1,
-                operation_label="Native PDF evidence ready",
+                operation_label="PDF text-first stage complete",
             )
         elif source_pdf_error:
             native_evidence = PdfPageEvidence.raster_fallback(
@@ -720,7 +788,7 @@ async def create_scan_job(
         report_progress(
             stage="layout",
             message="Analysing page tables and processing panels",
-            percent=2,
+            percent=7 if source_pdf_bytes is not None else 2,
             completed=0,
             total=1,
             operation_label="Page layout analysis",
@@ -747,17 +815,74 @@ async def create_scan_job(
             overlay=initial_overlay,
         )
 
-        pipeline = get_pipeline()
         if scope_kind == "page":
-            seg = pipeline.segment_page(
-                image,
-                layout=layout,
-                debug_dump=req_dump,
-                debug_dump_force=req_force,
-                progress_callback=report_progress,
-                existing_value_boxes=saved_value_boxes,
-                native_evidence=native_evidence,
+            native_seg = (
+                native_text_segment_result(
+                    native_text_layer,
+                    page_number=page,
+                    scope_kind="page",
+                    table_masks=[box.to_dict() for box in layout.table_masks],
+                    existing_value_boxes=saved_value_boxes,
+                    source_profile=(
+                        native_evidence.profile_dict()
+                        if native_evidence is not None
+                        else None
+                    ),
+                )
+                if native_text_layer and native_text_layer.get("usable")
+                else None
             )
+            native_is_primary = bool(
+                native_seg
+                and native_evidence is not None
+                and native_evidence.profile == "vector"
+                and (
+                    int(native_seg["eligible_count"])
+                    + int(native_seg["review_count"])
+                    > 0
+                )
+            )
+            if native_is_primary:
+                seg = native_seg
+                report_progress(
+                    stage="finalizing",
+                    message=(
+                        f"Prepared {seg['eligible_count']} balloons directly "
+                        "from the PDF text layer; raster OCR was not required"
+                    ),
+                    percent=99,
+                    completed=int(seg["detected_count"]),
+                    total=int(seg["detected_count"]),
+                    candidate_count=int(seg["eligible_count"]),
+                    operation_label="Native PDF scan complete",
+                    overlay=layout.overlay(
+                        scope_kind="page",
+                        candidates=[
+                            {
+                                "id": outcome.get("candidate_id"),
+                                "bbox": outcome["bbox"],
+                                "state": outcome["state"],
+                                "text": outcome.get("text", ""),
+                                "reason": outcome.get("reason", ""),
+                                "rule": outcome.get("rule", ""),
+                            }
+                            for outcome in seg["candidate_outcomes"]
+                        ],
+                    ),
+                )
+            else:
+                pipeline = get_pipeline()
+                seg = pipeline.segment_page(
+                    image,
+                    layout=layout,
+                    debug_dump=req_dump,
+                    debug_dump_force=req_force,
+                    progress_callback=report_progress,
+                    existing_value_boxes=saved_value_boxes,
+                    native_evidence=native_evidence,
+                )
+                if native_seg is not None:
+                    seg = merge_native_and_ocr_results(native_seg, seg)
             seg["coordinate_space"] = "page"
         else:
             section_image, section_origin, _clipped_scope = crop_section(
@@ -779,6 +904,57 @@ async def create_scan_job(
                     and box["y"] < section_origin[1] + section_image.height
                 )
             ]
+            section_native_evidence = (
+                crop_pdf_page_evidence(
+                    native_evidence,
+                    {
+                        "x": section_origin[0],
+                        "y": section_origin[1],
+                        "width": section_image.width,
+                        "height": section_image.height,
+                    },
+                )
+                if native_evidence is not None
+                else None
+            )
+            section_text_layer = (
+                crop_text_layer_result(
+                    native_text_layer,
+                    {
+                        "x": section_origin[0],
+                        "y": section_origin[1],
+                        "width": section_image.width,
+                        "height": section_image.height,
+                    },
+                )
+                if native_text_layer and native_text_layer.get("usable")
+                else None
+            )
+            native_seg = (
+                native_text_segment_result(
+                    section_text_layer,
+                    page_number=page,
+                    scope_kind="section",
+                    existing_value_boxes=section_existing_boxes,
+                    source_profile=(
+                        section_native_evidence.profile_dict()
+                        if section_native_evidence is not None
+                        else None
+                    ),
+                )
+                if section_text_layer is not None
+                else None
+            )
+            native_is_primary = bool(
+                native_seg
+                and section_native_evidence is not None
+                and section_native_evidence.profile == "vector"
+                and (
+                    int(native_seg["eligible_count"])
+                    + int(native_seg["review_count"])
+                    > 0
+                )
+            )
 
             def report_section_progress(**event: Any) -> None:
                 # Keep the section detector/recognizer unchanged while fitting
@@ -789,33 +965,20 @@ async def create_scan_job(
                     percent=max(10, 10 + int(raw_percent * 0.88)),
                 )
 
-            # Both scopes run the same pipeline. Measured on the benchmark
-            # drawings at fixture resolution, the page route reads far more of
-            # the same sheet than the light section route does — 16/19 against
-            # 11/19 on 47630, 16/24 against 10/24 on 56103-0182B, 11/12 against
-            # 8/12 on BS1801006.020 — and it is the route that now matches or
-            # beats the pre-merge pipeline. A section scan is the same problem
-            # on a smaller image, so it gets the same treatment.
-            seg = pipeline.segment_page(
-                section_image,
-                debug_dump=req_dump,
-                debug_dump_force=req_force,
-                progress_callback=report_section_progress,
-                existing_value_boxes=section_existing_boxes,
-                native_evidence=(
-                    crop_pdf_page_evidence(
-                        native_evidence,
-                        {
-                            "x": section_origin[0],
-                            "y": section_origin[1],
-                            "width": section_image.width,
-                            "height": section_image.height,
-                        },
-                    )
-                    if native_evidence is not None
-                    else None
-                ),
-            )
+            if native_is_primary:
+                seg = native_seg
+            else:
+                pipeline = get_pipeline()
+                seg = pipeline.segment_page(
+                    section_image,
+                    debug_dump=req_dump,
+                    debug_dump_force=req_force,
+                    progress_callback=report_section_progress,
+                    existing_value_boxes=section_existing_boxes,
+                    native_evidence=section_native_evidence,
+                )
+                if native_seg is not None:
+                    seg = merge_native_and_ocr_results(native_seg, seg)
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
                 origin=section_origin,
