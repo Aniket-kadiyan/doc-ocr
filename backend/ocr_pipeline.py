@@ -2220,11 +2220,6 @@ class OcrPipeline:
             dedupe_regions,
             strip_foreign_glyphs,
         )
-        from engineering_object_assembly import (
-            assembly_statistics,
-            atomic_object_evidence,
-            plan_engineering_object_assemblies,
-        )
 
         cleaned: list[str] = []
         for line in lines:
@@ -5780,6 +5775,11 @@ class OcrPipeline:
             count_dimension_values,
             dedupe_regions,
             strip_foreign_glyphs,
+        )
+        from engineering_object_assembly import (
+            assembly_statistics,
+            atomic_object_evidence,
+            plan_engineering_object_assemblies,
         )
 
         def report(
