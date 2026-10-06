@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -31,6 +31,7 @@ class ChecksheetSnapshotItem(BaseModel):
     method: str = Field(default="", max_length=500)
     tool: str = Field(default="", max_length=500)
     dimension_type: str = Field(default="Unknown", max_length=100)
+    assembly: dict[str, Any] | None = None
 
 
 class ChecksheetScanCandidate(BaseModel):
@@ -57,6 +58,7 @@ class ChecksheetScanCandidate(BaseModel):
     rotation: float = 0
     recovery_attempted: bool = False
     authoritative_reread: bool = False
+    assembly: dict[str, Any] | None = None
     bbox: ChecksheetBBox
     oriented_box: ChecksheetOrientedBox | None = None
     duplicate_source_ids: list[str] = Field(default_factory=list, max_length=100)

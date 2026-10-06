@@ -773,6 +773,7 @@ def text_layer_regions(
     signal to fall back to a scan.
     """
     from dimension_compose import compose_engineering_dimension
+    from engineering_object_assembly import classify_assembly_role
     from feature_classifier import classify_feature
     from symbol_vision import DetectedSymbols
 
@@ -803,13 +804,53 @@ def text_layer_regions(
     regions: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     page_image: Any | None = None
-    for group in group_runs(runs, size):
+    for group_index, group in enumerate(group_runs(runs, size), start=1):
         raw = group["text"]
         composed = compose_engineering_dimension(raw, None, DetectedSymbols())
         text = (composed.text or "").strip() or raw.strip()
         bbox, oriented = _boxes_from_corners(group["corners"])
+        assembly_children = [
+            {
+                "candidate_id": (
+                    f"PDF:P{page_index + 1}:G{group_index:05d}:"
+                    f"R{run_index:03d}"
+                ),
+                "text": run.text,
+                "raw_text": run.text,
+                "bbox": {
+                    "x": round(run.x, 1),
+                    "y": round(run.y, 1),
+                    "width": round(run.width, 1),
+                    "height": round(run.height, 1),
+                },
+                "polygon": [],
+                "confidence": 0.995,
+                "orientation": (
+                    "horizontal"
+                    if abs(group["angle"]) < 1.0
+                    or abs(abs(group["angle"]) - 180.0) < 1.0
+                    else "vertical"
+                ),
+                "rotation": float(group["angle"]),
+                "role": classify_assembly_role(run.text),
+                "recognition_source": "native_pdf",
+                "recognition_evidence": {},
+                "source_conflict": False,
+            }
+            for run_index, run in enumerate(group["runs"], start=1)
+        ]
+        assembly_fields = {
+            "object_id": f"PDF:P{page_index + 1}:G{group_index:05d}",
+            "assembly_id": f"PDF:P{page_index + 1}:G{group_index:05d}",
+            "assembly_rule": (
+                "native_pdf_runs" if len(assembly_children) > 1 else "atomic"
+            ),
+            "assembly_conflict": False,
+            "assembly_review_reason": "",
+            "assembly_children": assembly_children,
+        }
         if not any(character.isdigit() for character in text):
-            excluded.append({"text": text, "bbox": bbox})
+            excluded.append({"text": text, "bbox": bbox, **assembly_fields})
             continue
         # Recovery runs BEFORE the gate: a position tolerance reads "2 A B C"
         # until its Ø is found, and a lone digit does not earn a balloon.
@@ -848,7 +889,7 @@ def text_layer_regions(
                         ]
                     )
         if not is_callout(text):
-            excluded.append({"text": text, "bbox": bbox})
+            excluded.append({"text": text, "bbox": bbox, **assembly_fields})
             continue
         review = is_bare_number(text)
         if review and recover_symbols:
@@ -893,6 +934,7 @@ def text_layer_regions(
         feature = classify_feature(text)
         upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
         region = {
+            **assembly_fields,
             "bbox": bbox,
             "text": text,
             "confidence": 0.995,

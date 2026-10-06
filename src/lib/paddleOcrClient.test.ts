@@ -250,4 +250,54 @@ describe("scan result coordinate mapping", () => {
       nativeBBox: { x: 260, y: 480, width: 140, height: 28 },
     });
   });
+
+  it("maps every child detection retained by an assembled object", () => {
+    const [mapped] = mapSegmentCandidateOutcomes(
+      [
+        {
+          candidate_id: "C0002",
+          object_id: "C0002",
+          bbox: { x: 20, y: 40, width: 180, height: 40 },
+          state: "review",
+          text: "4X Ø10 THRU",
+          reason: "Confirm assembled callout",
+          assembly_id: "C0002",
+          assembly_rule: "inline_prefix+inline_suffix",
+          assembly_conflict: false,
+          assembly_children: [
+            {
+              candidate_id: "C0001",
+              text: "4X",
+              bbox: { x: 20, y: 40, width: 30, height: 24 },
+              confidence: 0.91,
+              role: "multiplier",
+            },
+            {
+              candidate_id: "C0002",
+              text: "Ø10",
+              bbox: { x: 60, y: 40, width: 50, height: 24 },
+              confidence: 0.96,
+              role: "base",
+            },
+          ],
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      2,
+      "page"
+    );
+
+    expect(mapped.assembly).toMatchObject({
+      objectId: "C0002",
+      rule: "inline_prefix+inline_suffix",
+      conflict: false,
+    });
+    expect(mapped.assembly?.children).toHaveLength(2);
+    expect(mapped.assembly?.children[0].bbox).toEqual({
+      x: 10,
+      y: 20,
+      width: 15,
+      height: 12,
+    });
+  });
 });

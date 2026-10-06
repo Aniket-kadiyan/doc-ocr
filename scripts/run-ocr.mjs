@@ -3,8 +3,8 @@
  * Cross-platform launcher for the PaddleOCR backend.
  *
  * Picks the correct venv Python for the current OS:
- *   - Windows: backend\.venv\Scripts\python.exe
- *   - macOS/Linux: backend/.venv/bin/python
+ *   - Windows: backend\.venv-gpu (preferred), then backend\.venv
+ *   - macOS/Linux: backend/.venv-gpu (preferred), then backend/.venv
  * then runs `python main.py` from inside backend/ (so uvicorn's reloader can
  * import "main:app"). The backend loads .env.local / .env itself via
  * config_env.load_env_files(), so no dotenv wrapper is needed here.
@@ -24,21 +24,28 @@ const repoRoot = join(__dirname, "..");
 const backendDir = join(repoRoot, "backend");
 const isWin = process.platform === "win32";
 
-const venvPython = isWin
-  ? join(backendDir, ".venv", "Scripts", "python.exe")
-  : join(backendDir, ".venv", "bin", "python");
+const venvCandidates = isWin
+  ? [
+      join(backendDir, ".venv-gpu", "Scripts", "python.exe"),
+      join(backendDir, ".venv", "Scripts", "python.exe"),
+    ]
+  : [
+      join(backendDir, ".venv-gpu", "bin", "python"),
+      join(backendDir, ".venv", "bin", "python"),
+    ];
+const venvPython = venvCandidates.find(existsSync);
 
 let python = venvPython;
-if (!existsSync(venvPython)) {
+if (!venvPython) {
   // No venv yet — fall back to a system interpreter and warn loudly.
   python = isWin ? "py" : "python3";
   console.warn(
-    `\n[run-ocr] No virtualenv found at ${venvPython}\n` +
+    `\n[run-ocr] No backend virtualenv found.\n` +
       `[run-ocr] Falling back to system "${python}". Create the venv first:\n` +
       (isWin
         ? `           cd backend\n` +
-          `           py -m venv .venv\n` +
-          `           .venv\\Scripts\\python -m pip install -r requirements.txt\n\n`
+          `           py -m venv .venv-gpu\n` +
+          `           .venv-gpu\\Scripts\\python -m pip install -r requirements-gpu.txt\n\n`
         : `           cd backend\n` +
           `           python3 -m venv .venv\n` +
           `           .venv/bin/python -m pip install -r requirements.txt\n\n`)

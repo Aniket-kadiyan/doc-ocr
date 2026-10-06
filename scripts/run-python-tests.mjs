@@ -9,10 +9,17 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
 const backendDir = join(repoRoot, "backend");
 const isWindows = process.platform === "win32";
-const virtualenvPython = isWindows
-  ? join(backendDir, ".venv", "Scripts", "python.exe")
-  : join(backendDir, ".venv", "bin", "python");
-const python = existsSync(virtualenvPython)
+const virtualenvCandidates = isWindows
+  ? [
+      join(backendDir, ".venv-gpu", "Scripts", "python.exe"),
+      join(backendDir, ".venv", "Scripts", "python.exe"),
+    ]
+  : [
+      join(backendDir, ".venv-gpu", "bin", "python"),
+      join(backendDir, ".venv", "bin", "python"),
+    ];
+const virtualenvPython = virtualenvCandidates.find(existsSync);
+const python = virtualenvPython
   ? virtualenvPython
   : isWindows
     ? "py"
@@ -23,6 +30,7 @@ const fastTests = [
   "backend/test_checksheet_converter.py",
   "backend/test_checksheet_storage.py",
   "backend/test_detection_passes.py",
+  "backend/test_engineering_object_assembly.py",
   "backend/test_page_layout.py",
   "backend/test_page_candidate_recovery.py",
   "backend/test_pdf_evidence.py",
@@ -35,6 +43,7 @@ const fastTests = [
   "backend/test_scan_progress.py",
   "backend/test_segment_quality.py",
   "backend/test_source_images.py",
+  "backend/test_ocr_runtime.py",
   "tools/balloon_builder/test_balloon_builder.py",
 ];
 
@@ -44,7 +53,7 @@ const pythonPath = [backendDir, repoRoot, existingPythonPath]
   .filter(Boolean)
   .join(delimiter);
 
-if (!existsSync(virtualenvPython)) {
+if (!virtualenvPython) {
   console.warn(
     `[python-tests] No backend virtualenv found; falling back to ${python}.\n` +
       "[python-tests] Install backend/requirements-dev.txt for the complete test environment."

@@ -381,6 +381,13 @@ export function Sidebar({
                                   ? ` · ${candidate.reason}`
                                   : ""}
                               </span>
+                              {(candidate.assembly?.children.length ?? 0) > 1 && (
+                                <span className="mt-1 block text-[10px] text-slate-500">
+                                  Assembled from {candidate.assembly?.children.length} detections: {candidate.assembly?.children
+                                    .map((child) => child.text || child.rawText || "unread")
+                                    .join(" · ")}
+                                </span>
+                              )}
                             </span>
                           </span>
                         </button>
@@ -428,6 +435,13 @@ export function Sidebar({
                             {candidate.rule ? ` · ${candidate.rule}` : ""}
                             {candidate.reason ? ` · ${candidate.reason}` : ""}
                           </span>
+                          {(candidate.assembly?.children.length ?? 0) > 1 && (
+                            <span className="mt-1 block text-[10px] text-slate-500">
+                              Assembled from {candidate.assembly?.children.length} detections: {candidate.assembly?.children
+                                .map((child) => child.text || child.rawText || "unread")
+                                .join(" · ")}
+                            </span>
+                          )}
                         </button>
                       </li>
                     );

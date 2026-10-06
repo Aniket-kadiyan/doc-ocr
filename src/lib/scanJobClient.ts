@@ -103,6 +103,7 @@ export interface ScanJobResult {
   filterRuleCounts: Record<string, number>;
   sourceProfile?: ApiSegmentResponse["source_profile"];
   recognitionSourceCounts: Record<string, number>;
+  assemblyStats: NonNullable<ApiSegmentResponse["assembly_stats"]>;
 }
 
 export class ScanJobCancelledError extends Error {
@@ -417,5 +418,6 @@ export async function runScanJob({
     sourceProfile: snapshot.result.source_profile,
     recognitionSourceCounts:
       snapshot.result.recognition_source_counts ?? {},
+    assemblyStats: snapshot.result.assembly_stats ?? {},
   };
 }

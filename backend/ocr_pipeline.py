@@ -2220,6 +2220,11 @@ class OcrPipeline:
             dedupe_regions,
             strip_foreign_glyphs,
         )
+        from engineering_object_assembly import (
+            assembly_statistics,
+            atomic_object_evidence,
+            plan_engineering_object_assemblies,
+        )
 
         cleaned: list[str] = []
         for line in lines:
@@ -4883,6 +4888,7 @@ class OcrPipeline:
             evaluate_scan_value,
             normalize_page_value_text,
         )
+        from engineering_object_assembly import classify_assembly_role
 
         def report(
             *,
@@ -5169,6 +5175,54 @@ class OcrPipeline:
                 )
             ]
         skipped_existing_count = clusters_before_existing - len(clusters)
+
+        def cluster_children(
+            cluster: Sequence[Mapping[str, Any]],
+            *,
+            cluster_index: int,
+        ) -> list[dict[str, Any]]:
+            """Serialize every detector fragment owned by a section object."""
+
+            children: list[dict[str, Any]] = []
+            for child_index, box in enumerate(cluster, start=1):
+                bbox = {
+                    "x": round(float(box.get("x", 0.0)), 1),
+                    "y": round(float(box.get("y", 0.0)), 1),
+                    "width": round(float(box.get("w", 0.0)), 1),
+                    "height": round(float(box.get("h", 0.0)), 1),
+                }
+                text = str(box.get("text") or "")
+                children.append(
+                    {
+                        "candidate_id": (
+                            f"SECTION:{cluster_index:04d}:D{child_index:03d}"
+                        ),
+                        "text": text,
+                        "raw_text": text,
+                        "bbox": bbox,
+                        "polygon": [
+                            [bbox["x"], bbox["y"]],
+                            [bbox["x"] + bbox["width"], bbox["y"]],
+                            [
+                                bbox["x"] + bbox["width"],
+                                bbox["y"] + bbox["height"],
+                            ],
+                            [bbox["x"], bbox["y"] + bbox["height"]],
+                        ],
+                        "confidence": float(box.get("conf") or 0.0),
+                        "orientation": (
+                            "vertical"
+                            if bbox["height"] > 1.35 * max(bbox["width"], 1.0)
+                            else "horizontal"
+                        ),
+                        "rotation": 0.0,
+                        "role": classify_assembly_role(text),
+                        "recognition_source": "ocr",
+                        "recognition_evidence": {},
+                        "source_conflict": False,
+                    }
+                )
+            return children
         report(
             stage="grouping",
             message=(
@@ -5195,8 +5249,12 @@ class OcrPipeline:
 
         if detection_only:
             detected_regions: list[dict[str, Any]] = []
-            for cluster in clusters:
+            for cluster_index, cluster in enumerate(clusters, start=1):
                 ub = union_bbox(cluster)
+                children = cluster_children(
+                    cluster,
+                    cluster_index=cluster_index,
+                )
                 detected_regions.append(
                     {
                         "bbox": {
@@ -5212,6 +5270,16 @@ class OcrPipeline:
                             ),
                             default=0.0,
                         ),
+                        "object_id": f"SECTION:{cluster_index:04d}",
+                        "assembly_id": f"SECTION:{cluster_index:04d}",
+                        "assembly_rule": (
+                            "section_geometry_cluster"
+                            if len(children) > 1
+                            else "atomic"
+                        ),
+                        "assembly_conflict": False,
+                        "assembly_review_reason": "",
+                        "assembly_children": children,
                     }
                 )
             return {
@@ -5236,6 +5304,10 @@ class OcrPipeline:
                 candidate_count=cluster_total,
             )
             ub = union_bbox(cluster)
+            children = cluster_children(
+                cluster,
+                cluster_index=cluster_index,
+            )
             cx0 = max(0, int(ub["x"] - margin))
             cy0 = max(0, int(ub["y"] - margin))
             cx1 = min(iw, int(ub["x"] + ub["width"] + margin))
@@ -5296,9 +5368,18 @@ class OcrPipeline:
                     limit_res["category"], limit_res["subtype"], limit_res["label"] = (
                         feature.category, feature.subtype, feature.label,
                     )
-                    regions.append(
-                        self._region_from_result(limit_res, limit["bbox"], limit["text"])
+                    limit_region = self._region_from_result(
+                        limit_res, limit["bbox"], limit["text"]
                     )
+                    limit_region.update(
+                        {
+                            "assembly_rule": "section_limit_stack",
+                            "assembly_conflict": False,
+                            "assembly_review_reason": "",
+                            "assembly_children": children,
+                        }
+                    )
+                    regions.append(limit_region)
                     continue
             if multivalue or multirow:
                 split_regions = self._split_stacked_cluster(
@@ -5335,6 +5416,14 @@ class OcrPipeline:
                     "agreement": res.get("agreement", 0.0),
                     "engine": res.get("engine", "paddleocr"),
                     "symbols_detected": res.get("symbols_detected"),
+                    "assembly_rule": (
+                        "section_geometry_cluster"
+                        if len(children) > 1
+                        else "atomic"
+                    ),
+                    "assembly_conflict": False,
+                    "assembly_review_reason": "",
+                    "assembly_children": children,
                 }
             )
 
@@ -5383,6 +5472,44 @@ class OcrPipeline:
             classified_region = {**region, "text": text}
             self._apply_feature_labels(classified_region)
             candidate_id = f"S{candidate_index:04d}"
+            assembly_children = list(region.get("assembly_children") or ())
+            if not assembly_children:
+                assembly_children = [
+                    {
+                        "candidate_id": candidate_id,
+                        "text": text,
+                        "raw_text": str(
+                            region.get("raw_ocr") or region.get("text") or ""
+                        ),
+                        "bbox": dict(region["bbox"]),
+                        "polygon": [],
+                        "confidence": float(region.get("confidence") or 0.0),
+                        "orientation": region.get("orientation", "horizontal"),
+                        "rotation": float(region.get("rotation") or 0.0),
+                        "role": classify_assembly_role(text),
+                        "recognition_source": str(
+                            region.get("recognition_source") or "ocr"
+                        ),
+                        "recognition_evidence": dict(
+                            region.get("recognition_evidence") or {}
+                        ),
+                        "source_conflict": bool(region.get("source_conflict")),
+                    }
+                ]
+            classified_region.update(
+                {
+                    "object_id": candidate_id,
+                    "assembly_id": candidate_id,
+                    "assembly_rule": region.get("assembly_rule", "atomic"),
+                    "assembly_conflict": bool(
+                        region.get("assembly_conflict")
+                    ),
+                    "assembly_review_reason": str(
+                        region.get("assembly_review_reason") or ""
+                    ),
+                    "assembly_children": assembly_children,
+                }
+            )
             decision = evaluate_scan_value(
                 PageValueCandidate(text=text, bbox=region["bbox"]),
                 scope_kind="section",
@@ -5396,6 +5523,7 @@ class OcrPipeline:
             candidate_outcomes.append(
                 {
                     "candidate_id": candidate_id,
+                    "object_id": candidate_id,
                     "bbox": dict(region["bbox"]),
                     "state": state,
                     "text": text,
@@ -5420,6 +5548,19 @@ class OcrPipeline:
                     "authoritative_reread": bool(
                         region.get("authoritative_reread")
                     ),
+                    "assembly_id": candidate_id,
+                    "assembly_rule": classified_region.get(
+                        "assembly_rule", "atomic"
+                    ),
+                    "assembly_conflict": bool(
+                        classified_region.get("assembly_conflict")
+                    ),
+                    "assembly_review_reason": str(
+                        classified_region.get("assembly_review_reason") or ""
+                    ),
+                    "assembly_children": [
+                        dict(child) for child in assembly_children
+                    ],
                 }
             )
             if decision.accepted:
@@ -5458,6 +5599,19 @@ class OcrPipeline:
             "unread_count": max(0, cluster_total - recognized_count),
             "skipped_existing_count": skipped_existing_count,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
+            "assembly_stats": {
+                "atomic_detection_count": sum(len(cluster) for cluster in clusters),
+                "object_count": cluster_total,
+                "assembled_object_count": sum(
+                    1 for cluster in clusters if len(cluster) > 1
+                ),
+                "absorbed_fragment_count": max(
+                    0,
+                    sum(len(cluster) for cluster in clusters) - cluster_total,
+                ),
+                "conflict_count": 0,
+                "rule_counts": {},
+            },
             "regions": regions,
             "review_candidates": [],
             "candidate_outcomes": candidate_outcomes,
@@ -6672,6 +6826,141 @@ class OcrPipeline:
             record["text"] = normalized_text
             record["recognized"] = bool(record["text"])
 
+        # The detector deliberately returns atomic text boxes.  Build the
+        # engineering objects a balloon actually belongs to before context
+        # filtering and target-locked OCR: the final reread then sees the
+        # union crop for ``4X`` + ``Ø10`` + ``THRU`` or a nominal with its
+        # stacked deviations.  Every absorbed box remains on the object as
+        # serializable child evidence; nothing disappears from the audit
+        # trail merely because it was assembled.
+        atomic_detection_count = len(ocr_records)
+        assembly_plans = plan_engineering_object_assemblies(ocr_records)
+        plans_by_first = {
+            min(plan.member_indexes): plan for plan in assembly_plans
+        }
+        absorbed_indexes = {
+            index
+            for plan in assembly_plans
+            for index in plan.member_indexes
+        }
+        assembled_records: list[dict[str, Any]] = []
+        from dataclasses import replace
+
+        for record_index, record in enumerate(ocr_records):
+            plan = plans_by_first.get(record_index)
+            if plan is None:
+                if record_index in absorbed_indexes:
+                    continue
+                atomic = dict(record)
+                atomic["object_id"] = str(record.get("candidate_id") or "")
+                atomic["assembly_id"] = atomic["object_id"]
+                atomic["assembly_rule"] = "atomic"
+                atomic["assembly_conflict"] = bool(
+                    (record.get("result") or {}).get("source_conflict")
+                )
+                atomic["assembly_review_reason"] = ""
+                atomic["assembly_children"] = [atomic_object_evidence(record)]
+                assembled_records.append(atomic)
+                continue
+
+            members = [ocr_records[index] for index in plan.member_indexes]
+            anchor = dict(ocr_records[plan.anchor_index])
+            anchor_candidate = anchor["candidate"]
+            merged_candidate = replace(
+                anchor_candidate,
+                bbox=dict(plan.bbox),
+                polygon=tuple(plan.polygon),
+                candidate_id=plan.object_id,
+                boundary_review=any(
+                    bool(member["candidate"].boundary_review)
+                    for member in members
+                ),
+                detection_confidence=max(
+                    float(member["candidate"].detection_confidence)
+                    for member in members
+                ),
+            )
+            merged_result = dict(anchor.get("result") or {})
+            merged_result.update(
+                {
+                    "text": plan.text,
+                    "raw_ocr": " ".join(
+                        str(
+                            (member.get("result") or {}).get("raw_ocr")
+                            or (member.get("result") or {}).get("text")
+                            or member.get("text")
+                            or ""
+                        ).strip()
+                        for member in members
+                        if str(
+                            (member.get("result") or {}).get("raw_ocr")
+                            or (member.get("result") or {}).get("text")
+                            or member.get("text")
+                            or ""
+                        ).strip()
+                    ),
+                    "confidence": plan.confidence,
+                    "orientation": plan.orientation,
+                    "rotation": plan.rotation,
+                    "needs_review": plan.needs_review,
+                    "review_reason": plan.review_reason,
+                    "source_conflict": plan.conflict,
+                    "recognition_source": plan.recognition_source,
+                    "recognition_evidence": dict(plan.recognition_evidence),
+                    "ocr_profile": "engineering_object_assembly",
+                }
+            )
+            all_native = bool(members) and all(
+                bool(member.get("native_authoritative")) for member in members
+            )
+            assembled_records.append(
+                {
+                    **anchor,
+                    "candidate": merged_candidate,
+                    "candidate_id": plan.object_id,
+                    "object_id": plan.object_id,
+                    "bbox": dict(plan.bbox),
+                    "polygon": [list(point) for point in plan.polygon],
+                    "text": plan.text,
+                    "result": merged_result,
+                    "recognized": bool(plan.text),
+                    "context_text": "",
+                    "table_excluded": False,
+                    # A multi-fragment match has its own aggregated source
+                    # evidence.  Reusing one child's native match would fuse
+                    # the full-object reread against only that child.
+                    "native_match": None,
+                    "native_authoritative": all_native,
+                    "assembly_id": plan.object_id,
+                    "assembly_rule": plan.rule,
+                    "assembly_conflict": plan.conflict,
+                    "assembly_review_reason": plan.review_reason,
+                    "assembly_children": [dict(child) for child in plan.children],
+                }
+            )
+
+        ocr_records = assembled_records
+        detected_count = len(ocr_records)
+        assembly_stats = assembly_statistics(
+            atomic_detection_count,
+            detected_count,
+            assembly_plans,
+        )
+        report(
+            stage="assembling",
+            message=(
+                f"Built {detected_count} engineering objects from "
+                f"{atomic_detection_count} atomic detections; preserved "
+                f"{assembly_stats['absorbed_fragment_count']} absorbed fragments"
+            ),
+            percent=89,
+            completed=detected_count,
+            total=detected_count,
+            object_total=detected_count,
+            operation_label="Engineering-object assembly",
+            candidate_count=detected_count,
+        )
+
         context_indexes = [
             index
             for index, record in enumerate(ocr_records)
@@ -6813,6 +7102,13 @@ class OcrPipeline:
             review_reason = str(result.get("review_reason") or "").strip()
             if decision.rule_name in hard_exclusion_rules:
                 return "excluded", decision.reason
+
+            if record.get("assembly_conflict"):
+                return (
+                    "review",
+                    str(record.get("assembly_review_reason") or "")
+                    or "Assembled fragments contain conflicting recognition evidence",
+                )
 
 
             if not record["recognized"]:
@@ -7204,6 +7500,7 @@ class OcrPipeline:
 
             common_region = {
                 "candidate_id": record["candidate_id"],
+                "object_id": record.get("object_id", record["candidate_id"]),
                 "bbox": record["bbox"],
                 "text": published_text,
                 "confidence": result.get("confidence", 0.0),
@@ -7235,6 +7532,15 @@ class OcrPipeline:
                     result.get("recognition_evidence") or {}
                 ),
                 "source_conflict": bool(result.get("source_conflict")),
+                "assembly_id": record.get("assembly_id", record["candidate_id"]),
+                "assembly_rule": record.get("assembly_rule", "atomic"),
+                "assembly_conflict": bool(record.get("assembly_conflict")),
+                "assembly_review_reason": str(
+                    record.get("assembly_review_reason") or ""
+                ),
+                "assembly_children": [
+                    dict(child) for child in record.get("assembly_children", ())
+                ],
             }
             oriented_box = result.get("oriented_box") or record.get(
                 "oriented_box"
@@ -7263,6 +7569,7 @@ class OcrPipeline:
 
             outcome = {
                 "candidate_id": record["candidate_id"],
+                "object_id": record.get("object_id", record["candidate_id"]),
                 "bbox": dict(record["bbox"]),
                 "polygon": [list(point) for point in candidate.polygon],
                 "state": final_state,
@@ -7301,6 +7608,15 @@ class OcrPipeline:
                     result.get("recognition_evidence") or {}
                 ),
                 "source_conflict": bool(result.get("source_conflict")),
+                "assembly_id": record.get("assembly_id", record["candidate_id"]),
+                "assembly_rule": record.get("assembly_rule", "atomic"),
+                "assembly_conflict": bool(record.get("assembly_conflict")),
+                "assembly_review_reason": str(
+                    record.get("assembly_review_reason") or ""
+                ),
+                "assembly_children": [
+                    dict(child) for child in record.get("assembly_children", ())
+                ],
             }
             candidate_outcomes.append(outcome)
             filtered_overlay_candidates.append(
@@ -7698,6 +8014,7 @@ class OcrPipeline:
             "recognition_source_counts": dict(
                 sorted(recognition_source_counts.items())
             ),
+            "assembly_stats": assembly_stats,
             "regions": regions,
             "review_candidates": review_candidates,
             "candidate_outcomes": candidate_outcomes,

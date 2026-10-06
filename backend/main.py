@@ -430,6 +430,7 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
                 seg.get("recognition_source_counts", {})
             ).items()
         },
+        "assembly_stats": dict(seg.get("assembly_stats", {})),
         "regions": regions,
         "review_candidates": review_candidates,
         "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
@@ -446,16 +447,53 @@ def _map_section_result_to_page(
     origin_x, origin_y = origin
 
     def map_evidence(item: dict[str, Any]) -> dict[str, Any]:
-        """Translate the native provenance box with its visible candidate."""
+        """Translate provenance and child detections with the visible object."""
 
-        evidence = item.get("recognition_evidence")
+        mapped = item
+        children = item.get("assembly_children")
+        if isinstance(children, list):
+            mapped_children: list[dict[str, Any]] = []
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                mapped_child = dict(child)
+                child_bbox = child.get("bbox")
+                if isinstance(child_bbox, dict):
+                    mapped_child["bbox"] = {
+                        "x": round(
+                            origin_x + float(child_bbox.get("x", 0.0)), 1
+                        ),
+                        "y": round(
+                            origin_y + float(child_bbox.get("y", 0.0)), 1
+                        ),
+                        "width": round(
+                            float(child_bbox.get("width", 0.0)), 1
+                        ),
+                        "height": round(
+                            float(child_bbox.get("height", 0.0)), 1
+                        ),
+                    }
+                polygon = child.get("polygon")
+                if isinstance(polygon, list):
+                    mapped_child["polygon"] = [
+                        [
+                            round(origin_x + float(point[0]), 1),
+                            round(origin_y + float(point[1]), 1),
+                        ]
+                        for point in polygon
+                        if isinstance(point, (list, tuple)) and len(point) >= 2
+                    ]
+                mapped_children.append(mapped_child)
+            mapped = {**mapped, "assembly_children": mapped_children}
+
+        evidence = mapped.get("recognition_evidence")
         if not isinstance(evidence, dict):
-            return item
+            return mapped
         native_bbox = evidence.get("native_bbox")
         if not isinstance(native_bbox, dict):
-            return item
+            return mapped
         return {
-            **item,
+            **mapped,
             "recognition_evidence": {
                 **evidence,
                 "native_bbox": {

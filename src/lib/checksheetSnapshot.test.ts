@@ -29,6 +29,24 @@ const otherCandidate: ScanCandidate = {
   rule: "title_block",
   orientation: "horizontal",
   rotation: 0,
+  assembly: {
+    objectId: "C0012",
+    assemblyId: "C0012",
+    rule: "inline_suffix",
+    conflict: false,
+    children: [
+      {
+        candidateId: "C0012",
+        text: "REV",
+        rawText: "REV",
+        bbox: { x: 90, y: 120, width: 20, height: 10 },
+        confidence: 0.72,
+        orientation: "horizontal",
+        rotation: 0,
+        role: "other",
+      },
+    ],
+  },
   valueBox: { x: 90, y: 120, width: 40, height: 10 },
   duplicateCount: 1,
   duplicateSourceIds: ["C0012", "C0013"],
@@ -98,6 +116,7 @@ describe("checksheet creation snapshot", () => {
       raw_text: "REV B",
       bbox: otherCandidate.valueBox,
       duplicate_count: 1,
+      assembly: otherCandidate.assembly,
     });
     expect(JSON.stringify(creation.payload.items)).not.toContain("candidate-1");
   });

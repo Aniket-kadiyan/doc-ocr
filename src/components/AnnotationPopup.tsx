@@ -93,6 +93,7 @@ export function AnnotationPopup({
       kind: "dimension",
       needsReview: isScanCandidate ? false : needsReview,
       recognitionEvidence: pending.ocrResult.recognitionEvidence,
+      assembly: pending.ocrResult.assembly,
       range: range.trim() || undefined,
     };
     addAnnotation(annotation);

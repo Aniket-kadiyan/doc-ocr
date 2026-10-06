@@ -1,6 +1,7 @@
 import type {
   BBox,
   DimensionType,
+  EngineeringObjectAssembly,
   RecognitionEvidence,
 } from "@/types/annotation";
 
@@ -44,6 +45,8 @@ export interface ScanCandidate {
   authoritativeReread?: boolean;
   /** Native-PDF/OCR readings retained while this object awaits disposition. */
   recognitionEvidence?: RecognitionEvidence;
+  /** Primitive detector evidence retained on the logical review object. */
+  assembly?: EngineeringObjectAssembly;
   valueBox: BBox;
   orientedBox?: BBox & { rotation: number };
   /** Audit trail for geometry-equivalent reads merged during rescans. */

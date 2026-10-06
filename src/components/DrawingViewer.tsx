@@ -946,6 +946,7 @@ export function DrawingViewer() {
               kind: "dimension",
               needsReview: r.needsReview || !r.recognized,
               recognitionEvidence: r.recognitionEvidence,
+              assembly: r.assembly,
               range: deriveRange(cleanValue) || undefined,
             };
           });
@@ -988,6 +989,7 @@ export function DrawingViewer() {
           recoveryAttempted: candidate.recoveryAttempted,
           authoritativeReread: candidate.authoritativeReread,
           recognitionEvidence: candidate.recognitionEvidence,
+          assembly: candidate.assembly,
           valueBox: candidate.valueBox,
           orientedBox: candidate.orientedBox,
           createdAt: now,
@@ -1296,6 +1298,7 @@ export function DrawingViewer() {
           label: candidate.label,
           valueBox: candidate.valueBox,
           recognitionEvidence: candidate.recognitionEvidence,
+          assembly: candidate.assembly,
         },
       });
     },

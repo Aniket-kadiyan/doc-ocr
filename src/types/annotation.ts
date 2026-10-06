@@ -73,6 +73,32 @@ export interface RecognitionEvidence {
   nativeBBox?: BBox;
 }
 
+/** One primitive text detection retained inside an assembled callout. */
+export interface EngineeringObjectChildEvidence {
+  candidateId: string;
+  text: string;
+  rawText: string;
+  bbox: BBox;
+  polygon?: Array<[number, number]>;
+  confidence: number;
+  orientation: "horizontal" | "vertical" | "rotated";
+  rotation: number;
+  role: string;
+  recognitionSource?: RecognitionSource;
+  recognitionEvidence?: RecognitionEvidence;
+  sourceConflict?: boolean;
+}
+
+/** Lossless evidence describing how primitive detections formed one object. */
+export interface EngineeringObjectAssembly {
+  objectId: string;
+  assemblyId: string;
+  rule: string;
+  conflict: boolean;
+  reviewReason?: string;
+  children: EngineeringObjectChildEvidence[];
+}
+
 /** Legacy label metadata retained only so older saved projects can be read. */
 export type LabelSource = "manual" | "ocr";
 
@@ -117,6 +143,8 @@ export interface Annotation {
   needsReview?: boolean;
   /** Native-PDF/OCR readings and the source selected for this value. */
   recognitionEvidence?: RecognitionEvidence;
+  /** Primitive detections retained when this value was assembled. */
+  assembly?: EngineeringObjectAssembly;
   /** Presentation-only per-balloon visibility. Hidden values remain numbered,
    * persisted, exported, and active for duplicate prevention. */
   hidden?: boolean;
@@ -160,6 +188,7 @@ export interface OCRResult {
   needsReview?: boolean;
   /** Native-PDF/OCR readings and the source selected for this value. */
   recognitionEvidence?: RecognitionEvidence;
+  assembly?: EngineeringObjectAssembly;
   /** Rule-engine classification returned by manual region OCR. */
   category?: string;
   subtype?: string;

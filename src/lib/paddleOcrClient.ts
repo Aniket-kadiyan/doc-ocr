@@ -1,5 +1,6 @@
 import type {
   BBox,
+  EngineeringObjectAssembly,
   OCRResult,
   RecognitionEvidence,
   RecognitionSource,
@@ -156,6 +157,8 @@ export interface SegmentRegion {
   recognitionEvidence?: RecognitionEvidence;
   /** True when native PDF text and final OCR disagree. */
   sourceConflict?: boolean;
+  /** Lossless primitive detections used to build this logical object. */
+  assembly?: EngineeringObjectAssembly;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
   /**
@@ -168,6 +171,7 @@ export interface SegmentRegion {
 
 export interface ApiSegmentRegion {
   candidate_id?: string;
+  object_id?: string;
   bbox: { x: number; y: number; width: number; height: number };
   text: string;
   confidence: number;
@@ -208,6 +212,26 @@ export interface ApiSegmentRegion {
     native_bbox?: BBox;
   };
   source_conflict?: boolean;
+  assembly_id?: string;
+  assembly_rule?: string;
+  assembly_conflict?: boolean;
+  assembly_review_reason?: string;
+  assembly_children?: ApiAssemblyChild[];
+}
+
+export interface ApiAssemblyChild {
+  candidate_id?: string;
+  text?: string;
+  raw_text?: string;
+  bbox: BBox;
+  polygon?: number[][];
+  confidence?: number;
+  orientation?: "horizontal" | "vertical" | "rotated";
+  rotation?: number;
+  role?: string;
+  recognition_source?: RecognitionSource;
+  recognition_evidence?: ApiSegmentRegion["recognition_evidence"];
+  source_conflict?: boolean;
 }
 
 export interface ApiSegmentResponse {
@@ -229,6 +253,14 @@ export interface ApiSegmentResponse {
     fallback_reason?: string;
   };
   recognition_source_counts?: Record<string, number>;
+  assembly_stats?: {
+    atomic_detection_count?: number;
+    object_count?: number;
+    assembled_object_count?: number;
+    absorbed_fragment_count?: number;
+    conflict_count?: number;
+    rule_counts?: Record<string, number>;
+  };
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
   candidate_outcomes?: ApiCandidateOutcome[];
@@ -236,6 +268,7 @@ export interface ApiSegmentResponse {
 
 export interface ApiCandidateOutcome {
   candidate_id?: string;
+  object_id?: string;
   bbox: BBox;
   state: "eligible" | "excluded" | "review";
   text?: string;
@@ -266,6 +299,11 @@ export interface ApiCandidateOutcome {
     native_bbox?: BBox;
   };
   source_conflict?: boolean;
+  assembly_id?: string;
+  assembly_rule?: string;
+  assembly_conflict?: boolean;
+  assembly_review_reason?: string;
+  assembly_children?: ApiAssemblyChild[];
 }
 
 export interface SegmentCandidateOutcome extends SegmentRegion {
@@ -280,7 +318,9 @@ export interface SegmentCandidateOutcome extends SegmentRegion {
 function mappedSegmentRegion(
   r: ApiSegmentRegion,
   valueBox: BBox,
-  orientedBox?: BBox & { rotation: number }
+  orientedBox?: BBox & { rotation: number },
+  mapBBox: (bbox: BBox) => BBox = (bbox) => bbox,
+  mapPoint: (point: [number, number]) => [number, number] = (point) => point
 ): SegmentRegion {
   const evidence = r.recognition_evidence;
   const recognitionEvidence: RecognitionEvidence | undefined = evidence
@@ -296,6 +336,52 @@ function mappedSegmentRegion(
         nativeBBox: evidence.native_bbox,
       }
     : undefined;
+  const assembly: EngineeringObjectAssembly | undefined =
+    r.assembly_id || r.object_id || r.assembly_children?.length
+      ? {
+          objectId: r.object_id ?? r.candidate_id ?? r.assembly_id ?? "",
+          assemblyId: r.assembly_id ?? r.object_id ?? r.candidate_id ?? "",
+          rule: r.assembly_rule ?? "atomic",
+          conflict: r.assembly_conflict ?? false,
+          reviewReason: r.assembly_review_reason,
+          children: (r.assembly_children ?? []).map((child) => {
+            const childEvidence = child.recognition_evidence;
+            return {
+              candidateId: child.candidate_id ?? "",
+              text: child.text ?? "",
+              rawText: child.raw_text ?? child.text ?? "",
+              bbox: mapBBox(child.bbox),
+              polygon: child.polygon?.map((point) =>
+                mapPoint([point[0], point[1]])
+              ),
+              confidence: child.confidence ?? 0,
+              orientation: child.orientation ?? "horizontal",
+              rotation: child.rotation ?? 0,
+              role: child.role ?? "other",
+              recognitionSource: child.recognition_source,
+              recognitionEvidence: childEvidence
+                ? {
+                    selectedSource:
+                      childEvidence.selected_source ??
+                      child.recognition_source ??
+                      "ocr",
+                    sources: childEvidence.sources ?? ["ocr"],
+                    nativeText: childEvidence.native_text ?? "",
+                    ocrText: childEvidence.ocr_text ?? "",
+                    agreement: childEvidence.agreement ?? 0,
+                    conflict:
+                      childEvidence.conflict ?? child.source_conflict ?? false,
+                    nativeSpanIds: childEvidence.native_span_ids ?? [],
+                    nativeBBox: childEvidence.native_bbox
+                      ? mapBBox(childEvidence.native_bbox)
+                      : undefined,
+                  }
+                : undefined,
+              sourceConflict: child.source_conflict,
+            };
+          }),
+        }
+      : undefined;
   return {
     candidateId: r.candidate_id,
     // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
@@ -319,6 +405,7 @@ function mappedSegmentRegion(
     recognitionSource: r.recognition_source,
     recognitionEvidence,
     sourceConflict: r.source_conflict,
+    assembly,
     valueBox,
     orientedBox,
   };
@@ -333,6 +420,16 @@ export function mapSegmentRegions(
   const pad = Math.max(4, CROP_PAD_PX / displayScale);
 
   return regions.map((r) => {
+    const mapBBox = (source: BBox): BBox => ({
+      x: bbox.x + (source.x - CROP_PAD_PX) / displayScale,
+      y: bbox.y + (source.y - CROP_PAD_PX) / displayScale,
+      width: source.width / displayScale,
+      height: source.height / displayScale,
+    });
+    const mapPoint = (point: [number, number]): [number, number] => [
+      bbox.x + (point[0] - CROP_PAD_PX) / displayScale,
+      bbox.y + (point[1] - CROP_PAD_PX) / displayScale,
+    ];
     const mapped: BBox = {
       x: bbox.x + (r.bbox.x - CROP_PAD_PX) / displayScale,
       y: bbox.y + (r.bbox.y - CROP_PAD_PX) / displayScale,
@@ -372,7 +469,7 @@ export function mapSegmentRegions(
           }
         : undefined;
 
-    return mappedSegmentRegion(r, valueBox, orientedBox);
+    return mappedSegmentRegion(r, valueBox, orientedBox, mapBBox, mapPoint);
   });
 }
 
@@ -391,6 +488,16 @@ export function mapPageSegmentRegions(
 ): SegmentRegion[] {
   const toBounds = (value: number) => value / scale;
   return regions.map((r) => {
+    const mapBBox = (source: BBox): BBox => ({
+      x: toBounds(source.x),
+      y: toBounds(source.y),
+      width: toBounds(source.width),
+      height: toBounds(source.height),
+    });
+    const mapPoint = (point: [number, number]): [number, number] => [
+      toBounds(point[0]),
+      toBounds(point[1]),
+    ];
     const direct: BBox = {
       x: toBounds(r.bbox.x),
       y: toBounds(r.bbox.y),
@@ -422,7 +529,13 @@ export function mapPageSegmentRegions(
           }
         : undefined;
 
-    return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
+    return mappedSegmentRegion(
+      r,
+      invalid ? pageBounds : direct,
+      orientedBox,
+      mapBBox,
+      mapPoint
+    );
   });
 }
 
@@ -435,6 +548,7 @@ export function mapSegmentCandidateOutcomes(
 ): SegmentCandidateOutcome[] {
   const apiRegions: ApiSegmentRegion[] = outcomes.map((outcome) => ({
     candidate_id: outcome.candidate_id,
+    object_id: outcome.object_id,
     bbox: outcome.bbox,
     text: outcome.text ?? "",
     confidence: outcome.confidence ?? 0,
@@ -454,6 +568,11 @@ export function mapSegmentCandidateOutcomes(
     recognition_source: outcome.recognition_source,
     recognition_evidence: outcome.recognition_evidence,
     source_conflict: outcome.source_conflict,
+    assembly_id: outcome.assembly_id,
+    assembly_rule: outcome.assembly_rule,
+    assembly_conflict: outcome.assembly_conflict,
+    assembly_review_reason: outcome.assembly_review_reason,
+    assembly_children: outcome.assembly_children,
   }));
   const mapped =
     coordinateSpace === "page"

@@ -60,6 +60,23 @@ def crop_text_layer_result(
                 "width": round(bbox["width"], 1),
                 "height": round(bbox["height"], 1),
             }
+            children = item.get("assembly_children")
+            if isinstance(children, list):
+                mapped_children: list[dict[str, Any]] = []
+                for child in children:
+                    if not isinstance(child, Mapping):
+                        continue
+                    mapped_child = deepcopy(dict(child))
+                    child_bbox = child.get("bbox")
+                    if isinstance(child_bbox, Mapping):
+                        mapped_child["bbox"] = {
+                            "x": round(float(child_bbox.get("x", 0.0)) - origin_x, 1),
+                            "y": round(float(child_bbox.get("y", 0.0)) - origin_y, 1),
+                            "width": round(float(child_bbox.get("width", 0.0)), 1),
+                            "height": round(float(child_bbox.get("height", 0.0)), 1),
+                        }
+                    mapped_children.append(mapped_child)
+                item["assembly_children"] = mapped_children
             oriented = item.get("oriented_box")
             if isinstance(oriented, Mapping):
                 item["oriented_box"] = {
@@ -115,6 +132,8 @@ def _common_native_region(
     return {
         **dict(source),
         "candidate_id": candidate_id,
+        "object_id": candidate_id,
+        "assembly_id": candidate_id,
         "bbox": bbox,
         "text": text,
         "raw_text": str(source.get("text") or ""),
@@ -227,6 +246,10 @@ def native_text_segment_result(
         }
     )
     detected = len(outcomes)
+    atomic_count = sum(
+        max(1, len(outcome.get("assembly_children") or ()))
+        for outcome in outcomes
+    )
     return {
         "count": len(regions),
         "detected_count": detected,
@@ -246,6 +269,18 @@ def native_text_segment_result(
         "candidate_outcomes": outcomes,
         "source_profile": profile,
         "recognition_source_counts": {"native_pdf": detected},
+        "assembly_stats": {
+            "atomic_detection_count": atomic_count,
+            "object_count": detected,
+            "assembled_object_count": sum(
+                1
+                for outcome in outcomes
+                if len(outcome.get("assembly_children") or ()) > 1
+            ),
+            "absorbed_fragment_count": max(0, atomic_count - detected),
+            "conflict_count": 0,
+            "rule_counts": {},
+        },
     }
 
 
@@ -388,6 +423,10 @@ def merge_native_and_ocr_results(
             ] += 1
 
     detected = len(final_outcomes)
+    atomic_count = sum(
+        max(1, len(outcome.get("assembly_children") or ()))
+        for outcome in final_outcomes
+    )
     return {
         **dict(ocr),
         "count": len(regions),
@@ -415,4 +454,18 @@ def merge_native_and_ocr_results(
             "text_layer_strategy": "native_text_first_hybrid_ocr",
         },
         "recognition_source_counts": dict(sorted(source_counts.items())),
+        "assembly_stats": {
+            "atomic_detection_count": atomic_count,
+            "object_count": detected,
+            "assembled_object_count": sum(
+                1
+                for outcome in final_outcomes
+                if len(outcome.get("assembly_children") or ()) > 1
+            ),
+            "absorbed_fragment_count": max(0, atomic_count - detected),
+            "conflict_count": sum(
+                1 for outcome in final_outcomes if outcome.get("assembly_conflict")
+            ),
+            "rule_counts": {},
+        },
     }

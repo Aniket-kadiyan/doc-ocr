@@ -121,6 +121,9 @@ _LINEAR_VALUE = _compile(
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
     rf"(?:\s*±\s*{_NUMBER}"
     rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
+    # A stacked unilateral tolerance commonly omits the sign on its zero
+    # limit: ``Ø8 +0.2 / 0``.  Once assembled, keep that exact notation.
+    rf"|\s*[+-]\s*{_NUMBER}\s*/\s*(?:[+-]\s*)?{_NUMBER}"
     # Two stacked deviations, printed one above the other on the drawing and
     # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
     # a shaft or hole limit often has upper AND lower below nominal. Listed
@@ -136,6 +139,11 @@ _THREAD_VALUE = _compile(
     rf"(?:\s*[X×]\s*{_NUMBER})?"
     r"(?:\s*-\s*[0-9A-Z]+)?"
     r"(?:\s+(?:THRU|TYP|REF))?$"
+)
+_CHAMFER_VALUE = _compile(
+    rf"^(?:\d+\s*[X×]\s*)?"
+    rf"{_NUMBER}\s*[X×]\s*{_NUMBER}\s*°?"
+    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
 )
 _STANDALONE_TOLERANCE = _compile(
     rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
@@ -210,6 +218,7 @@ def _is_single_value(value: str) -> bool:
         _ANGLE_VALUE.fullmatch(value)
         or _LINEAR_VALUE.fullmatch(value)
         or _THREAD_VALUE.fullmatch(value)
+        or _CHAMFER_VALUE.fullmatch(value)
         or _STANDALONE_TOLERANCE.fullmatch(value)
     )
 
@@ -245,6 +254,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _LINEAR_VALUE.fullmatch(value):
         return True
     if _THREAD_VALUE.fullmatch(value):
+        return True
+    if _CHAMFER_VALUE.fullmatch(value):
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
         return True

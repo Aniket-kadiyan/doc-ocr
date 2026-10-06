@@ -15,6 +15,7 @@ def _snapshot(
     name: str = "Bracket inspection",
     metadata: dict[str, str] | None = None,
     with_candidate: bool = False,
+    with_assembly: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -48,6 +49,26 @@ def _snapshot(
     }
     if metadata is not None:
         payload["metadata"] = metadata
+    if with_assembly:
+        assembly = {
+            "objectId": "C0002",
+            "assemblyId": "C0002",
+            "rule": "inline_prefix",
+            "conflict": False,
+            "children": [
+                {
+                    "candidateId": "C0001",
+                    "text": "4X",
+                    "rawText": "4X",
+                    "bbox": {"x": 10, "y": 20, "width": 12, "height": 10},
+                    "confidence": 0.95,
+                    "orientation": "horizontal",
+                    "rotation": 0,
+                    "role": "multiplier",
+                }
+            ],
+        }
+        payload["items"][0]["assembly"] = assembly  # type: ignore[index]
     if with_candidate:
         payload["scan_candidates"] = [
             {
@@ -71,6 +92,7 @@ def _snapshot(
                 "duplicate_count": 1,
                 "created_at": 100,
                 "updated_at": 200,
+                **({"assembly": assembly} if with_assembly else {}),
             }
         ]
     return ChecksheetSnapshot.model_validate(payload)
@@ -223,6 +245,24 @@ def test_candidates_are_revision_data_not_checksheet_rows(tmp_path: Path) -> Non
     assert duplicate["revision"]["scan_candidates"] == created["revision"][
         "scan_candidates"
     ]
+
+
+def test_engineering_object_evidence_survives_storage_and_duplicate(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(
+        storage,
+        _snapshot(with_candidate=True, with_assembly=True),
+    )
+
+    assert created["rows"][0]["assembly"]["children"][0]["text"] == "4X"
+    assert created["revision"]["scan_candidates"][0]["assembly"]["rule"] == (
+        "inline_prefix"
+    )
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["rows"][0]["assembly"] == created["rows"][0]["assembly"]
 
 
 def test_existing_database_without_metadata_table_migrates_to_blanks(
