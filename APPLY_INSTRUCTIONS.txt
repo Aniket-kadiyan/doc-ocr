@@ -1,29 +1,58 @@
-Persistent selected-review highlight
-====================================
+REPLACEMENT M0 PACKAGE — MVP1 f82c907
+======================================
 
-Branch: MVP1
-Expected base commit: e3a8e96e3d21b33d33a48c62776239aabff1a05d
+This package replaces the earlier M0 ZIP. Do not use the earlier package.
 
-This ZIP supersedes the earlier selected-review-highlight ZIP. It contains the
-same visual highlight changes plus the persistent-selection adjustment.
+Correct baseline
+----------------
+  Branch: MVP1
+  Commit: f82c90789d5535434e3f8f9d23a09e59c368c8d5
+  Subject: feat(ocr): add native PDF evidence with OCR provenance
 
-Copy the included src directory over the repository's src directory.
+This baseline also contains the persistent Review/Other candidate lifecycle
+from commit 046f67f. The replacement DrawingViewer preserves scanCandidates,
+native-PDF sourceDocument handling, and recognitionEvidence.
 
-Resulting behavior:
-- Selecting a review value opens the review popup and highlights its geometry.
-- Closing the popup leaves that review value highlighted.
-- Accepting or ignoring the value removes its review highlight.
-- Selecting another review value transfers the highlight to it.
-- Selecting a normal balloon/value or clicking blank drawing space clears the
-  review highlight.
 
-Suggested validation:
+Apply over the current erroneous M0 files
+-----------------------------------------
+1. Extract this replacement ZIP into a temporary folder.
+2. Copy its backend, scripts, and src folders into the doc-ocr repository root.
+3. Allow Windows to merge folders and replace files.
+4. The corrected files can be copied directly over the earlier M0 package.
+5. Review:
+
+     git status --short
+     git diff --check
+
+Do not restore the entire repository and do not delete the Review/Other files.
+
+
+Run tests on Windows
+--------------------
+From doc-ocr/backend:
+
+  .\.venv-gpu\Scripts\python.exe -m unittest -v test_source_images.py
+
+From the repository root:
+
   npm run typecheck
-  npm run test:frontend
   npm run lint
-  npm run build
+  npm run test:frontend
 
-Suggested commit message:
-  fix(review): preserve highlight after closing review popup
 
-No commit or push was made while preparing this package.
+Run the backend
+---------------
+From doc-ocr/backend:
+
+  $env:CUDA_VISIBLE_DEVICES="0"
+  $env:OCR_DEVICE="gpu:0"
+  $env:OCR_RELOAD="false"
+  .\.venv-gpu\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+The backend must be running while opening or previewing a TIFF file.
+
+
+Suggested commit message
+------------------------
+feat(source): add multi-page TIFF and validated image loading

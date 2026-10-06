@@ -48,6 +48,7 @@ import {
   loadImageFile,
   PDF_RENDER_SCALE,
 } from "@/lib/pdfLoader";
+import { detectSourceFileKind, isPdfKind } from "@/lib/sourceFile";
 import {
   saveAnnotations,
   loadAnnotations,
@@ -146,6 +147,7 @@ export function DrawingViewer() {
   const [konvaImage, setKonvaImage] = useState<HTMLImageElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
+  const [rasterFile, setRasterFile] = useState<File | null>(null);
   const [projectId, setProjectId] = useState(() => uuidv4());
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -279,12 +281,33 @@ export function DrawingViewer() {
     [canvasToKonvaImage]
   );
 
+  const renderCurrentImagePage = useCallback(
+    async (file: File, page: number) => {
+      const { canvas, width, height } = await loadImageFile(file, page);
+      sourceCanvasRef.current = canvas;
+      canvasToKonvaImage(canvas);
+      setStageSize({ width, height });
+    },
+    [canvasToKonvaImage]
+  );
+
   // Re-render only when the document or page changes — never on zoom. Zoom is a
   // pure display transform applied to the Stage below.
   useEffect(() => {
     if (!pdfDoc) return;
     void renderCurrentPage(pdfDoc, currentPage);
   }, [pdfDoc, currentPage, renderCurrentPage]);
+
+  useEffect(() => {
+    if (!rasterFile) return;
+    void renderCurrentImagePage(rasterFile, currentPage).catch((reason) => {
+      setSelectionError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not render the selected image page."
+      );
+    });
+  }, [currentPage, rasterFile, renderCurrentImagePage]);
 
   useEffect(() => {
     // Overlay geometry belongs to one exact page/project and is never persisted.
@@ -312,10 +335,13 @@ export function DrawingViewer() {
         const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
         return canvas;
       }
-      // Single-page image: only page 1 exists, and it is already rendered.
-      return page === 1 ? sourceCanvasRef.current : null;
+      if (rasterFile) {
+        const { canvas } = await loadImageFile(rasterFile, page);
+        return canvas;
+      }
+      return null;
     },
-    [pdfDoc]
+    [pdfDoc, rasterFile]
   );
 
   useEffect(() => {
@@ -334,21 +360,23 @@ export function DrawingViewer() {
   // so both paths render at the same scale and produce matching bbox coords.
   const loadSource = useCallback(
     async (file: File) => {
-      const isPdf =
-        file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+      const sourceKind = await detectSourceFileKind(file);
+      const isPdf = isPdfKind(sourceKind);
       sourceDocumentRef.current = isPdf ? file : null;
       if (isPdf) {
         const doc = await loadPdfDocument(file);
+        setRasterFile(null);
         setPdfDoc(doc);
         setTotalPages(doc.numPages);
         setCurrentPage(1);
         setScale(1);
         await renderCurrentPage(doc, 1);
       } else {
-        const { canvas, width, height } = await loadImageFile(file);
+        const { canvas, width, height, totalPages } = await loadImageFile(file, 1);
         sourceCanvasRef.current = canvas;
         setPdfDoc(null);
-        setTotalPages(1);
+        setRasterFile(file);
+        setTotalPages(totalPages);
         setCurrentPage(1);
         canvasToKonvaImage(canvas);
         setStageSize({ width, height });
@@ -413,6 +441,7 @@ export function DrawingViewer() {
   }, [restoreLastProject]);
 
   const handleFile = async (file: File) => {
+    const sourceKind = await detectSourceFileKind(file);
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
     setProjectId(id);
@@ -431,7 +460,7 @@ export function DrawingViewer() {
     setScanOverlay(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
-    const fileType = file.type === "application/pdf" ? "pdf" : "image";
+    const fileType = isPdfKind(sourceKind) ? "pdf" : "image";
     sourceFileRef.current = {
       fileName: file.name,
       mimeType: file.type,
@@ -479,6 +508,7 @@ export function DrawingViewer() {
     const id = projectId;
     setKonvaImage(null);
     setPdfDoc(null);
+    setRasterFile(null);
     sourceCanvasRef.current = null;
     sourceFileRef.current = null;
     sourceDocumentRef.current = null;
@@ -1429,11 +1459,20 @@ export function DrawingViewer() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf,image/png,image/jpeg,image/webp,image/tiff"
+        accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,.bmp,application/pdf,image/png,image/jpeg,image/tiff,image/webp,image/bmp"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) void handleFile(f);
+          if (f) {
+            void handleFile(f).catch((reason) => {
+              setSelectionError(
+                reason instanceof Error
+                  ? reason.message
+                  : "Could not open the selected drawing."
+              );
+            });
+          }
+          e.target.value = "";
         }}
       />
 

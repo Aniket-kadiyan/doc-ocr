@@ -187,19 +187,33 @@ export async function renderBalloonedPages({
     return output;
   }
 
-  const rendered = await loadImageFile(sourceFile);
-  const context = rendered.canvas.getContext("2d");
-  if (!context) throw new Error("Canvas context unavailable during Excel export.");
-  values
-    .filter((annotation) => annotation.page === 1)
-    .forEach((annotation) =>
-      drawAnnotation(context, annotation, style, resolvedArtwork)
-    );
-  output.push({
-    page: 1,
-    dataUrl: rendered.canvas.toDataURL("image/png"),
-    width: rendered.canvas.width,
-    height: rendered.canvas.height,
-  });
+  for (const page of pageNumbers) {
+    let rendered: Awaited<ReturnType<typeof loadImageFile>>;
+    try {
+      rendered = await loadImageFile(sourceFile, page);
+    } catch (reason) {
+      if (
+        page > 1 &&
+        reason instanceof Error &&
+        /only one page|not present/i.test(reason.message)
+      ) {
+        continue;
+      }
+      throw reason;
+    }
+    const context = rendered.canvas.getContext("2d");
+    if (!context) throw new Error("Canvas context unavailable during Excel export.");
+    values
+      .filter((annotation) => annotation.page === page)
+      .forEach((annotation) =>
+        drawAnnotation(context, annotation, style, resolvedArtwork)
+      );
+    output.push({
+      page,
+      dataUrl: rendered.canvas.toDataURL("image/png"),
+      width: rendered.canvas.width,
+      height: rendered.canvas.height,
+    });
+  }
   return output;
 }

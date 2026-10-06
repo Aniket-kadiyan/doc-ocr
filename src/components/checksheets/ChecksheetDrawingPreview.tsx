@@ -150,7 +150,7 @@ export function ChecksheetDrawingPreview({
             ? pdfDocument
               ? await renderPdfPage(pdfDocument, row.page, pdfRenderScale)
               : null
-            : await loadImageFile(sourceFile);
+            : await loadImageFile(sourceFile, row.page);
         if (!rendered || cancelled) return;
         const image = await canvasImage(rendered.canvas);
         if (cancelled) return;

@@ -33,6 +33,7 @@ const fastTests = [
   "backend/test_scan_jobs.py",
   "backend/test_scan_progress.py",
   "backend/test_segment_quality.py",
+  "backend/test_source_images.py",
   "tools/balloon_builder/test_balloon_builder.py",
 ];
 
