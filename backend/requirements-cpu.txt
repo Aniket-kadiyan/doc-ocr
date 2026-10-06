@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# CPU-only runtime. Do not install this in the GPU virtual environment.
+# PaddlePaddle 3.3.1 caused the oneDNN PIR inference failure in this project.
+paddlepaddle==3.2.2

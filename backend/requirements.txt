@@ -19,7 +19,8 @@ numpy==2.3.5
 opencv-contrib-python==4.10.0.84
 
 # OCR compatibility set validated on the Windows POC.
-# PaddlePaddle 3.3.1 caused the oneDNN PIR inference failure.
-paddlepaddle==3.2.2
+# Install exactly one Paddle runtime using requirements-cpu.txt or
+# requirements-gpu.txt. Keeping it out of this shared file prevents a dev/test
+# install from replacing an existing GPU build with the CPU-only package.
 paddleocr==3.7.0
 paddlex[ocr-core]==3.7.2

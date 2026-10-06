@@ -1,0 +1,6 @@
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+-r requirements.txt
+
+# Windows/Linux NVIDIA runtime using Paddle's CUDA 12.6 package repository.
+# The GPU driver must support CUDA 12.6 or newer.
+paddlepaddle-gpu==3.2.2
