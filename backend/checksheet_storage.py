@@ -250,6 +250,7 @@ class ChecksheetStorage:
                         dimension_type TEXT NOT NULL,
                         assembly_json TEXT,
                         engineering_parse_json TEXT,
+                        engineering_disposition_json TEXT,
                         position INTEGER NOT NULL CHECK (position >= 0),
                         UNIQUE (revision_id, annotation_id),
                         UNIQUE (revision_id, balloon_number)
@@ -313,6 +314,11 @@ class ChecksheetStorage:
                     connection.execute(
                         "ALTER TABLE checksheet_items "
                         "ADD COLUMN engineering_parse_json TEXT"
+                    )
+                if "engineering_disposition_json" not in item_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_items "
+                        "ADD COLUMN engineering_disposition_json TEXT"
                     )
                 connection.commit()
             finally:
@@ -499,8 +505,9 @@ class ChecksheetStorage:
                     oriented_rotation,
                     label, specification, tolerance, method, tool,
                     dimension_type, assembly_json, engineering_parse_json,
+                    engineering_disposition_json,
                     position
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid4()),
@@ -532,6 +539,14 @@ class ChecksheetStorage:
                     (
                         json.dumps(item.engineering_parse, ensure_ascii=False)
                         if item.engineering_parse is not None
+                        else None
+                    ),
+                    (
+                        json.dumps(
+                            item.engineering_disposition,
+                            ensure_ascii=False,
+                        )
+                        if item.engineering_disposition is not None
                         else None
                     ),
                     position,
@@ -1011,6 +1026,11 @@ class ChecksheetStorage:
                         if item["engineering_parse_json"]
                         else None
                     ),
+                    "engineering_disposition": (
+                        json.loads(str(item["engineering_disposition_json"]))
+                        if item["engineering_disposition_json"]
+                        else None
+                    ),
                     "readings": readings.get(str(item["id"]), {}),
                 }
                 for item in items
@@ -1350,8 +1370,9 @@ class ChecksheetStorage:
                         oriented_rotation,
                         label, specification, tolerance, method, tool,
                         dimension_type, assembly_json,
-                        engineering_parse_json, position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        engineering_parse_json, engineering_disposition_json,
+                        position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
@@ -1377,6 +1398,7 @@ class ChecksheetStorage:
                         item["dimension_type"],
                         item["assembly_json"],
                         item["engineering_parse_json"],
+                        item["engineering_disposition_json"],
                         item["position"],
                     ),
                 )

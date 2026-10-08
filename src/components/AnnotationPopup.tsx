@@ -101,6 +101,10 @@ export function AnnotationPopup({
         cleanValue === pending.ocrResult.engineeringParse?.normalizedText
           ? pending.ocrResult.engineeringParse
           : undefined,
+      engineeringDisposition:
+        cleanValue === pending.ocrResult.engineeringParse?.normalizedText
+          ? pending.ocrResult.engineeringDisposition
+          : undefined,
       range: range.trim() || undefined,
     };
     addAnnotation(annotation);

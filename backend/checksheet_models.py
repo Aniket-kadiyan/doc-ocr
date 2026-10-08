@@ -33,6 +33,7 @@ class ChecksheetSnapshotItem(BaseModel):
     dimension_type: str = Field(default="Unknown", max_length=100)
     assembly: dict[str, Any] | None = None
     engineering_parse: dict[str, Any] | None = None
+    engineering_disposition: dict[str, Any] | None = None
 
 
 class ChecksheetScanCandidate(BaseModel):
@@ -61,6 +62,7 @@ class ChecksheetScanCandidate(BaseModel):
     authoritative_reread: bool = False
     assembly: dict[str, Any] | None = None
     engineering_parse: dict[str, Any] | None = None
+    engineering_disposition: dict[str, Any] | None = None
     bbox: ChecksheetBBox
     oriented_box: ChecksheetOrientedBox | None = None
     duplicate_source_ids: list[str] = Field(default_factory=list, max_length=100)

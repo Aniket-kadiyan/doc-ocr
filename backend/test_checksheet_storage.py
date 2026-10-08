@@ -17,6 +17,7 @@ def _snapshot(
     with_candidate: bool = False,
     with_assembly: bool = False,
     with_engineering_parse: bool = False,
+    with_engineering_disposition: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -92,6 +93,19 @@ def _snapshot(
     }
     if with_engineering_parse:
         payload["items"][0]["engineering_parse"] = engineering_parse  # type: ignore[index]
+    engineering_disposition = {
+        "schemaVersion": 1,
+        "state": "eligible",
+        "rule": "complete_engineering_object",
+        "reason": "Complete assembled engineering value",
+        "parseStatus": "complete",
+        "parseKind": "linear",
+        "hardContext": False,
+    }
+    if with_engineering_disposition:
+        payload["items"][0]["engineering_disposition"] = (  # type: ignore[index]
+            engineering_disposition
+        )
     if with_candidate:
         payload["scan_candidates"] = [
             {
@@ -119,6 +133,11 @@ def _snapshot(
                 **(
                     {"engineering_parse": engineering_parse}
                     if with_engineering_parse
+                    else {}
+                ),
+                **(
+                    {"engineering_disposition": engineering_disposition}
+                    if with_engineering_disposition
                     else {}
                 ),
             }
@@ -309,6 +328,26 @@ def test_engineering_parse_survives_storage_and_duplicate(tmp_path: Path) -> Non
 
     duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
     assert duplicate["rows"][0]["engineering_parse"] == item_parse
+
+
+def test_engineering_disposition_survives_storage_and_duplicate(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(
+        storage,
+        _snapshot(with_candidate=True, with_engineering_disposition=True),
+    )
+
+    item_disposition = created["rows"][0]["engineering_disposition"]
+    candidate_disposition = created["revision"]["scan_candidates"][0][
+        "engineering_disposition"
+    ]
+    assert item_disposition["rule"] == "complete_engineering_object"
+    assert candidate_disposition["state"] == "eligible"
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["rows"][0]["engineering_disposition"] == item_disposition
 
 
 def test_existing_database_without_metadata_table_migrates_to_blanks(

@@ -948,6 +948,7 @@ export function DrawingViewer() {
               recognitionEvidence: r.recognitionEvidence,
               assembly: r.assembly,
               engineeringParse: r.engineeringParse,
+              engineeringDisposition: r.engineeringDisposition,
               range: deriveRange(cleanValue) || undefined,
             };
           });
@@ -992,6 +993,7 @@ export function DrawingViewer() {
           recognitionEvidence: candidate.recognitionEvidence,
           assembly: candidate.assembly,
           engineeringParse: candidate.engineeringParse,
+          engineeringDisposition: candidate.engineeringDisposition,
           valueBox: candidate.valueBox,
           orientedBox: candidate.orientedBox,
           createdAt: now,
@@ -1302,6 +1304,7 @@ export function DrawingViewer() {
           recognitionEvidence: candidate.recognitionEvidence,
           assembly: candidate.assembly,
           engineeringParse: candidate.engineeringParse,
+          engineeringDisposition: candidate.engineeringDisposition,
         },
       });
     },

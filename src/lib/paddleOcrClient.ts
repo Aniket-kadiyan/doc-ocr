@@ -1,5 +1,6 @@
 import type {
   BBox,
+  EngineeringDisposition,
   EngineeringObjectAssembly,
   EngineeringValueParse,
   EngineeringValueKind,
@@ -162,8 +163,10 @@ export interface SegmentRegion {
   sourceConflict?: boolean;
   /** Lossless primitive detections used to build this logical object. */
   assembly?: EngineeringObjectAssembly;
-  /** Lossless structural parse; current eligibility remains independent. */
+  /** Lossless structural parse used by the M6 disposition policy. */
   engineeringParse?: EngineeringValueParse;
+  /** Structure-first M6 disposition evidence. */
+  engineeringDisposition?: EngineeringDisposition;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
   /**
@@ -190,6 +193,16 @@ export interface ApiEngineeringValueParse {
   }>;
   warnings?: string[];
   normalization_steps?: string[];
+}
+
+export interface ApiEngineeringDisposition {
+  schema_version: 1;
+  state: "eligible" | "review" | "other";
+  rule: string;
+  reason: string;
+  parse_status: EngineeringValueParseStatus;
+  parse_kind: EngineeringValueKind;
+  hard_context?: boolean;
 }
 
 export interface ApiSegmentRegion {
@@ -241,6 +254,7 @@ export interface ApiSegmentRegion {
   assembly_review_reason?: string;
   assembly_children?: ApiAssemblyChild[];
   engineering_parse?: ApiEngineeringValueParse;
+  engineering_disposition?: ApiEngineeringDisposition;
 }
 
 export interface ApiAssemblyChild {
@@ -296,6 +310,12 @@ export interface ApiSegmentResponse {
     kind_counts?: Record<string, number>;
     warning_counts?: Record<string, number>;
   };
+  engineering_disposition_stats?: {
+    schema_version?: number;
+    object_count?: number;
+    state_counts?: Record<string, number>;
+    rule_counts?: Record<string, number>;
+  };
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
   candidate_outcomes?: ApiCandidateOutcome[];
@@ -340,6 +360,9 @@ export interface ApiCandidateOutcome {
   assembly_review_reason?: string;
   assembly_children?: ApiAssemblyChild[];
   engineering_parse?: ApiEngineeringValueParse;
+  engineering_disposition?: ApiEngineeringDisposition;
+  page_filter_rule?: string;
+  page_filter_reason?: string;
 }
 
 export interface SegmentCandidateOutcome extends SegmentRegion {
@@ -372,6 +395,18 @@ function mappedSegmentRegion(
         unparsedFragments: parsed.unparsed_fragments ?? [],
         warnings: parsed.warnings ?? [],
         normalizationSteps: parsed.normalization_steps ?? [],
+      }
+    : undefined;
+  const disposed = r.engineering_disposition;
+  const engineeringDisposition: EngineeringDisposition | undefined = disposed
+    ? {
+        schemaVersion: disposed.schema_version,
+        state: disposed.state,
+        rule: disposed.rule,
+        reason: disposed.reason,
+        parseStatus: disposed.parse_status,
+        parseKind: disposed.parse_kind,
+        hardContext: disposed.hard_context ?? false,
       }
     : undefined;
   const evidence = r.recognition_evidence;
@@ -459,6 +494,7 @@ function mappedSegmentRegion(
     sourceConflict: r.source_conflict,
     assembly,
     engineeringParse,
+    engineeringDisposition,
     valueBox,
     orientedBox,
   };
@@ -614,8 +650,8 @@ export function mapSegmentCandidateOutcomes(
     oriented_box: outcome.oriented_box,
     needs_review: outcome.state === "review",
     recognized: outcome.recognized,
-    page_filter_rule: outcome.rule,
-    page_filter_reason: outcome.reason,
+    page_filter_rule: outcome.page_filter_rule ?? outcome.rule,
+    page_filter_reason: outcome.page_filter_reason ?? outcome.reason,
     review_reason: outcome.state === "review" ? outcome.reason : undefined,
     recovery_attempted: outcome.recovery_attempted,
     recognition_source: outcome.recognition_source,
@@ -627,6 +663,7 @@ export function mapSegmentCandidateOutcomes(
     assembly_review_reason: outcome.assembly_review_reason,
     assembly_children: outcome.assembly_children,
     engineering_parse: outcome.engineering_parse,
+    engineering_disposition: outcome.engineering_disposition,
   }));
   const mapped =
     coordinateSpace === "page"

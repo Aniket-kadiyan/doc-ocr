@@ -1,6 +1,7 @@
 import type {
   BBox,
   DimensionType,
+  EngineeringDisposition,
   EngineeringObjectAssembly,
   EngineeringValueParse,
   RecognitionEvidence,
@@ -50,6 +51,8 @@ export interface ScanCandidate {
   assembly?: EngineeringObjectAssembly;
   /** Lossless parse evidence retained while the object awaits disposition. */
   engineeringParse?: EngineeringValueParse;
+  /** Structure-first rule that placed the object in Review or Other. */
+  engineeringDisposition?: EngineeringDisposition;
   valueBox: BBox;
   orientedBox?: BBox & { rotation: number };
   /** Audit trail for geometry-equivalent reads merged during rescans. */

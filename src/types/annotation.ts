@@ -144,6 +144,19 @@ export interface EngineeringValueParse {
   normalizationSteps: string[];
 }
 
+export type EngineeringDispositionState = "eligible" | "review" | "other";
+
+/** M6 audit evidence explaining the object's final lifecycle state. */
+export interface EngineeringDisposition {
+  schemaVersion: 1;
+  state: EngineeringDispositionState;
+  rule: string;
+  reason: string;
+  parseStatus: EngineeringValueParseStatus;
+  parseKind: EngineeringValueKind;
+  hardContext: boolean;
+}
+
 /** Legacy label metadata retained only so older saved projects can be read. */
 export type LabelSource = "manual" | "ocr";
 
@@ -192,6 +205,8 @@ export interface Annotation {
   assembly?: EngineeringObjectAssembly;
   /** Lossless backend parse of the assembled engineering text. */
   engineeringParse?: EngineeringValueParse;
+  /** Structure-first policy decision that admitted this value. */
+  engineeringDisposition?: EngineeringDisposition;
   /** Presentation-only per-balloon visibility. Hidden values remain numbered,
    * persisted, exported, and active for duplicate prevention. */
   hidden?: boolean;
@@ -237,6 +252,7 @@ export interface OCRResult {
   recognitionEvidence?: RecognitionEvidence;
   assembly?: EngineeringObjectAssembly;
   engineeringParse?: EngineeringValueParse;
+  engineeringDisposition?: EngineeringDisposition;
   /** Rule-engine classification returned by manual region OCR. */
   category?: string;
   subtype?: string;

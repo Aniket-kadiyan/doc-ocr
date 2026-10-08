@@ -107,6 +107,9 @@ export interface ScanJobResult {
   engineeringParseStats: NonNullable<
     ApiSegmentResponse["engineering_parse_stats"]
   >;
+  engineeringDispositionStats: NonNullable<
+    ApiSegmentResponse["engineering_disposition_stats"]
+  >;
 }
 
 export class ScanJobCancelledError extends Error {
@@ -423,5 +426,7 @@ export async function runScanJob({
       snapshot.result.recognition_source_counts ?? {},
     assemblyStats: snapshot.result.assembly_stats ?? {},
     engineeringParseStats: snapshot.result.engineering_parse_stats ?? {},
+    engineeringDispositionStats:
+      snapshot.result.engineering_disposition_stats ?? {},
   };
 }

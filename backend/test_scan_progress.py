@@ -678,8 +678,11 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
     assert result["review_count"] == 0
     assert result["regions"][0]["text"] == "25.00"
     assert result["candidate_outcomes"][0]["rule"] == (
-        "engineering_value"
+        "complete_engineering_object"
     )
+    assert result["candidate_outcomes"][0]["engineering_disposition"][
+        "state"
+    ] == "eligible"
     assert recognition_profiles == ["batch_recognition"]
     assert authoritative_calls == 1
 

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
 import type { ProjectRecord } from "@/lib/db";
 import { makeAnnotation } from "@/test/annotationFixture";
-import type { EngineeringValueParse } from "@/types/annotation";
+import type {
+  EngineeringDisposition,
+  EngineeringValueParse,
+} from "@/types/annotation";
 import type { ScanCandidate } from "@/types/scanCandidate";
 
 const project: ProjectRecord = {
@@ -27,6 +30,16 @@ const engineeringParse: EngineeringValueParse = {
   unparsedFragments: [],
   warnings: ["single_bound_tolerance"],
   normalizationSteps: [],
+};
+
+const engineeringDisposition: EngineeringDisposition = {
+  schemaVersion: 1,
+  state: "other",
+  rule: "revision_history",
+  reason: "Revision history content",
+  parseStatus: "complete",
+  parseKind: "identifier",
+  hardContext: true,
 };
 
 const otherCandidate: ScanCandidate = {
@@ -63,6 +76,7 @@ const otherCandidate: ScanCandidate = {
     ],
   },
   engineeringParse,
+  engineeringDisposition,
   valueBox: { x: 90, y: 120, width: 40, height: 10 },
   duplicateCount: 1,
   duplicateSourceIds: ["C0012", "C0013"],
@@ -134,6 +148,7 @@ describe("checksheet creation snapshot", () => {
       duplicate_count: 1,
       assembly: otherCandidate.assembly,
       engineering_parse: engineeringParse,
+      engineering_disposition: engineeringDisposition,
     });
     expect(JSON.stringify(creation.payload.items)).not.toContain("candidate-1");
   });
@@ -151,6 +166,32 @@ describe("checksheet creation snapshot", () => {
 
     expect(creation.payload.items[0].engineering_parse).toEqual(
       engineeringParse
+    );
+  });
+
+  it("preserves disposition evidence on accepted checksheet rows", () => {
+    const acceptedDisposition: EngineeringDisposition = {
+      ...engineeringDisposition,
+      state: "eligible",
+      rule: "complete_engineering_object",
+      reason: "Complete assembled engineering value",
+      parseKind: "linear",
+      hardContext: false,
+    };
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "Disposed values",
+      readingColumns: ["Part 1"],
+      annotations: [
+        makeAnnotation({ engineeringDisposition: acceptedDisposition }),
+      ],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project,
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.items[0].engineering_disposition).toEqual(
+      acceptedDisposition
     );
   });
 

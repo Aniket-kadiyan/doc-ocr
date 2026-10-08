@@ -4888,6 +4888,10 @@ class OcrPipeline:
             engineering_parse_statistics,
             parse_engineering_value,
         )
+        from engineering_disposition import (
+            disposition_engineering_object,
+            engineering_disposition_statistics,
+        )
 
         def report(
             *,
@@ -5464,6 +5468,7 @@ class OcrPipeline:
         regions = [r for r in regions if not r.pop("superseded", False)]
         recognized_count = len(regions)
         filtered_regions: list[dict[str, Any]] = []
+        review_candidates: list[dict[str, Any]] = []
         candidate_outcomes: list[dict[str, Any]] = []
         filter_rule_counts: dict[str, int] = {}
         for candidate_index, region in enumerate(regions, start=1):
@@ -5518,7 +5523,47 @@ class OcrPipeline:
             filter_rule_counts[decision.rule_name] = (
                 filter_rule_counts.get(decision.rule_name, 0) + 1
             )
-            state = "eligible" if decision.accepted else "excluded"
+            engineering_parse = parse_engineering_value(text)
+            disposition = disposition_engineering_object(
+                engineering_parse,
+                recognized=True,
+                authoritative=True,
+                context_rule=decision.rule_name,
+                context_reason=decision.reason,
+                assembly_conflict=bool(
+                    classified_region.get("assembly_conflict")
+                ),
+                assembly_review_reason=str(
+                    classified_region.get("assembly_review_reason") or ""
+                ),
+                source_conflict=bool(classified_region.get("source_conflict")),
+                numeric_conflict=bool(classified_region.get("numeric_conflict")),
+                recognition_review_required=bool(
+                    classified_region.get("authoritative_review_required")
+                ),
+                recognition_needs_review=bool(
+                    classified_region.get("needs_review")
+                ),
+                recognition_review_reason=str(
+                    classified_region.get("review_reason") or ""
+                ),
+            )
+            state = (
+                "excluded" if disposition.state == "other" else disposition.state
+            )
+            classified_region.update(
+                {
+                    "recognized": True,
+                    "needs_review": state == "review",
+                    "page_filter_rule": decision.rule_name,
+                    "page_filter_reason": decision.reason,
+                    "review_reason": (
+                        disposition.reason if state == "review" else ""
+                    ),
+                    "engineering_parse": engineering_parse.to_dict(),
+                    "engineering_disposition": disposition.to_dict(),
+                }
+            )
             candidate_outcomes.append(
                 {
                     "candidate_id": candidate_id,
@@ -5532,8 +5577,10 @@ class OcrPipeline:
                     "preliminary_text": str(region.get("text") or ""),
                     "confidence": float(region.get("confidence") or 0.0),
                     "recognized": True,
-                    "reason": decision.reason,
-                    "rule": decision.rule_name,
+                    "reason": disposition.reason,
+                    "rule": disposition.rule,
+                    "page_filter_rule": decision.rule_name,
+                    "page_filter_reason": decision.reason,
                     "type": classified_region.get("type"),
                     "category": classified_region.get("category"),
                     "subtype": classified_region.get("subtype"),
@@ -5560,18 +5607,18 @@ class OcrPipeline:
                     "assembly_children": [
                         dict(child) for child in assembly_children
                     ],
+                    "engineering_parse": engineering_parse.to_dict(),
+                    "engineering_disposition": disposition.to_dict(),
                 }
             )
-            if decision.accepted:
-                filtered_regions.append(
-                    {
-                        **classified_region,
-                        "candidate_id": candidate_id,
-                        "recognized": True,
-                        "page_filter_rule": decision.rule_name,
-                        "page_filter_reason": decision.reason,
-                    }
-                )
+            published_region = {
+                **classified_region,
+                "candidate_id": candidate_id,
+            }
+            if state == "eligible":
+                filtered_regions.append(published_region)
+            elif state == "review":
+                review_candidates.append(published_region)
         regions = filtered_regions
         report(
             stage="finalizing",
@@ -5581,45 +5628,87 @@ class OcrPipeline:
             total=len(regions),
             candidate_count=len(regions),
         )
-        # Appended last so the dimension-oriented filters, which reason about
-        # values, never discard or reshape the notes block. Re-read from an
-        # enlarged crop when that resolves the paragraph more cleanly.
+        # The notes block remains visible, but it is non-inspection content and
+        # therefore belongs in Other instead of receiving a balloon.
         if notes_region is not None:
-            regions.append(notes_region)
+            note_text = str(notes_region.get("text") or "")
+            note_parse = parse_engineering_value(note_text)
+            note_disposition = disposition_engineering_object(
+                note_parse,
+                recognized=bool(note_text.strip()),
+                authoritative=True,
+                context_rule="note_information",
+                context_reason="General drawing notes",
+            )
+            note_id = "S-NOTES"
+            candidate_outcomes.append(
+                {
+                    "candidate_id": note_id,
+                    "object_id": note_id,
+                    "bbox": dict(notes_region["bbox"]),
+                    "state": "excluded",
+                    "text": note_text,
+                    "raw_text": note_text,
+                    "preliminary_text": note_text,
+                    "confidence": float(notes_region.get("confidence") or 0.0),
+                    "recognized": bool(note_text.strip()),
+                    "reason": note_disposition.reason,
+                    "rule": note_disposition.rule,
+                    "page_filter_rule": "note_information",
+                    "page_filter_reason": "General drawing notes",
+                    "type": notes_region.get("type"),
+                    "category": notes_region.get("category"),
+                    "subtype": notes_region.get("subtype"),
+                    "label": notes_region.get("label"),
+                    "orientation": notes_region.get("orientation", "horizontal"),
+                    "rotation": float(notes_region.get("rotation") or 0.0),
+                    "recovery_attempted": False,
+                    "authoritative_reread": True,
+                    "assembly_id": note_id,
+                    "assembly_rule": "notes_block",
+                    "assembly_conflict": False,
+                    "assembly_review_reason": "",
+                    "assembly_children": [],
+                    "engineering_parse": note_parse.to_dict(),
+                    "engineering_disposition": note_disposition.to_dict(),
+                }
+            )
+            recognized_count += 1
 
-        # M5 is descriptive only: attach a lossless structural parse after all
-        # section splitting/normalization has finished, without changing the
-        # existing filter decision or displayed OCR text.
-        for item in regions:
-            item["engineering_parse"] = parse_engineering_value(
-                str(item.get("text") or "")
-            ).to_dict()
-        for item in candidate_outcomes:
-            item["engineering_parse"] = parse_engineering_value(
-                str(item.get("text") or "")
-            ).to_dict()
+        # M6 runs after assembly and M5 parsing, so every published, review,
+        # and Other object carries the exact evidence behind its state.
         parsed_objects = [
             item["engineering_parse"] for item in candidate_outcomes
+        ]
+        dispositions = [
+            item["engineering_disposition"] for item in candidate_outcomes
         ]
         candidate_ids = {
             str(item.get("candidate_id") or "") for item in candidate_outcomes
         }
         parsed_objects.extend(
             item["engineering_parse"]
-            for item in regions
+            for item in (*regions, *review_candidates)
             if not item.get("candidate_id")
             or str(item.get("candidate_id")) not in candidate_ids
         )
 
-        excluded_count = recognized_count - len(regions)
+        excluded_count = sum(
+            1 for item in candidate_outcomes if item["state"] == "excluded"
+        )
+        review_count = len(review_candidates)
         return {
             "count": len(regions),
-            "detected_count": cluster_total,
+            "detected_count": cluster_total + (1 if notes_region is not None else 0),
             "recognized_count": recognized_count,
             "eligible_count": len(regions),
             "excluded_count": excluded_count,
-            "review_count": 0,
-            "unread_count": max(0, cluster_total - recognized_count),
+            "review_count": review_count,
+            "unread_count": max(
+                0,
+                cluster_total + (1 if notes_region is not None else 0)
+                - recognized_count,
+            ),
             "skipped_existing_count": skipped_existing_count,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "assembly_stats": {
@@ -5638,8 +5727,11 @@ class OcrPipeline:
             "engineering_parse_stats": engineering_parse_statistics(
                 parsed_objects
             ),
+            "engineering_disposition_stats": engineering_disposition_statistics(
+                dispositions
+            ),
             "regions": regions,
-            "review_candidates": [],
+            "review_candidates": review_candidates,
             "candidate_outcomes": candidate_outcomes,
         }
 
@@ -5815,6 +5907,10 @@ class OcrPipeline:
         from engineering_value_parser import (
             engineering_parse_statistics,
             parse_engineering_value,
+        )
+        from engineering_disposition import (
+            disposition_engineering_object,
+            engineering_disposition_statistics,
         )
 
         def report(
@@ -7500,22 +7596,12 @@ class OcrPipeline:
                 and not record.get("authoritative_reread", False)
             ):
                 decision = preliminary_decisions[filter_index - 1]
-                final_state = "excluded"
-                final_reason = str(record.get("preliminary_reason") or "")
             else:
                 decision = evaluate_page_value(
                     filter_candidate,
                     page_candidates=filter_candidates,
                     table_masks=table_masks,
                     page_size=image.size,
-                )
-                final_state, final_reason = resolve_candidate_state(
-                    record,
-                    decision,
-                    authoritative=bool(
-                        record.get("authoritative_reread")
-                        or record.get("native_authoritative")
-                    ),
                 )
             if not record["recognized"] and decision.rule_name != "table_region":
                 filter_rule_counts["unread"] += 1
@@ -7524,14 +7610,36 @@ class OcrPipeline:
 
             candidate = record["candidate"]
             result = record["result"]
-            # A non-numeric review proposal is safer as a blank editable value
-            # than misleading OCR such as "rat". Raw text remains diagnostic.
             published_text = record["text"]
-            if (
-                final_state == "review"
-                and decision.rule_name == "no_numeric_component"
-            ):
-                published_text = ""
+            engineering_parse = parse_engineering_value(published_text)
+            disposition = disposition_engineering_object(
+                engineering_parse,
+                recognized=bool(record["recognized"]),
+                authoritative=bool(
+                    record.get("authoritative_reread")
+                    or record.get("native_authoritative")
+                ),
+                context_rule=decision.rule_name,
+                context_reason=decision.reason,
+                assembly_conflict=bool(record.get("assembly_conflict")),
+                assembly_review_reason=str(
+                    record.get("assembly_review_reason") or ""
+                ),
+                source_conflict=bool(result.get("source_conflict")),
+                numeric_conflict=bool(result.get("numeric_conflict")),
+                recognition_review_required=bool(
+                    result.get("authoritative_review_required")
+                ),
+                recognition_needs_review=bool(result.get("needs_review")),
+                recognition_review_reason=str(
+                    result.get("review_reason") or ""
+                ),
+                speck=bool(record.get("speck")),
+            )
+            final_state = (
+                "excluded" if disposition.state == "other" else disposition.state
+            )
+            final_reason = disposition.reason
 
             common_region = {
                 "candidate_id": record["candidate_id"],
@@ -7552,6 +7660,9 @@ class OcrPipeline:
                 "page_filter_rule": decision.rule_name,
                 "page_filter_reason": decision.reason,
                 "review_reason": final_reason if final_state == "review" else "",
+                "authoritative_review_required": bool(
+                    result.get("authoritative_review_required")
+                ),
                 "recovery_attempted": bool(result.get("recovery_attempted")),
                 "authoritative_reread": bool(
                     result.get("authoritative_reread")
@@ -7576,6 +7687,8 @@ class OcrPipeline:
                 "assembly_children": [
                     dict(child) for child in record.get("assembly_children", ())
                 ],
+                "engineering_parse": engineering_parse.to_dict(),
+                "engineering_disposition": disposition.to_dict(),
             }
             oriented_box = result.get("oriented_box") or record.get(
                 "oriented_box"
@@ -7583,20 +7696,6 @@ class OcrPipeline:
             if isinstance(oriented_box, dict):
                 common_region["oriented_box"] = dict(oriented_box)
             self._apply_feature_labels(common_region)
-            # A one- or two-character review candidate that the recogniser
-            # itself puts below even odds ("3" at 0.15, "2" at 0.24) is a
-            # stroke it could not resolve, not a value awaiting confirmation;
-            # a queue of those teaches the inspector to ignore the queue.
-            if (
-                final_state == "review"
-                and len(published_text.strip()) <= 2
-                and float(result.get("confidence") or 0.0) < 0.5
-            ):
-                final_state = "excluded"
-                final_reason = (
-                    "Recognition could not resolve this short mark with any "
-                    "confidence"
-                )
             if final_state == "eligible":
                 regions.append(common_region)
             elif final_state == "review":
@@ -7624,7 +7723,9 @@ class OcrPipeline:
                 "confidence": float(result.get("confidence") or 0.0),
                 "recognized": record["recognized"],
                 "reason": final_reason or decision.reason,
-                "rule": decision.rule_name,
+                "rule": disposition.rule,
+                "page_filter_rule": decision.rule_name,
+                "page_filter_reason": decision.reason,
                 "type": common_region.get("type"),
                 "category": common_region.get("category"),
                 "subtype": common_region.get("subtype"),
@@ -7635,6 +7736,9 @@ class OcrPipeline:
                 "recovery_attempted": bool(result.get("recovery_attempted")),
                 "authoritative_reread": bool(
                     result.get("authoritative_reread")
+                ),
+                "authoritative_review_required": bool(
+                    result.get("authoritative_review_required")
                 ),
                 "recognition_source": result.get(
                     "recognition_source", "ocr"
@@ -7652,6 +7756,8 @@ class OcrPipeline:
                 "assembly_children": [
                     dict(child) for child in record.get("assembly_children", ())
                 ],
+                "engineering_parse": engineering_parse.to_dict(),
+                "engineering_disposition": disposition.to_dict(),
             }
             candidate_outcomes.append(outcome)
             filtered_overlay_candidates.append(
@@ -7661,7 +7767,7 @@ class OcrPipeline:
                     "state": final_state,
                     "text": published_text,
                     "reason": final_reason,
-                    "rule": decision.rule_name,
+                    "rule": disposition.rule,
                 }
             )
 
@@ -7983,7 +8089,64 @@ class OcrPipeline:
             # The fragments the block was assembled from — the marker column,
             # a phrase out of one line — must not keep balloons of their own.
             retire_inside([dict(notes_region["bbox"])], "Part of the general notes", keep=set())
-            regions.append(notes_region)
+            note_text = str(notes_region.get("text") or "")
+            note_parse = parse_engineering_value(note_text)
+            note_disposition = disposition_engineering_object(
+                note_parse,
+                recognized=bool(note_text.strip()),
+                authoritative=True,
+                context_rule="note_information",
+                context_reason="General drawing notes",
+            )
+            note_id = "P-NOTES"
+            candidate_outcomes.append(
+                {
+                    "candidate_id": note_id,
+                    "object_id": note_id,
+                    "bbox": dict(notes_region["bbox"]),
+                    "polygon": [],
+                    "state": "excluded",
+                    "text": note_text,
+                    "raw_text": note_text,
+                    "preliminary_text": note_text,
+                    "confidence": float(notes_region.get("confidence") or 0.0),
+                    "recognized": bool(note_text.strip()),
+                    "reason": note_disposition.reason,
+                    "rule": note_disposition.rule,
+                    "page_filter_rule": "note_information",
+                    "page_filter_reason": "General drawing notes",
+                    "type": notes_region.get("type"),
+                    "category": notes_region.get("category"),
+                    "subtype": notes_region.get("subtype"),
+                    "label": notes_region.get("label"),
+                    "orientation": notes_region.get("orientation", "horizontal"),
+                    "rotation": float(notes_region.get("rotation") or 0.0),
+                    "oriented_box": notes_region.get("oriented_box"),
+                    "recovery_attempted": False,
+                    "authoritative_reread": True,
+                    "authoritative_review_required": False,
+                    "recognition_source": "ocr",
+                    "recognition_evidence": {},
+                    "source_conflict": False,
+                    "assembly_id": note_id,
+                    "assembly_rule": "notes_block",
+                    "assembly_conflict": False,
+                    "assembly_review_reason": "",
+                    "assembly_children": [],
+                    "engineering_parse": note_parse.to_dict(),
+                    "engineering_disposition": note_disposition.to_dict(),
+                }
+            )
+            filtered_overlay_candidates.append(
+                {
+                    "id": note_id,
+                    "bbox": dict(notes_region["bbox"]),
+                    "state": "excluded",
+                    "text": note_text,
+                    "reason": note_disposition.reason,
+                    "rule": note_disposition.rule,
+                }
+            )
             detected_count += 1
 
         # Two detection passes can resolve the same callout and both survive to
@@ -7995,19 +8158,72 @@ class OcrPipeline:
         regions = dedupe_regions(regions)
         detected_count -= before_dedupe - len(regions)
 
-        # Parse only after the final limit-stack, dual-unit, slanted, notes,
-        # and deduplication passes.  Earlier text can be replaced by those
-        # passes; attaching M5 evidence here guarantees the structure matches
-        # the exact text returned to the client.  The parse is metadata only
-        # and cannot change the M4/M6 state machine.
+        # Refresh parse evidence after the final limit-stack, dual-unit,
+        # slanted, notes, and deduplication passes. Earlier text can be
+        # replaced by those passes. M6 disposition remains attached to the
+        # same logical outcome, with parse status/kind refreshed when needed.
         for collection in (regions, review_candidates, candidate_outcomes):
             for item in collection:
-                item["engineering_parse"] = parse_engineering_value(
-                    str(item.get("text") or "")
-                ).to_dict()
+                parsed = parse_engineering_value(str(item.get("text") or ""))
+                item["engineering_parse"] = parsed.to_dict()
+                existing_disposition = dict(
+                    item.get("engineering_disposition") or {}
+                )
+                if existing_disposition:
+                    existing_disposition["parse_status"] = parsed.status
+                    existing_disposition["parse_kind"] = parsed.kind
+                    item["engineering_disposition"] = existing_disposition
+                    continue
+                disposition = disposition_engineering_object(
+                    parsed,
+                    recognized=bool(item.get("recognized", True)),
+                    authoritative=True,
+                    context_rule=str(item.get("page_filter_rule") or ""),
+                    context_reason=str(item.get("page_filter_reason") or ""),
+                    assembly_conflict=bool(item.get("assembly_conflict")),
+                    assembly_review_reason=str(
+                        item.get("assembly_review_reason") or ""
+                    ),
+                    source_conflict=bool(item.get("source_conflict")),
+                    numeric_conflict=bool(item.get("numeric_conflict")),
+                    recognition_review_required=bool(
+                        item.get("authoritative_review_required")
+                    ),
+                    recognition_needs_review=bool(item.get("needs_review")),
+                    recognition_review_reason=str(
+                        item.get("review_reason") or ""
+                    ),
+                )
+                item["engineering_disposition"] = disposition.to_dict()
+
+        # Post-processing can retire an otherwise eligible object when a
+        # higher-quality limit, dual-unit, slanted, or notes object owns the
+        # same ink. Keep that evidence as an explicit Other disposition.
+        for item in candidate_outcomes:
+            disposition = dict(item.get("engineering_disposition") or {})
+            mapped_state = (
+                "excluded" if disposition.get("state") == "other"
+                else disposition.get("state")
+            )
+            if item.get("state") == mapped_state:
+                continue
+            parsed = item["engineering_parse"]
+            if item.get("state") == "excluded":
+                item["engineering_disposition"] = {
+                    "schema_version": 1,
+                    "state": "other",
+                    "rule": "post_processing_retirement",
+                    "reason": str(item.get("reason") or "Superseded object"),
+                    "parse_status": str(parsed.get("status") or "unparsed"),
+                    "parse_kind": str(parsed.get("kind") or "unknown"),
+                    "hard_context": False,
+                }
 
         parsed_objects = [
             item["engineering_parse"] for item in candidate_outcomes
+        ]
+        disposition_objects = [
+            item["engineering_disposition"] for item in candidate_outcomes
         ]
         candidate_ids = {
             str(item.get("candidate_id") or "") for item in candidate_outcomes
@@ -8024,10 +8240,16 @@ class OcrPipeline:
             if not item.get("candidate_id")
             or str(item.get("candidate_id")) not in candidate_ids
         )
+        disposition_objects.extend(
+            item["engineering_disposition"]
+            for item in (*regions, *review_candidates)
+            if not item.get("candidate_id")
+            or str(item.get("candidate_id")) not in candidate_ids
+        )
 
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
-        )
+        ) + (1 if notes_region is not None else 0)
         recognition_source_counts: Counter[str] = Counter(
             str(
                 record["result"].get("recognition_source")
@@ -8082,6 +8304,9 @@ class OcrPipeline:
             "assembly_stats": assembly_stats,
             "engineering_parse_stats": engineering_parse_statistics(
                 parsed_objects
+            ),
+            "engineering_disposition_stats": engineering_disposition_statistics(
+                disposition_objects
             ),
             "regions": regions,
             "review_candidates": review_candidates,
