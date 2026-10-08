@@ -1,0 +1,84 @@
+M7.2 — native PDF fragment assembly and candidate-local symbol enrichment
+==========================================================================
+
+Base branch and commit
+----------------------
+Apply this incremental ZIP to the MVP1 branch at:
+
+    1a35a57 fix(ocr): preserve native PDF text during symbol detection
+
+No commit was created or pushed by Codex.
+
+Apply on Windows / VS Code
+--------------------------
+1. Stop the frontend and backend.
+2. In the VS Code terminal, open the doc-ocr repository and confirm the base:
+
+       git switch MVP1
+       git pull --ff-only
+       git rev-parse --short HEAD
+
+   Expected result: 1a35a57
+
+3. Make sure your own uncommitted work is saved or stashed.
+4. Extract this ZIP into the doc-ocr repository root. Allow it to replace the
+   listed files. Do not extract it inside backend/; the ZIP already contains
+   backend/ and scripts/ paths.
+5. Review the changes:
+
+       git status --short
+       git diff --check
+
+No dependency change is required. The implementation uses NumPy and Pillow,
+which are already backend dependencies.
+
+What this milestone changes
+---------------------------
+- Joins adjacent native PDF fragments before page filtering. A nominal such as
+  22.9 and its separate ±1 fragment are evaluated as one value instead of
+  allowing ±1 to be rejected as a frame label.
+- Keeps native PDF characters and digits authoritative. The new enrichment
+  pass does not call OCR and does not substitute OCR text.
+- Restores degree marks only from a small crop around a plausible native angle.
+- Resolves horizontal and vertical feature-control frames from local frame
+  geometry while retaining native tolerance and datum text.
+- Preserves explicit surface-finish text such as Rz12.5 even when nearby
+  section/detail wording would otherwise exclude it.
+- Sends FCF-like native text with unresolved frame geometry to Review.
+- Keeps every absorbed native fragment in assembly_children for audit/review.
+
+Focused verification
+--------------------
+From doc-ocr/backend, with requirements-dev.txt installed:
+
+    .\.venv-gpu\Scripts\python.exe -m pytest -q `
+      test_pdf_text_first.py `
+      test_structured_symbol_vision.py `
+      test_native_symbol_enrichment.py `
+      test_engineering_object_assembly.py
+
+Or from the repository root:
+
+    npm run test:backend
+
+Then start the GPU backend as usual:
+
+    cd backend
+    $env:CUDA_VISIBLE_DEVICES="0"
+    $env:OCR_DEVICE="gpu:0"
+    $env:OCR_RELOAD="false"
+    .\.venv-gpu\Scripts\python.exe main.py
+
+Benchmark expectations for 3015-100-2232F.pdf
+------------------------------------------------
+- 22.9 and ±1 become one angular value: 22.9°±1°.
+- Horizontal Ø0.5 A B C becomes a Position FCF.
+- Vertical Ø2 A B C becomes a Position FCF.
+- Rz12.5 becomes Surface Finish.
+- (67.1) and (22.9) recover their degree marks.
+- The unresolved 21°-like candidate stays in Review.
+- Ordinary 0.2 values are not reclassified by this milestone.
+
+Suggested commit message
+------------------------
+feat(ocr): enrich native PDF callouts with local geometry

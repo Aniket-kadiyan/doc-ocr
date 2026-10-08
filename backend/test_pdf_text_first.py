@@ -200,6 +200,34 @@ def test_table_exclusion_wins_over_bare_number_review() -> None:
     assert result["candidate_outcomes"][0]["rule"] == "table_region"
 
 
+def test_native_nominal_and_tolerance_are_assembled_before_filtering() -> None:
+    nominal = _native_region("22.9", x=10, y=20)
+    nominal["bbox"]["width"] = 30
+    tolerance = _native_region("±1", x=43, y=21)
+    tolerance["bbox"]["width"] = 16
+    text_layer = {
+        "usable": True,
+        "page_size": (500, 300),
+        "regions": [nominal],
+        # Simulate the previous failure: the tolerance fragment was placed in
+        # the non-callout list before it could be associated with its nominal.
+        "excluded": [tolerance],
+    }
+
+    result = native_text_segment_result(
+        text_layer,
+        page_number=1,
+        scope_kind="page",
+    )
+
+    assert result["eligible_count"] == 1
+    assert result["excluded_count"] == 0
+    assert result["regions"][0]["text"] == "22.9 ±1"
+    assert len(result["regions"][0]["assembly_children"]) == 2
+    assert result["regions"][0]["recognition_source"] == "native_pdf"
+    assert result["assembly_stats"]["absorbed_fragment_count"] == 1
+
+
 def test_section_crop_translates_candidate_and_native_provenance() -> None:
     region = _native_region("R2+0.2", x=110, y=70)
     region["recognition_evidence"] = {

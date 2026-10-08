@@ -51,6 +51,7 @@ from pdf_text_first import (
     native_text_segment_result,
     native_vector_result_is_primary,
 )
+from native_symbol_enrichment import enrich_native_result_with_geometry
 from pdf_text_layer import text_layer_regions
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
@@ -892,6 +893,11 @@ async def create_scan_job(
                 if native_text_layer and native_text_layer.get("usable")
                 else None
             )
+            if native_seg is not None:
+                native_seg = (
+                    enrich_native_result_with_geometry(image, native_seg)
+                    or native_seg
+                )
             native_is_primary = native_vector_result_is_primary(
                 native_seg,
                 evidence_profile=(
@@ -1003,6 +1009,11 @@ async def create_scan_job(
                 if section_text_layer is not None
                 else None
             )
+            if native_seg is not None:
+                native_seg = (
+                    enrich_native_result_with_geometry(section_image, native_seg)
+                    or native_seg
+                )
             native_is_primary = native_vector_result_is_primary(
                 native_seg,
                 evidence_profile=(

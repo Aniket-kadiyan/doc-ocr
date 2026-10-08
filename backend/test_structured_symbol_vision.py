@@ -1,7 +1,10 @@
 """Synthetic checks for geometry-backed engineering symbols."""
 
 from PIL import Image, ImageDraw
-from structured_symbol_vision import plan_structured_engineering_symbols
+from structured_symbol_vision import (
+    _rotate_box,
+    plan_structured_engineering_symbols,
+)
 
 
 def _record(text: str, bbox: dict[str, float]) -> dict:
@@ -85,6 +88,50 @@ def test_position_crosshair_is_distinguished_from_perpendicularity():
     assert len(plans) == 1
     assert plans[0].evidence.subtype == "Position"
     assert plans[0].text.startswith("⌖ | 0.5 | A | B | C")
+
+
+def test_vertical_position_frame_is_checked_in_a_rotated_local_view():
+    upright = Image.new("RGB", (240, 100), "white")
+    draw = ImageDraw.Draw(upright)
+    draw.rectangle((25, 34, 205, 58), outline="black", width=2)
+    for x in (65, 125, 155, 180):
+        draw.line((x, 34, x, 58), fill="black", width=2)
+    draw.ellipse((36, 38, 54, 56), outline="black", width=2)
+    draw.line((45, 38, 45, 56), fill="black", width=2)
+    draw.line((36, 47, 54, 47), fill="black", width=2)
+    upright_records = [
+        _record("0.5", {"x": 80, "y": 38, "width": 30, "height": 14}),
+        {**_record("A", {"x": 135, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C2"},
+        {**_record("B", {"x": 162, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C3"},
+        {**_record("C", {"x": 187, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C4"},
+    ]
+    image = upright.transpose(Image.Transpose.ROTATE_90)
+    records = [
+        {
+            **record,
+            "bbox": _rotate_box(
+                record["bbox"],
+                90,
+                source_width=upright.width,
+                source_height=upright.height,
+            ),
+        }
+        for record in upright_records
+    ]
+
+    plans = plan_structured_engineering_symbols(
+        image,
+        records,
+        rotations=(0, 90, 270),
+    )
+
+    assert len(plans) == 1
+    assert plans[0].evidence.complete
+    assert plans[0].evidence.subtype == "Position"
+    assert plans[0].text == "⌖ | 0.5 | A | B | C"
 
 
 def test_large_nearby_diagonals_do_not_relabel_a_dimension_as_surface_finish():

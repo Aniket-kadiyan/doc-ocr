@@ -10,7 +10,7 @@ so the disposition policy sends them to Review rather than dropping them.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import re
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
@@ -472,7 +472,7 @@ def _surface_plan(image: Image.Image, index: int, record: Mapping[str, Any]) -> 
         dict(evidence.bbox), _confidence(record), evidence, False, "")
 
 
-def plan_structured_engineering_symbols(
+def _plan_upright_structured_engineering_symbols(
     image: Image.Image, records: Sequence[Mapping[str, Any]]
 ) -> list[StructuredObjectPlan]:
     if not records:
@@ -499,6 +499,178 @@ def plan_structured_engineering_symbols(
         if plan:
             plans.append(plan); assigned.add(index)
     return sorted(plans, key=lambda item: min(item.member_indexes))
+
+
+def _rotate_box(
+    box: BBox,
+    angle: int,
+    *,
+    source_width: int,
+    source_height: int,
+) -> dict[str, float]:
+    """Map an axis box through a Pillow-style counter-clockwise rotation."""
+
+    x, y = float(box["x"]), float(box["y"])
+    width, height = float(box["width"]), float(box["height"])
+    normalized = angle % 360
+    if normalized == 90:
+        return {
+            "x": y,
+            "y": float(source_width) - (x + width),
+            "width": height,
+            "height": width,
+        }
+    if normalized == 180:
+        return {
+            "x": float(source_width) - (x + width),
+            "y": float(source_height) - (y + height),
+            "width": width,
+            "height": height,
+        }
+    if normalized == 270:
+        return {
+            "x": float(source_height) - (y + height),
+            "y": x,
+            "width": height,
+            "height": width,
+        }
+    return dict(box)
+
+
+def _rotate_record(
+    record: Mapping[str, Any],
+    angle: int,
+    *,
+    source_width: int,
+    source_height: int,
+) -> dict[str, Any]:
+    mapped = dict(record)
+    mapped["bbox"] = _rotate_box(
+        _box(record),
+        angle,
+        source_width=source_width,
+        source_height=source_height,
+    )
+    return mapped
+
+
+def _map_rotated_plan_to_source(
+    plan: StructuredObjectPlan,
+    angle: int,
+    *,
+    source_width: int,
+    source_height: int,
+) -> StructuredObjectPlan:
+    normalized = angle % 360
+    if normalized in {90, 270}:
+        rotated_width, rotated_height = source_height, source_width
+    else:
+        rotated_width, rotated_height = source_width, source_height
+    inverse = (360 - normalized) % 360
+
+    def restore(box: BBox) -> dict[str, float]:
+        return {
+            key: round(value, 1)
+            for key, value in _rotate_box(
+                box,
+                inverse,
+                source_width=rotated_width,
+                source_height=rotated_height,
+            ).items()
+        }
+
+    evidence = replace(
+        plan.evidence,
+        bbox=restore(plan.evidence.bbox),
+        cells=tuple(restore(cell) for cell in plan.evidence.cells),
+        visual_features={
+            **dict(plan.evidence.visual_features),
+            "geometry_rotation": normalized,
+        },
+    )
+    return replace(plan, bbox=restore(plan.bbox), evidence=evidence)
+
+
+def plan_structured_engineering_symbols(
+    image: Image.Image,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    rotations: Sequence[int] = (0,),
+) -> list[StructuredObjectPlan]:
+    """Find structured objects, optionally checking rotated local candidates.
+
+    Whole-page OCR keeps the historical upright-only default. Native PDF
+    enrichment opts into 90°/270° checks on one small candidate crop, which
+    recovers vertical feature-control frames without broadening OCR scope.
+    """
+
+    if not records:
+        return []
+    candidates: list[StructuredObjectPlan] = []
+    for requested in rotations:
+        angle = int(requested) % 360
+        if angle not in {0, 90, 180, 270}:
+            continue
+        if angle == 0:
+            rotated_image = image
+            rotated_records = list(records)
+        else:
+            transpose = {
+                90: Image.Transpose.ROTATE_90,
+                180: Image.Transpose.ROTATE_180,
+                270: Image.Transpose.ROTATE_270,
+            }[angle]
+            rotated_image = image.transpose(transpose)
+            rotated_records = [
+                _rotate_record(
+                    record,
+                    angle,
+                    source_width=image.width,
+                    source_height=image.height,
+                )
+                for record in records
+            ]
+        for raw_plan in _plan_upright_structured_engineering_symbols(
+            rotated_image, rotated_records
+        ):
+            plan = (
+                raw_plan
+                if angle == 0
+                else _map_rotated_plan_to_source(
+                    raw_plan,
+                    angle,
+                    source_width=image.width,
+                    source_height=image.height,
+                )
+            )
+            candidates.append(plan)
+
+    # Both quarter-turns can expose the same vertical frame. Prefer a
+    # completed multi-cell FCF over an upside-down incomplete interpretation,
+    # then prevent its individual datum cells from becoming extra objects.
+    kind_priority = {
+        "feature_control_frame": 0,
+        "datum": 1,
+        "surface_finish": 2,
+    }
+    selected: list[StructuredObjectPlan] = []
+    claimed_indexes: set[int] = set()
+    for plan in sorted(
+        candidates,
+        key=lambda item: (
+            kind_priority.get(item.evidence.kind, 9),
+            not item.evidence.complete,
+            -len(item.member_indexes),
+            -item.evidence.confidence,
+            min(item.member_indexes),
+        ),
+    ):
+        members = set(plan.member_indexes)
+        if members.intersection(claimed_indexes):
+            continue
+        selected.append(plan)
+        claimed_indexes.update(members)
+    return sorted(selected, key=lambda item: min(item.member_indexes))
 
 
 def structured_symbol_statistics(

@@ -35,6 +35,7 @@ const fastTests = [
   "backend/test_engineering_value_parser.py",
   "backend/test_feature_classifier.py",
   "backend/test_feature_rules.py",
+  "backend/test_native_symbol_enrichment.py",
   "backend/test_page_layout.py",
   "backend/test_page_candidate_recovery.py",
   "backend/test_pdf_evidence.py",

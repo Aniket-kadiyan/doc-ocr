@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
+import math
 import re
 from typing import Any, Mapping, Sequence
 
+from engineering_object_assembly import plan_engineering_object_assemblies
 from page_scan import bbox_overlap_fraction, overlaps_existing_value
 from page_value_filters import (
     PageValueCandidate,
@@ -173,6 +175,199 @@ def _common_native_region(
     }
 
 
+def _native_result_record(region: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose native provenance in the record shape used by the assembler."""
+
+    record = deepcopy(dict(region))
+    record["native_authoritative"] = True
+    record["result"] = {
+        "text": str(region.get("text") or ""),
+        "raw_ocr": str(region.get("raw_text") or region.get("text") or ""),
+        "confidence": float(region.get("confidence") or 0.995),
+        "orientation": str(region.get("orientation") or "horizontal"),
+        "rotation": float(region.get("rotation") or 0.0),
+        "recognition_source": "native_pdf",
+        "recognition_evidence": deepcopy(
+            dict(region.get("recognition_evidence") or {})
+        ),
+        "source_conflict": False,
+        "needs_review": bool(region.get("needs_review")),
+    }
+    return record
+
+
+def _flatten_native_children(
+    members: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    children: list[dict[str, Any]] = []
+    for member in members:
+        member_children = member.get("assembly_children")
+        if isinstance(member_children, list) and member_children:
+            children.extend(
+                deepcopy(dict(child))
+                for child in member_children
+                if isinstance(child, Mapping)
+            )
+            continue
+        children.append(
+            {
+                "candidate_id": str(member.get("candidate_id") or ""),
+                "text": str(member.get("text") or ""),
+                "raw_text": str(member.get("raw_text") or member.get("text") or ""),
+                "bbox": dict(_box(member)),
+                "polygon": deepcopy(list(member.get("polygon") or ())),
+                "confidence": float(member.get("confidence") or 0.995),
+                "orientation": str(member.get("orientation") or "horizontal"),
+                "rotation": float(member.get("rotation") or 0.0),
+                "recognition_source": "native_pdf",
+                "recognition_evidence": deepcopy(
+                    dict(member.get("recognition_evidence") or {})
+                ),
+                "source_conflict": False,
+            }
+        )
+    return children
+
+
+def _assemble_native_sources(
+    sources: Sequence[Mapping[str, Any]],
+    *,
+    accepted_identity: set[int],
+    page_number: int,
+) -> tuple[list[dict[str, Any]], list[Any], int]:
+    """Join safe native fragments before any fragment is context-filtered.
+
+    A nominal and its adjacent tolerance must be judged as one engineering
+    value. Filtering ``±1`` first loses that relationship and can mistake the
+    tolerance for a drawing-frame label. The existing conservative assembly
+    planner already encodes the required geometry; this adapter preserves the
+    exact native text and flattens every original run into audit evidence.
+    """
+
+    common: list[dict[str, Any]] = []
+    for index, source in enumerate(sources, start=1):
+        item = _common_native_region(
+            source,
+            candidate_id=f"PDF:P{page_number}:T{index:05d}",
+        )
+        item["_native_text_layer_accepted"] = id(source) in accepted_identity
+        common.append(item)
+
+    planned = plan_engineering_object_assemblies(
+        [_native_result_record(item) for item in common]
+    )
+    plans = [
+        plan
+        for plan in planned
+        if _native_plan_is_tight(plan.member_indexes, common)
+    ]
+    plans_by_first = {min(plan.member_indexes): plan for plan in plans}
+    absorbed = {
+        member_index
+        for plan in plans
+        for member_index in plan.member_indexes
+    }
+    assembled: list[dict[str, Any]] = []
+    for index, item in enumerate(common):
+        plan = plans_by_first.get(index)
+        if plan is None:
+            if index not in absorbed:
+                assembled.append(item)
+            continue
+
+        members = [common[member_index] for member_index in plan.member_indexes]
+        anchor = deepcopy(common[plan.anchor_index])
+        anchor.update(
+            {
+                "candidate_id": plan.object_id,
+                "object_id": plan.object_id,
+                "assembly_id": plan.object_id,
+                "bbox": dict(plan.bbox),
+                "polygon": [list(point) for point in plan.polygon],
+                "text": plan.text,
+                "raw_text": " ".join(
+                    str(member.get("raw_text") or member.get("text") or "")
+                    for member in members
+                ).strip(),
+                "confidence": plan.confidence,
+                "orientation": plan.orientation,
+                "rotation": plan.rotation,
+                "recognized": bool(plan.text),
+                "needs_review": plan.needs_review,
+                "recognition_source": "native_pdf",
+                "recognition_evidence": {
+                    **deepcopy(plan.recognition_evidence),
+                    "selected_source": "native_pdf",
+                    "sources": ["native_pdf"],
+                    "native_text": plan.text,
+                    "ocr_text": "",
+                    "agreement": 1.0,
+                    "conflict": False,
+                    "native_bbox": dict(plan.bbox),
+                },
+                "source_conflict": False,
+                "assembly_rule": f"native_pre_filter+{plan.rule}",
+                "assembly_conflict": plan.conflict,
+                "assembly_review_reason": plan.review_reason,
+                "assembly_children": _flatten_native_children(members),
+                # An accepted base remains eligible for evaluation even when
+                # its modifier came from the text layer's non-callout list.
+                "_native_text_layer_accepted": any(
+                    bool(member.get("_native_text_layer_accepted"))
+                    for member in members
+                ),
+            }
+        )
+        assembled.append(anchor)
+
+    atomic_count = sum(
+        max(1, len(item.get("assembly_children") or ())) for item in common
+    )
+    return assembled, plans, atomic_count
+
+
+def _native_plan_is_tight(
+    member_indexes: Sequence[int],
+    records: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Reject geometrically legal but visibly separated native-text joins."""
+
+    pending = set(member_indexes)
+    if len(pending) < 2:
+        return False
+    connected = {pending.pop()}
+    while pending:
+        newly_connected: set[int] = set()
+        for right_index in pending:
+            right = _box(records[right_index])
+            for left_index in connected:
+                left = _box(records[left_index])
+                horizontal_gap = max(
+                    0.0,
+                    right["x"] - (left["x"] + left["width"]),
+                    left["x"] - (right["x"] + right["width"]),
+                )
+                vertical_gap = max(
+                    0.0,
+                    right["y"] - (left["y"] + left["height"]),
+                    left["y"] - (right["y"] + right["height"]),
+                )
+                distance = math.hypot(horizontal_gap, vertical_gap)
+                scale = max(
+                    min(left["width"], left["height"]),
+                    min(right["width"], right["height"]),
+                    1.0,
+                )
+                if distance <= 0.9 * scale:
+                    newly_connected.add(right_index)
+                    break
+        if not newly_connected:
+            return False
+        connected.update(newly_connected)
+        pending.difference_update(newly_connected)
+    return True
+
+
 def native_text_segment_result(
     text_layer: Mapping[str, Any],
     *,
@@ -189,12 +384,17 @@ def native_text_segment_result(
     excluded_sources = list(text_layer.get("excluded", ()))
     all_sources = [*accepted_sources, *excluded_sources]
     accepted_identity = {id(item) for item in accepted_sources}
+    assembled_sources, assembly_plans, atomic_count = _assemble_native_sources(
+        all_sources,
+        accepted_identity=accepted_identity,
+        page_number=page_number,
+    )
     filter_candidates = [
         PageValueCandidate(
             text=normalize_page_value_text(str(item.get("text") or "")),
             bbox=_box(item),
         )
-        for item in all_sources
+        for item in assembled_sources
     ]
 
     regions: list[dict[str, Any]] = []
@@ -203,11 +403,7 @@ def native_text_segment_result(
     rule_counts: Counter[str] = Counter()
     skipped_existing = 0
 
-    for index, (source, filter_candidate) in enumerate(
-        zip(all_sources, filter_candidates), start=1
-    ):
-        candidate_id = f"PDF:P{page_number}:T{index:05d}"
-        common = _common_native_region(source, candidate_id=candidate_id)
+    for common, filter_candidate in zip(assembled_sources, filter_candidates):
         if overlaps_existing_value(common["bbox"], existing_value_boxes):
             skipped_existing += 1
             continue
@@ -219,7 +415,7 @@ def native_text_segment_result(
             page_size=(int(page_size[0]), int(page_size[1])),
             page_candidates=filter_candidates,
         )
-        from_text_layer = id(source) in accepted_identity
+        from_text_layer = bool(common.pop("_native_text_layer_accepted", False))
         if not from_text_layer:
             state = "excluded"
             rule = "native_text_non_callout"
@@ -277,10 +473,6 @@ def native_text_segment_result(
         }
     )
     detected = len(outcomes)
-    atomic_count = sum(
-        max(1, len(outcome.get("assembly_children") or ()))
-        for outcome in outcomes
-    )
     return {
         "count": len(regions),
         "detected_count": detected,
@@ -309,8 +501,10 @@ def native_text_segment_result(
                 if len(outcome.get("assembly_children") or ()) > 1
             ),
             "absorbed_fragment_count": max(0, atomic_count - detected),
-            "conflict_count": 0,
-            "rule_counts": {},
+            "conflict_count": sum(1 for plan in assembly_plans if plan.conflict),
+            "rule_counts": dict(
+                sorted(Counter(plan.rule for plan in assembly_plans).items())
+            ),
         },
     }
 
