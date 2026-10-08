@@ -39,9 +39,9 @@ from feature_classifier import classify_feature
         # the classifier does with the sections that are on.
         ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),
         ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),
-        ("POSITION Ø0.1 A B", fd.CAT_DIAMETER),
-        ("FLATNESS 0.05", fd.CAT_LINEAR),
-        ("ROUNDNESS(2PT./180)", fd.CAT_LINEAR),
+        ("POSITION Ø0.1 A B", fd.CAT_GDT),
+        ("FLATNESS 0.05", fd.CAT_GDT),
+        ("ROUNDNESS(2PT./180)", fd.CAT_GDT),
         # Surface finish
         ("Ra 1.6", fd.CAT_SURFACE),
         ("Rz 3.2", fd.CAT_SURFACE),

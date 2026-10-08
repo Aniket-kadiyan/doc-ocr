@@ -32,6 +32,7 @@ class ChecksheetSnapshotItem(BaseModel):
     tool: str = Field(default="", max_length=500)
     dimension_type: str = Field(default="Unknown", max_length=100)
     assembly: dict[str, Any] | None = None
+    engineering_symbol: dict[str, Any] | None = None
     engineering_parse: dict[str, Any] | None = None
     engineering_disposition: dict[str, Any] | None = None
 
@@ -61,6 +62,7 @@ class ChecksheetScanCandidate(BaseModel):
     recovery_attempted: bool = False
     authoritative_reread: bool = False
     assembly: dict[str, Any] | None = None
+    engineering_symbol: dict[str, Any] | None = None
     engineering_parse: dict[str, Any] | None = None
     engineering_disposition: dict[str, Any] | None = None
     bbox: ChecksheetBBox

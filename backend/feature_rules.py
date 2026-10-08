@@ -49,7 +49,7 @@ SPEC_RULES: tuple[SpecRule, ...] = (
     SpecRule(13, "Countersink", fd.CAT_HOLE, True),
     SpecRule(14, "Spotface", fd.CAT_HOLE, True),
     SpecRule(15, "Depth", fd.CAT_HOLE, False, OUT_OF_SCOPE),
-    SpecRule(16, "GD&T", fd.CAT_GDT, False, OUT_OF_SCOPE),
+    SpecRule(16, "GD&T", fd.CAT_GDT, True),
     SpecRule(17, "Datum", fd.CAT_DATUM, True),
     SpecRule(18, "Surface Finish", fd.CAT_SURFACE, True),
     SpecRule(19, "Weld", fd.CAT_WELD, True),

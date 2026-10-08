@@ -3,6 +3,7 @@ import type {
   DimensionType,
   EngineeringDisposition,
   EngineeringObjectAssembly,
+  EngineeringSymbolEvidence,
   EngineeringValueParse,
   RecognitionEvidence,
 } from "@/types/annotation";
@@ -49,6 +50,7 @@ export interface ScanCandidate {
   recognitionEvidence?: RecognitionEvidence;
   /** Primitive detector evidence retained on the logical review object. */
   assembly?: EngineeringObjectAssembly;
+  engineeringSymbol?: EngineeringSymbolEvidence;
   /** Lossless parse evidence retained while the object awaits disposition. */
   engineeringParse?: EngineeringValueParse;
   /** Structure-first rule that placed the object in Review or Other. */

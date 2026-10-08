@@ -1,0 +1,67 @@
+M7 — GRAPHICAL ENGINEERING SYMBOL SUPPORT
+==========================================
+
+Base
+----
+This incremental package was produced from commit:
+  7fab455 feat(ocr): add structure-first candidate disposition
+
+It contains only M7 additions/changes. It does not contain a Git commit.
+
+Apply on Windows / VS Code
+--------------------------
+1. Open a PowerShell terminal at the root of doc-ocr.
+2. Confirm your current branch contains the M6 base:
+     git merge-base --is-ancestor 7fab455 HEAD
+     if ($LASTEXITCODE -ne 0) { throw "M6 base 7fab455 is missing" }
+3. Confirm your own work is saved or committed:
+     git status --short
+4. Extract this ZIP over the doc-ocr repository root, preserving folders.
+5. Review the result:
+     git status --short
+     git diff --check
+
+Verification
+------------
+Frontend:
+  npm run lint
+  npm run typecheck
+  npm run test:frontend
+
+Backend fast suite (requires backend/requirements-dev.txt / pytest):
+  npm run test:backend
+
+Focused M7 backend checks from doc-ocr/backend:
+  .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_structured_symbol_vision.py `
+    test_engineering_value_parser.py `
+    test_engineering_disposition.py `
+    test_feature_classifier.py `
+    test_feature_rules.py `
+    test_pdf_text_first.py `
+    test_checksheet_storage.py
+
+Run backend with GPU (same terminal, from doc-ocr/backend):
+  $env:CUDA_VISIBLE_DEVICES="0"
+  $env:OCR_DEVICE="gpu:0"
+  $env:OCR_RELOAD="false"
+  .\.venv-gpu\Scripts\python.exe main.py
+
+Expected M7 behavior
+--------------------
+- Feature-control frames, boxed datum letters, and surface-finish evidence are
+  detected from pixels and combined with OCR text.
+- Complete geometry-backed objects can become balloons.
+- Unresolved feature-control symbols remain visible in Review.
+- Text-only GD&T is never auto-accepted without matching frame geometry.
+- Native PDF text remains the first pass; pages/sections containing graphical
+  structured symbols invoke the raster path for visual confirmation.
+- Every absorbed OCR fragment remains in assembly_children.
+- Structured evidence persists in projects, review candidates, and backend
+  checksheet revisions.
+- Existing diameter, degree, plus/minus, M4 assembly, M5 parsing, and M6
+  Review/Other accounting remain active.
+
+Suggested commit message
+------------------------
+feat(ocr): detect and persist structured engineering symbols

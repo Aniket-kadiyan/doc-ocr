@@ -20,7 +20,6 @@ OUT_OF_SCOPE_SECTIONS = {
     rules.FILLET,
     rules.COUNTERBORE,
     rules.DEPTH,
-    rules.GDT,
     rules.QUANTITY_PREFIX,
     rules.REFERENCE,
 }
@@ -54,7 +53,7 @@ def test_the_working_sections_are_on():
     for section in (
         rules.LINEAR, rules.DIAMETER, rules.RADIUS, rules.CHAMFER, rules.ANGLE,
         rules.TAPER, rules.THREAD, rules.THRU, rules.COUNTERSINK, rules.SPOTFACE,
-        rules.DATUM, rules.SURFACE_FINISH, rules.WELD, rules.MATERIAL,
+        rules.GDT, rules.DATUM, rules.SURFACE_FINISH, rules.WELD, rules.MATERIAL,
         rules.HEAT_TREATMENT, rules.COATING, rules.DEBURRING, rules.BASIC,
         rules.GENERAL_NOTES,
     ):
@@ -95,8 +94,6 @@ def test_subtypes_follow_the_same_rule():
     [
         ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),   # 12 Counterbore, off
         ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),   # 15 Depth, off
-        ("⏥ 0.05 A", fd.CAT_LINEAR),          # 16 GD&T, off
-        ("Position Ø0.1 A B", fd.CAT_DIAMETER),
         ("25 REF", fd.CAT_LINEAR),            # 25 Reference, off
         ("(25)", fd.CAT_LINEAR),
     ],
@@ -131,6 +128,7 @@ def test_quantity_prefix_is_not_read():
         ("Ø10 CSK", fd.CAT_HOLE, "Countersink"),
         ("Ø12 SF", fd.CAT_HOLE, "Spotface"),
         ("Ra 1.6", fd.CAT_SURFACE, "Surface Finish"),
+        ("⏥ 0.05 A", fd.CAT_GDT, "GD&T Flatness"),
         ("ZINC PLATE", fd.CAT_COATING, "Coating"),
         ("HRC 58", fd.CAT_HEAT, "Heat Treatment"),
         ("ALUMINIUM 6061", fd.CAT_MATERIAL, "Material"),

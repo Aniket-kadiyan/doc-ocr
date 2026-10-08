@@ -3,6 +3,7 @@ import type {
   DimensionType,
   EngineeringDisposition,
   EngineeringObjectAssembly,
+  EngineeringSymbolEvidence,
   EngineeringValueParse,
 } from "@/types/annotation";
 import type { DocumentMetadata } from "@/types/documentMetadata";
@@ -24,6 +25,7 @@ export interface ChecksheetSnapshotItem {
   tool: string;
   dimension_type: DimensionType;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_symbol?: EngineeringSymbolEvidence | null;
   engineering_parse?: EngineeringValueParse | null;
   engineering_disposition?: EngineeringDisposition | null;
 }
@@ -63,6 +65,7 @@ export interface ChecksheetScanCandidate {
   recovery_attempted: boolean;
   authoritative_reread: boolean;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_symbol?: EngineeringSymbolEvidence | null;
   engineering_parse?: EngineeringValueParse | null;
   engineering_disposition?: EngineeringDisposition | null;
   bbox: BBox;
@@ -94,6 +97,7 @@ export interface ChecksheetRow {
   tool: string;
   dimension_type: DimensionType;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_symbol?: EngineeringSymbolEvidence | null;
   engineering_parse?: EngineeringValueParse | null;
   engineering_disposition?: EngineeringDisposition | null;
   readings: Record<string, string>;

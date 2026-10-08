@@ -104,6 +104,7 @@ export interface ScanJobResult {
   sourceProfile?: ApiSegmentResponse["source_profile"];
   recognitionSourceCounts: Record<string, number>;
   assemblyStats: NonNullable<ApiSegmentResponse["assembly_stats"]>;
+  structuredSymbolStats: NonNullable<ApiSegmentResponse["structured_symbol_stats"]>;
   engineeringParseStats: NonNullable<
     ApiSegmentResponse["engineering_parse_stats"]
   >;
@@ -425,6 +426,7 @@ export async function runScanJob({
     recognitionSourceCounts:
       snapshot.result.recognition_source_counts ?? {},
     assemblyStats: snapshot.result.assembly_stats ?? {},
+    structuredSymbolStats: snapshot.result.structured_symbol_stats ?? {},
     engineeringParseStats: snapshot.result.engineering_parse_stats ?? {},
     engineeringDispositionStats:
       snapshot.result.engineering_disposition_stats ?? {},

@@ -2394,6 +2394,7 @@ class OcrPipeline:
             "agreement": res.get("agreement", 0.0),
             "engine": res.get("engine", "paddleocr"),
             "symbols_detected": res.get("symbols_detected"),
+            "engineering_symbol": res.get("engineering_symbol"),
         }
 
     @staticmethod
@@ -2817,6 +2818,7 @@ class OcrPipeline:
         feature = classify_feature(
             str(region.get("text") or ""),
             symbols=region.get("symbols_detected") or {},
+            engineering_symbol=region.get("engineering_symbol") or {},
         )
         region["category"] = feature.category
         region["subtype"] = feature.subtype
@@ -4892,6 +4894,7 @@ class OcrPipeline:
             disposition_engineering_object,
             engineering_disposition_statistics,
         )
+        from structured_symbol_vision import structured_symbol_statistics
 
         def report(
             *,
@@ -5328,6 +5331,8 @@ class OcrPipeline:
             text = (res.get("text") or "").strip()
             if not text:
                 continue
+            engineering_symbol = res.get("engineering_symbol") or {}
+            has_structured_evidence = bool(engineering_symbol.get("kind"))
 
             # A balloon is for something a person measures. These three gates
             # drop what merely looks numeric: zone letters and balloon numbers
@@ -5336,11 +5341,12 @@ class OcrPipeline:
             canonical_short_nominal = bool(
                 re.fullmatch(r"[1-9]\d?", text.strip())
             )
-            if not is_segment_worthy(text) and not canonical_short_nominal:
+            if (not has_structured_evidence and not is_segment_worthy(text)
+                    and not canonical_short_nominal):
                 continue
-            if not has_dimension_value(text):
+            if not has_structured_evidence and not has_dimension_value(text):
                 continue
-            if is_stray_line(sub, text):
+            if not has_structured_evidence and is_stray_line(sub, text):
                 continue
 
             # Content-aware split: close-proximity callouts that fused into one
@@ -5419,6 +5425,7 @@ class OcrPipeline:
                     "agreement": res.get("agreement", 0.0),
                     "engine": res.get("engine", "paddleocr"),
                     "symbols_detected": res.get("symbols_detected"),
+                    "engineering_symbol": res.get("engineering_symbol"),
                     "assembly_rule": (
                         "section_geometry_cluster"
                         if len(children) > 1
@@ -5523,7 +5530,11 @@ class OcrPipeline:
             filter_rule_counts[decision.rule_name] = (
                 filter_rule_counts.get(decision.rule_name, 0) + 1
             )
-            engineering_parse = parse_engineering_value(text)
+            engineering_parse = parse_engineering_value(
+                text,
+                feature_category=str(classified_region.get("category") or "") or None,
+                engineering_symbol=classified_region.get("engineering_symbol") or {},
+            )
             disposition = disposition_engineering_object(
                 engineering_parse,
                 recognized=True,
@@ -5585,6 +5596,7 @@ class OcrPipeline:
                     "category": classified_region.get("category"),
                     "subtype": classified_region.get("subtype"),
                     "label": classified_region.get("label"),
+                    "engineering_symbol": classified_region.get("engineering_symbol"),
                     "orientation": region.get("orientation", "horizontal"),
                     "rotation": float(region.get("rotation") or 0.0),
                     "oriented_box": region.get("oriented_box"),
@@ -5724,6 +5736,9 @@ class OcrPipeline:
                 "conflict_count": 0,
                 "rule_counts": {},
             },
+            "structured_symbol_stats": structured_symbol_statistics(
+                [item for item in candidate_outcomes if item.get("engineering_symbol")]
+            ),
             "engineering_parse_stats": engineering_parse_statistics(
                 parsed_objects
             ),
@@ -5911,6 +5926,10 @@ class OcrPipeline:
         from engineering_disposition import (
             disposition_engineering_object,
             engineering_disposition_statistics,
+        )
+        from structured_symbol_vision import (
+            plan_structured_engineering_symbols,
+            structured_symbol_statistics,
         )
 
         def report(
@@ -6957,6 +6976,53 @@ class OcrPipeline:
             record["text"] = normalized_text
             record["recognized"] = bool(record["text"])
 
+        # Recover graphical engineering objects before ordinary text assembly.
+        from dataclasses import replace
+
+        atomic_detection_count = len(ocr_records)
+        structured_plans = plan_structured_engineering_symbols(image, ocr_records)
+        structured_by_first = {min(plan.member_indexes): plan for plan in structured_plans}
+        structured_absorbed = {i for plan in structured_plans for i in plan.member_indexes}
+        structured_records: list[dict[str, Any]] = []
+        for record_index, record in enumerate(ocr_records):
+            plan = structured_by_first.get(record_index)
+            if plan is None:
+                if record_index not in structured_absorbed:
+                    structured_records.append(record)
+                continue
+            members = [ocr_records[i] for i in plan.member_indexes]
+            anchor = dict(ocr_records[plan.anchor_index])
+            box = plan.bbox
+            polygon = ((box["x"], box["y"]), (box["x"]+box["width"], box["y"]),
+                       (box["x"]+box["width"], box["y"]+box["height"]),
+                       (box["x"], box["y"]+box["height"]))
+            candidate = replace(
+                anchor["candidate"], bbox=dict(box), polygon=polygon,
+                candidate_id=plan.object_id,
+                boundary_review=any(bool(m["candidate"].boundary_review) for m in members),
+                detection_confidence=max(float(m["candidate"].detection_confidence) for m in members),
+            )
+            evidence = plan.evidence.to_dict()
+            result = dict(anchor.get("result") or {})
+            result.update({"text": plan.text, "confidence": plan.confidence,
+                           "needs_review": plan.needs_review,
+                           "review_reason": plan.review_reason,
+                           "engineering_symbol": evidence,
+                           "ocr_profile": "structured_symbol_vision"})
+            structured_records.append({**anchor, "candidate": candidate,
+                "candidate_id": plan.object_id, "object_id": plan.object_id,
+                "bbox": dict(box), "polygon": [list(point) for point in polygon],
+                "text": plan.text, "result": result, "recognized": bool(plan.text),
+                "context_text": "", "table_excluded": False,
+                "native_match": None, "native_authoritative": False,
+                "engineering_symbol": evidence, "assembly_id": plan.object_id,
+                "assembly_rule": f"structured_{plan.evidence.kind}",
+                "assembly_conflict": False,
+                "assembly_review_reason": plan.review_reason,
+                "assembly_children": [atomic_object_evidence(m) for m in members]})
+        ocr_records = structured_records
+        structured_stats = structured_symbol_statistics(structured_plans)
+
         # The detector deliberately returns atomic text boxes.  Build the
         # engineering objects a balloon actually belongs to before context
         # filtering and target-locked OCR: the final reread then sees the
@@ -6964,7 +7030,6 @@ class OcrPipeline:
         # stacked deviations.  Every absorbed box remains on the object as
         # serializable child evidence; nothing disappears from the audit
         # trail merely because it was assembled.
-        atomic_detection_count = len(ocr_records)
         assembly_plans = plan_engineering_object_assemblies(ocr_records)
         plans_by_first = {
             min(plan.member_indexes): plan for plan in assembly_plans
@@ -6975,22 +7040,18 @@ class OcrPipeline:
             for index in plan.member_indexes
         }
         assembled_records: list[dict[str, Any]] = []
-        from dataclasses import replace
-
         for record_index, record in enumerate(ocr_records):
             plan = plans_by_first.get(record_index)
             if plan is None:
                 if record_index in absorbed_indexes:
                     continue
                 atomic = dict(record)
-                atomic["object_id"] = str(record.get("candidate_id") or "")
-                atomic["assembly_id"] = atomic["object_id"]
-                atomic["assembly_rule"] = "atomic"
-                atomic["assembly_conflict"] = bool(
-                    (record.get("result") or {}).get("source_conflict")
-                )
-                atomic["assembly_review_reason"] = ""
-                atomic["assembly_children"] = [atomic_object_evidence(record)]
+                atomic["object_id"] = str(record.get("object_id") or record.get("candidate_id") or "")
+                atomic.setdefault("assembly_id", atomic["object_id"])
+                atomic.setdefault("assembly_rule", "atomic")
+                atomic.setdefault("assembly_conflict", bool((record.get("result") or {}).get("source_conflict")))
+                atomic.setdefault("assembly_review_reason", "")
+                atomic.setdefault("assembly_children", [atomic_object_evidence(record)])
                 assembled_records.append(atomic)
                 continue
 
@@ -7077,6 +7138,12 @@ class OcrPipeline:
             detected_count,
             assembly_plans,
         )
+        assembly_stats["structured_object_count"] = len(structured_plans)
+        assembly_stats["assembled_object_count"] += len(structured_plans)
+        assembly_stats["rule_counts"].update({
+            f"structured_{kind}": count
+            for kind, count in structured_stats["kind_counts"].items()
+        })
         report(
             stage="assembling",
             message=(
@@ -7405,7 +7472,21 @@ class OcrPipeline:
             accurate_text = normalize_page_value_text(
                 strip_foreign_glyphs(str(accurate_result.get("text") or ""))
             )
+            structured = record.get("engineering_symbol") or {}
+            previous_text = str(record.get("text") or "").strip()
+            if structured.get("kind") == "feature_control_frame":
+                symbol = str(structured.get("completed_symbol") or "").strip()
+                if accurate_text and symbol and symbol not in accurate_text:
+                    accurate_text = f"{symbol} | {accurate_text}"
+                elif not accurate_text:
+                    accurate_text = previous_text
+            elif structured.get("kind") == "datum":
+                accurate_text = str(structured.get("subtype") or accurate_text or previous_text)
+            elif structured.get("kind") == "surface_finish" and not accurate_text:
+                accurate_text = previous_text
             accurate_result["text"] = accurate_text
+            if structured:
+                accurate_result["engineering_symbol"] = dict(structured)
             accurate_result["authoritative_reread"] = True
             record["result"] = accurate_result
             record["text"] = accurate_text
@@ -7611,7 +7692,11 @@ class OcrPipeline:
             candidate = record["candidate"]
             result = record["result"]
             published_text = record["text"]
-            engineering_parse = parse_engineering_value(published_text)
+            engineering_parse = parse_engineering_value(
+                published_text,
+                feature_category=str(result.get("category") or "") or None,
+                engineering_symbol=record.get("engineering_symbol") or {},
+            )
             disposition = disposition_engineering_object(
                 engineering_parse,
                 recognized=bool(record["recognized"]),
@@ -7656,6 +7741,7 @@ class OcrPipeline:
                 "agreement": result.get("agreement", 0.0),
                 "engine": result.get("engine", "paddleocr"),
                 "symbols_detected": result.get("symbols_detected"),
+                "engineering_symbol": dict(record.get("engineering_symbol") or {}) or None,
                 "ocr_profile": result.get("ocr_profile", "batch_recognition"),
                 "page_filter_rule": decision.rule_name,
                 "page_filter_reason": decision.reason,
@@ -7730,6 +7816,7 @@ class OcrPipeline:
                 "category": common_region.get("category"),
                 "subtype": common_region.get("subtype"),
                 "label": common_region.get("label"),
+                "engineering_symbol": common_region.get("engineering_symbol"),
                 "orientation": common_region.get("orientation", "horizontal"),
                 "rotation": float(common_region.get("rotation") or 0.0),
                 "oriented_box": common_region.get("oriented_box"),
@@ -8164,7 +8251,11 @@ class OcrPipeline:
         # same logical outcome, with parse status/kind refreshed when needed.
         for collection in (regions, review_candidates, candidate_outcomes):
             for item in collection:
-                parsed = parse_engineering_value(str(item.get("text") or ""))
+                parsed = parse_engineering_value(
+                    str(item.get("text") or ""),
+                    feature_category=str(item.get("category") or "") or None,
+                    engineering_symbol=item.get("engineering_symbol") or {},
+                )
                 item["engineering_parse"] = parsed.to_dict()
                 existing_disposition = dict(
                     item.get("engineering_disposition") or {}
@@ -8302,6 +8393,7 @@ class OcrPipeline:
                 sorted(recognition_source_counts.items())
             ),
             "assembly_stats": assembly_stats,
+            "structured_symbol_stats": structured_stats,
             "engineering_parse_stats": engineering_parse_statistics(
                 parsed_objects
             ),
@@ -8640,6 +8732,25 @@ class OcrPipeline:
                 },
             )
 
+        engineering_symbol: dict[str, Any] | None = None
+        if text.strip():
+            from structured_symbol_vision import plan_structured_engineering_symbols
+
+            symbol_bbox = text_bbox or self._text_bbox_from_main_words(
+                words, image=image, prep=prep, oriented=oriented, vertical=vertical,
+            )
+            if symbol_bbox is not None:
+                plans = plan_structured_engineering_symbols(image, [{
+                    "candidate_id": "MANUAL:0001", "bbox": symbol_bbox,
+                    "text": text, "confidence": confidence,
+                    "result": {"text": text, "confidence": confidence},
+                }])
+                if plans:
+                    plan = plans[0]
+                    text = plan.text
+                    engineering_symbol = plan.evidence.to_dict()
+                    needs_review = needs_review or plan.needs_review
+
         timings_ms = {
             # Pipeline time intentionally excludes debug-dump file writing.
             "pipeline_total": round(
@@ -8672,6 +8783,7 @@ class OcrPipeline:
             "words": words,
             "compose_steps": composed.applied,
             "symbols_detected": symbols_to_dict(symbols),
+            "engineering_symbol": engineering_symbol,
             "prefix_ocr": prefix_text,
             "prefix_ocr_used": prefix_ocr_used,
             "ocr_profile": (
@@ -8687,7 +8799,10 @@ class OcrPipeline:
         # this a region reaches the UI with no category and the frontend falls
         # back to its text-only classifier, losing every rule that reads the
         # detected symbols.
-        feature = classify_feature(text, symbols=symbols_to_dict(symbols))
+        feature = classify_feature(
+            text, symbols=symbols_to_dict(symbols),
+            engineering_symbol=engineering_symbol or {},
+        )
         result["category"] = feature.category
         result["subtype"] = feature.subtype
         result["label"] = feature.label

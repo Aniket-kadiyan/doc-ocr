@@ -2,6 +2,7 @@ import type {
   BBox,
   EngineeringDisposition,
   EngineeringObjectAssembly,
+  EngineeringSymbolEvidence,
   EngineeringValueParse,
   EngineeringValueKind,
   EngineeringValueParseStatus,
@@ -104,6 +105,7 @@ interface ApiRecognizeResponse {
     plus_minus?: boolean;
     degree?: boolean;
   };
+  engineering_symbol?: ApiEngineeringSymbolEvidence | null;
   agreement?: number;
   needs_review?: boolean;
   text_bbox?: { x: number; y: number; width: number; height: number };
@@ -163,6 +165,7 @@ export interface SegmentRegion {
   sourceConflict?: boolean;
   /** Lossless primitive detections used to build this logical object. */
   assembly?: EngineeringObjectAssembly;
+  engineeringSymbol?: EngineeringSymbolEvidence;
   /** Lossless structural parse used by the M6 disposition policy. */
   engineeringParse?: EngineeringValueParse;
   /** Structure-first M6 disposition evidence. */
@@ -203,6 +206,20 @@ export interface ApiEngineeringDisposition {
   parse_status: EngineeringValueParseStatus;
   parse_kind: EngineeringValueKind;
   hard_context?: boolean;
+}
+
+export interface ApiEngineeringSymbolEvidence {
+  schema_version: 1;
+  kind: "feature_control_frame" | "datum" | "surface_finish";
+  bbox: BBox;
+  confidence: number;
+  complete: boolean;
+  subtype?: string | null;
+  completed_symbol?: string | null;
+  source: string;
+  cells?: BBox[];
+  warnings?: string[];
+  visual_features?: Record<string, unknown>;
 }
 
 export interface ApiSegmentRegion {
@@ -255,6 +272,7 @@ export interface ApiSegmentRegion {
   assembly_children?: ApiAssemblyChild[];
   engineering_parse?: ApiEngineeringValueParse;
   engineering_disposition?: ApiEngineeringDisposition;
+  engineering_symbol?: ApiEngineeringSymbolEvidence | null;
 }
 
 export interface ApiAssemblyChild {
@@ -298,6 +316,13 @@ export interface ApiSegmentResponse {
     absorbed_fragment_count?: number;
     conflict_count?: number;
     rule_counts?: Record<string, number>;
+  };
+  structured_symbol_stats?: {
+    schema_version?: number;
+    object_count?: number;
+    complete_count?: number;
+    review_count?: number;
+    kind_counts?: Record<string, number>;
   };
   engineering_parse_stats?: {
     schema_version?: number;
@@ -361,6 +386,7 @@ export interface ApiCandidateOutcome {
   assembly_children?: ApiAssemblyChild[];
   engineering_parse?: ApiEngineeringValueParse;
   engineering_disposition?: ApiEngineeringDisposition;
+  engineering_symbol?: ApiEngineeringSymbolEvidence | null;
   page_filter_rule?: string;
   page_filter_reason?: string;
 }
@@ -381,6 +407,15 @@ function mappedSegmentRegion(
   mapBBox: (bbox: BBox) => BBox = (bbox) => bbox,
   mapPoint: (point: [number, number]) => [number, number] = (point) => point
 ): SegmentRegion {
+  const symbol = r.engineering_symbol;
+  const engineeringSymbol: EngineeringSymbolEvidence | undefined = symbol
+    ? { schemaVersion: symbol.schema_version, kind: symbol.kind,
+        bbox: mapBBox(symbol.bbox), confidence: symbol.confidence,
+        complete: symbol.complete, subtype: symbol.subtype ?? undefined,
+        completedSymbol: symbol.completed_symbol ?? undefined,
+        source: symbol.source, cells: (symbol.cells ?? []).map(mapBBox),
+        warnings: symbol.warnings ?? [], visualFeatures: symbol.visual_features ?? {} }
+    : undefined;
   const parsed = r.engineering_parse;
   const engineeringParse: EngineeringValueParse | undefined = parsed
     ? {
@@ -493,6 +528,7 @@ function mappedSegmentRegion(
     recognitionEvidence,
     sourceConflict: r.source_conflict,
     assembly,
+    engineeringSymbol,
     engineeringParse,
     engineeringDisposition,
     valueBox,
@@ -664,6 +700,7 @@ export function mapSegmentCandidateOutcomes(
     assembly_children: outcome.assembly_children,
     engineering_parse: outcome.engineering_parse,
     engineering_disposition: outcome.engineering_disposition,
+    engineering_symbol: outcome.engineering_symbol,
   }));
   const mapped =
     coordinateSpace === "page"
@@ -878,6 +915,25 @@ export async function runPaddleOcr(
     }
   }
 
+  const apiSymbol = data.engineering_symbol;
+  const mapCropBBox = (source: BBox): BBox => ({
+    x: bbox.x + (source.x - CROP_PAD_PX) / displayScale,
+    y: bbox.y + (source.y - CROP_PAD_PX) / displayScale,
+    width: source.width / displayScale,
+    height: source.height / displayScale,
+  });
+  const engineeringSymbol: EngineeringSymbolEvidence | undefined = apiSymbol
+    ? { schemaVersion: apiSymbol.schema_version, kind: apiSymbol.kind,
+        bbox: mapCropBBox(apiSymbol.bbox), confidence: apiSymbol.confidence,
+        complete: apiSymbol.complete, subtype: apiSymbol.subtype ?? undefined,
+        completedSymbol: apiSymbol.completed_symbol ?? undefined,
+        source: apiSymbol.source, cells: (apiSymbol.cells ?? []).map(mapCropBBox),
+        warnings: apiSymbol.warnings ?? [], visualFeatures: apiSymbol.visual_features ?? {} }
+    : undefined;
+  if (engineeringSymbol?.bbox.width && engineeringSymbol.bbox.height) {
+    valueBox = engineeringSymbol.bbox;
+  }
+
   if (debugDump && typeof window !== "undefined") {
     const info = data.debug_dump;
     if (info?.dir) {
@@ -899,6 +955,7 @@ export async function runPaddleOcr(
     category: data.category,
     subtype: data.subtype,
     label: data.label,
+    engineeringSymbol,
     valueBox,
     debugDumpDir: data.debug_dump_dir ?? data.debug_dump?.dir ?? undefined,
     debugDumpSkipped: data.debug_dump?.skipped_reason ?? undefined,

@@ -200,6 +200,13 @@ def native_text_segment_result(
             state = "excluded"
             rule = "native_text_non_callout"
             reason = "Exact PDF text did not form an engineering callout"
+        elif (str(common.get("category") or "") == "GD&T"
+              and decision.rule_name not in {"table_region", "sheet_frame_label",
+                  "detail_view_section", "scale_information", "date",
+                  "revision_history", "note_information", "document_metadata"}):
+            state = "review"
+            rule = "gdt_requires_visual_frame_evidence"
+            reason = "GD&T text requires a matching graphical feature-control frame"
         elif not decision.accepted:
             state = "excluded"
             rule = decision.rule_name
@@ -333,6 +340,25 @@ def _merge_evidence(native: dict[str, Any], ocr: Mapping[str, Any]) -> None:
         ),
         "native_bbox": dict(_box(native)),
     }
+    structured = ocr.get("engineering_symbol")
+    if isinstance(structured, Mapping):
+        for field in ("bbox", "oriented_box", "category", "subtype", "label", "type",
+                      "assembly_id", "assembly_rule", "assembly_conflict",
+                      "assembly_review_reason", "assembly_children",
+                      "engineering_parse", "engineering_disposition"):
+            if field in ocr:
+                native[field] = deepcopy(ocr[field])
+        native["engineering_symbol"] = deepcopy(dict(structured))
+        if structured.get("completed_symbol") and str(structured.get("completed_symbol")) not in native_text:
+            native["text"] = ocr_text
+        if ocr.get("state") in {"eligible", "review"}:
+            native["state"] = ocr.get("state")
+            native["needs_review"] = ocr.get("state") == "review"
+            native["reason"] = str(ocr.get("reason") or "")
+            native["rule"] = str(ocr.get("rule") or "")
+            native["page_filter_rule"] = str(ocr.get("page_filter_rule") or ocr.get("rule") or "")
+            native["page_filter_reason"] = str(ocr.get("page_filter_reason") or ocr.get("reason") or "")
+            native["review_reason"] = str(ocr.get("reason") or "") if ocr.get("state") == "review" else ""
     if digit_conflict and native.get("state") == "eligible":
         native.update(
             {

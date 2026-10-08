@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 import feature_dictionary as fd
 import feature_rules as rules
@@ -181,6 +181,7 @@ def classify_feature(
     text: str,
     symbols: dict[str, Any] | None = None,
     geometry: dict[str, Any] | None = None,
+    engineering_symbol: Mapping[str, Any] | None = None,
 ) -> Feature:
     """Classify one OCR object into a :class:`Feature`.
 
@@ -222,6 +223,22 @@ def classify_feature(
 
     qty = _quantity(raw)
     feat.quantity = qty
+
+    structured = engineering_symbol or {}
+    structured_kind = str(structured.get("kind") or "")
+    structured_subtype = str(structured.get("subtype") or "").strip() or None
+    if structured_kind == "feature_control_frame":
+        feat.category, feat.subtype = fd.CAT_GDT, structured_subtype
+        feat.symbols, feat.label = detected_symbols, _label_for(feat)
+        return feat
+    if structured_kind == "datum":
+        feat.category, feat.subtype = fd.CAT_DATUM, structured_subtype
+        feat.label = _label_for(feat)
+        return feat
+    if structured_kind == "surface_finish":
+        feat.category, feat.subtype = fd.CAT_SURFACE, structured_subtype
+        feat.label = _label_for(feat)
+        return feat
 
     # ── Priority 1: Feature Control Frame / GD&T ────────────────────────────
     gdt = _detect_gdt(raw, upper, set(detected_symbols))

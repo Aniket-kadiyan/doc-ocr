@@ -217,7 +217,7 @@ def classify_assembly_role(text: object) -> str:
 
 
 def _token(index: int, record: Mapping[str, Any]) -> _Token | None:
-    if record.get("table_excluded"):
+    if record.get("table_excluded") or record.get("engineering_symbol"):
         return None
     text = normalize_page_value_text(str(record.get("text") or "")).strip()
     role = classify_assembly_role(text)

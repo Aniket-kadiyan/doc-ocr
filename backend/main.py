@@ -431,10 +431,35 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
             ).items()
         },
         "assembly_stats": dict(seg.get("assembly_stats", {})),
+        "structured_symbol_stats": dict(seg.get("structured_symbol_stats", {})),
+        "engineering_parse_stats": dict(seg.get("engineering_parse_stats", {})),
+        "engineering_disposition_stats": dict(seg.get("engineering_disposition_stats", {})),
         "regions": regions,
         "review_candidates": review_candidates,
         "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
     }
+
+
+def _native_result_has_structured_graphics(
+    image: Image.Image,
+    native_result: Mapping[str, Any] | None,
+) -> bool:
+    if native_result is None:
+        return False
+    from structured_symbol_vision import plan_structured_engineering_symbols
+
+    hard = {"table_region", "sheet_frame_label", "detail_view_section",
+            "scale_information", "date", "revision_history",
+            "note_information", "document_metadata"}
+    records = []
+    for outcome in native_result.get("candidate_outcomes", ()):
+        record = dict(outcome)
+        record["table_excluded"] = str(outcome.get("page_filter_rule") or "") in hard
+        records.append(record)
+    plans = plan_structured_engineering_symbols(image, records)
+    return any(plan.evidence.kind in {"feature_control_frame", "datum"}
+               or bool(plan.evidence.visual_features.get("texture_mark"))
+               for plan in plans)
 
 
 def _map_section_result_to_page(
@@ -485,6 +510,24 @@ def _map_section_result_to_page(
                     ]
                 mapped_children.append(mapped_child)
             mapped = {**mapped, "assembly_children": mapped_children}
+
+        structured = mapped.get("engineering_symbol")
+        if isinstance(structured, dict):
+            def translate(box: Any) -> Any:
+                if not isinstance(box, dict):
+                    return box
+                return {"x": round(origin_x + float(box.get("x", 0)), 1),
+                        "y": round(origin_y + float(box.get("y", 0)), 1),
+                        "width": round(float(box.get("width", 0)), 1),
+                        "height": round(float(box.get("height", 0)), 1)}
+            next_structured = dict(structured)
+            next_structured["bbox"] = translate(structured.get("bbox"))
+            next_structured["cells"] = [translate(cell) for cell in structured.get("cells", ())]
+            features = dict(structured.get("visual_features") or {})
+            if isinstance(features.get("mark_bbox"), dict):
+                features["mark_bbox"] = translate(features["mark_bbox"])
+            next_structured["visual_features"] = features
+            mapped = {**mapped, "engineering_symbol": next_structured}
 
         evidence = mapped.get("recognition_evidence")
         if not isinstance(evidence, dict):
@@ -879,6 +922,7 @@ async def create_scan_job(
                     + int(native_seg["review_count"])
                     > 0
                 )
+                and not _native_result_has_structured_graphics(image, native_seg)
             )
             if native_is_primary:
                 seg = native_seg
@@ -991,6 +1035,9 @@ async def create_scan_job(
                     int(native_seg["eligible_count"])
                     + int(native_seg["review_count"])
                     > 0
+                )
+                and not _native_result_has_structured_graphics(
+                    section_image, native_seg
                 )
             )
 

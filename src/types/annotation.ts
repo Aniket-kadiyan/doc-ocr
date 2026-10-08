@@ -99,6 +99,21 @@ export interface EngineeringObjectAssembly {
   children: EngineeringObjectChildEvidence[];
 }
 
+export type EngineeringSymbolKind = "feature_control_frame" | "datum" | "surface_finish";
+export interface EngineeringSymbolEvidence {
+  schemaVersion: 1;
+  kind: EngineeringSymbolKind;
+  bbox: BBox;
+  confidence: number;
+  complete: boolean;
+  subtype?: string;
+  completedSymbol?: string;
+  source: string;
+  cells: BBox[];
+  warnings: string[];
+  visualFeatures: Record<string, unknown>;
+}
+
 export type EngineeringValueParseStatus =
   | "complete"
   | "partial"
@@ -113,6 +128,9 @@ export type EngineeringValueKind =
   | "dual_unit"
   | "ratio"
   | "standalone_tolerance"
+  | "gdt"
+  | "datum"
+  | "surface_finish"
   | "identifier"
   | "unknown";
 
@@ -203,6 +221,7 @@ export interface Annotation {
   recognitionEvidence?: RecognitionEvidence;
   /** Primitive detections retained when this value was assembled. */
   assembly?: EngineeringObjectAssembly;
+  engineeringSymbol?: EngineeringSymbolEvidence;
   /** Lossless backend parse of the assembled engineering text. */
   engineeringParse?: EngineeringValueParse;
   /** Structure-first policy decision that admitted this value. */
@@ -251,6 +270,7 @@ export interface OCRResult {
   /** Native-PDF/OCR readings and the source selected for this value. */
   recognitionEvidence?: RecognitionEvidence;
   assembly?: EngineeringObjectAssembly;
+  engineeringSymbol?: EngineeringSymbolEvidence;
   engineeringParse?: EngineeringValueParse;
   engineeringDisposition?: EngineeringDisposition;
   /** Rule-engine classification returned by manual region OCR. */

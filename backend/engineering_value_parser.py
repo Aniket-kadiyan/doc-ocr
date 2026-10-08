@@ -32,6 +32,9 @@ ParseKind = Literal[
     "dual_unit",
     "ratio",
     "standalone_tolerance",
+    "gdt",
+    "datum",
+    "surface_finish",
     "identifier",
     "unknown",
 ]
@@ -122,6 +125,15 @@ _INCOMPLETE_DECIMAL_TOLERANCE_RE = re.compile(
 _IDENTIFIER_RE = re.compile(
     r"^(?=.{2,}$)(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9._/\-]*$",
     re.IGNORECASE,
+)
+_SURFACE_VALUE_RE = re.compile(
+    rf"^(?P<parameter>RA|RZ|RMAX|RQ)\s*(?P<value>{_NUMBER})(?:\s*(?P<unit>µM|UM))?$"
+    r"|^(?P<grade>N(?:1[0-2]|[1-9]))$", re.IGNORECASE,
+)
+_GDT_TEXT_RE = re.compile(
+    r"[⏤⏥▱○◯⌭⌒⌓∥⟂⊥∠⌖◎⌯↗⌰]|\b(?:STRAIGHTNESS|FLATNESS|CIRCULARITY|"
+    r"ROUNDNESS|CYLINDRICITY|PARALLELISM|PERPENDICULARITY|ANGULARITY|POSITION|"
+    r"CONCENTRICITY|SYMMETRY|RUNOUT)\b", re.IGNORECASE,
 )
 
 _SYMBOL_REPLACEMENTS = (
@@ -376,6 +388,8 @@ def _result(
 def parse_engineering_value(
     text: str,
     *,
+    feature_category: str | None = None,
+    engineering_symbol: Mapping[str, Any] | None = None,
     _allow_dual: bool = True,
 ) -> EngineeringValueParse:
     """Parse one assembled object without changing or disposing of it."""
@@ -393,6 +407,65 @@ def parse_engineering_value(
 
     value, reference, wrapper_offset = _reference_wrapper(normalized)
     base_components: dict[str, Any] = {"reference": reference}
+
+    structured = engineering_symbol or {}
+    structured_kind = str(structured.get("kind") or "")
+    structured_complete = bool(structured.get("complete"))
+    if structured_kind == "feature_control_frame":
+        complete = structured_complete and bool(_HAS_DIGIT_RE.search(value))
+        warnings = list(structured.get("warnings") or ())
+        if not complete and "unresolved_gdt_characteristic" not in warnings:
+            warnings.append("unresolved_gdt_characteristic")
+        return _result(raw_text=raw, normalized_text=normalized,
+            status="complete" if complete else "partial", kind="gdt",
+            components={**base_components, "characteristic": structured.get("subtype"),
+                        "symbol": structured.get("completed_symbol"),
+                        "cells": list(structured.get("cells") or ())},
+            unparsed_fragments=() if complete else
+                (UnparsedFragment(value, wrapper_offset, wrapper_offset + len(value)),),
+            warnings=warnings, normalization_steps=normalization_steps)
+    if structured_kind == "datum":
+        complete = structured_complete and bool(structured.get("subtype") or value)
+        return _result(raw_text=raw, normalized_text=normalized,
+            status="complete" if complete else "partial", kind="datum",
+            components={**base_components, "datum": structured.get("subtype") or value},
+            unparsed_fragments=() if complete else
+                (UnparsedFragment(value, wrapper_offset, wrapper_offset + len(value)),),
+            warnings=() if complete else ("incomplete_datum_evidence",),
+            normalization_steps=normalization_steps)
+    if structured_kind == "surface_finish":
+        complete = structured_complete and bool(_HAS_DIGIT_RE.search(value))
+        match = _SURFACE_VALUE_RE.fullmatch(value)
+        return _result(raw_text=raw, normalized_text=normalized,
+            status="complete" if complete else "partial", kind="surface_finish",
+            components={**base_components,
+                "parameter": (match.group("parameter").upper() if match and match.group("parameter")
+                              else structured.get("subtype")),
+                "value": match.group("value") if match else value,
+                "unit": match.group("unit").upper() if match and match.group("unit") else None,
+                "grade": match.group("grade").upper() if match and match.group("grade") else None},
+            unparsed_fragments=() if complete else
+                (UnparsedFragment(value, wrapper_offset, wrapper_offset + len(value)),),
+            warnings=() if complete else ("incomplete_surface_finish_evidence",),
+            normalization_steps=normalization_steps)
+
+    surface = _SURFACE_VALUE_RE.fullmatch(value)
+    if surface:
+        return _result(raw_text=raw, normalized_text=normalized, status="complete",
+            kind="surface_finish", components={**base_components,
+                "parameter": surface.group("parameter").upper() if surface.group("parameter") else None,
+                "value": surface.group("value"),
+                "unit": surface.group("unit").upper() if surface.group("unit") else None,
+                "grade": surface.group("grade").upper() if surface.group("grade") else None},
+            normalization_steps=normalization_steps)
+    if (feature_category == "GD&T"
+            or (_GDT_TEXT_RE.search(value) and _HAS_DIGIT_RE.search(value))
+            or (value.count("|") >= 2 and _HAS_DIGIT_RE.search(value))):
+        return _result(raw_text=raw, normalized_text=normalized, status="partial", kind="gdt",
+            components=base_components,
+            unparsed_fragments=(UnparsedFragment(value, wrapper_offset, wrapper_offset + len(value)),),
+            warnings=("gdt_requires_visual_frame_evidence",),
+            normalization_steps=normalization_steps)
 
     if _allow_dual:
         dual = _DUAL_UNIT_RE.fullmatch(value)
