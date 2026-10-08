@@ -517,84 +517,104 @@ def _document_metadata(
     )
 
 
-# What makes a reading a line of prose rather than a callout: several words
-# of it, mostly letters, and no complete value anywhere in the string.
-PROSE_LINE_MIN_WORDS = 3
-PROSE_LINE_MIN_CHARACTERS = 12
-PROSE_LINE_MIN_LETTER_SHARE = 0.6
+# What makes one box a line of type: much wider than tall, and carrying a
+# run of smaller boxes along it. The fragment count is what separates a line
+# from a callout the detector split in two — a letter-spaced heading returns
+# twenty-five pieces, a fused pair of dimensions returns two.
+TEXT_LINE_MIN_ASPECT = 8.0
+TEXT_LINE_MIN_FRAGMENTS = 6
+TEXT_LINE_MAX_FRAGMENT_SHARE = 0.5
 
-# How much of a candidate has to lie inside that line, and how much smaller
-# than the line it has to be, before it is one of its characters.
-PROSE_FRAGMENT_MIN_CONTAINED = 0.8
-PROSE_FRAGMENT_MAX_AREA_SHARE = 0.5
+# What puts a box on that line: nearly all of its width inside the line's,
+# and its middle within the line's band. Measured with slack above and below
+# rather than by containment, because the line box is tight to the x-height
+# and an ascender or a descender stands outside it.
+TEXT_LINE_MIN_HORIZONTAL_COVER = 0.9
+TEXT_LINE_BASELINE_SLACK = 0.6
 
-_WORD_TOKEN = re.compile(r"[A-Za-z]{2,}")
+# A pathological page of long overlapping boxes would otherwise make this
+# quadratic in the page's candidate count, per candidate.
+TEXT_LINE_MAX_LINES_CONSIDERED = 4
 
 
-def _is_prose_line(text: str) -> bool:
-    """Whether a reading is a printed sentence rather than a value."""
+def _bbox_area(box: BBox) -> float:
+    return max(float(box["width"]) * float(box["height"]), 1.0)
 
-    stripped = str(text or "").strip()
-    if len(stripped) < PROSE_LINE_MIN_CHARACTERS:
+
+def _is_line_shaped(box: BBox) -> bool:
+    height = float(box["height"])
+    return height > 0 and float(box["width"]) / height >= TEXT_LINE_MIN_ASPECT
+
+
+def _sits_on_line(fragment: BBox, line: BBox) -> bool:
+    """Whether a box is one of the characters printed along a line."""
+
+    if _bbox_area(fragment) > _bbox_area(line) * TEXT_LINE_MAX_FRAGMENT_SHARE:
         return False
-    if len(_WORD_TOKEN.findall(stripped)) < PROSE_LINE_MIN_WORDS:
+    fragment_left = float(fragment["x"])
+    fragment_right = fragment_left + float(fragment["width"])
+    line_left = float(line["x"])
+    line_right = line_left + float(line["width"])
+    covered = max(0.0, min(fragment_right, line_right) - max(fragment_left, line_left))
+    if covered / max(float(fragment["width"]), 1.0) < TEXT_LINE_MIN_HORIZONTAL_COVER:
         return False
-    letters = sum(1 for character in stripped if character.isalpha())
-    if letters / len(stripped) < PROSE_LINE_MIN_LETTER_SHARE:
-        return False
-    return not is_complete_engineering_value(stripped)
-
-
-def _is_fragment_of(inner: BBox, outer: BBox) -> bool:
-    """Whether one box is a piece of a larger one rather than its equal."""
-
-    inner_area = max(
-        float(inner["width"]) * float(inner["height"]),
-        1.0,
+    middle = float(fragment["y"]) + float(fragment["height"]) / 2
+    slack = TEXT_LINE_BASELINE_SLACK * float(line["height"])
+    return (
+        float(line["y"]) - slack
+        <= middle
+        <= float(line["y"]) + float(line["height"]) + slack
     )
-    outer_area = max(
-        float(outer["width"]) * float(outer["height"]),
-        1.0,
-    )
-    if inner_area > outer_area * PROSE_FRAGMENT_MAX_AREA_SHARE:
-        return False
-    contained = _bbox_intersection_area(inner, outer) / inner_area
-    return contained >= PROSE_FRAGMENT_MIN_CONTAINED
 
 
-def _prose_line_fragment(
+def _text_line_fragment(
     candidate: PageValueCandidate,
     page_candidates: Sequence[PageValueCandidate],
 ) -> bool:
-    """Reject a piece of a line that some other pass read as a sentence.
+    """Reject a piece of a line of type that another pass detected whole.
 
     A whole-page scan inspects each panel upright and turned a quarter turn.
-    A line of type is one box to the upright pass and, to the turned one,
+    A printed line is one box to the upright pass and, to the turned one,
     nothing it can join into a line at all — so it comes back as a box per
     letter or per syllable, and a drawing office that letter-spaces its
     headings ("G u a r a n t e e d  M e c h a n i c a l  P r o p e r t i e s")
     gives the turned pass nothing else to do. On the benchmark sheet one
-    panel returned five boxes upright over that block and thirty-seven turned.
+    panel returned five boxes upright over that block and thirty-seven
+    turned. Those pieces are then read on their own, at a size no recogniser
+    can do anything with, and whatever digit comes back is published:
+    "proper" came back "Roper0", "listed" came back "listed2", one letter of
+    "properties" came back "031". Deduplication cannot help, because it
+    refuses on principle to let a large box suppress a small one — a
+    dimension string must never be swallowed by the note above it.
 
-    Those pieces are then read on their own, at a size no recogniser can do
-    anything with, and whatever digit comes back is published: "proper" came
-    back "Roper0", "listed" came back "listed2", one letter of "properties"
-    came back "031". Deduplication cannot help, because it refuses on
-    principle to let a large box suppress a small one — a dimension string
-    must never be swallowed by the note above it.
-
-    What settles it is that the upright pass already read those exact pixels,
-    and read them as a sentence. A box inside that line, and much smaller
-    than it, is one of its characters.
+    The test is deliberately blind to what anything reads as. The obvious
+    rule — find the box some pass read as a sentence — does not work, and was
+    measured not to: the preliminary pass reads a crop whole, and handed a
+    657-pixel line of letter-spaced hairline type it returns an empty string.
+    Every line on the benchmark sheet came back blank, so there was no
+    sentence anywhere to recognise. The geometry survives that: a long thin
+    box with two dozen small boxes strung along it is a line of type whether
+    or not anyone managed to read it.
     """
 
+    lines = 0
     for other in page_candidates:
         if other is candidate:
             continue
-        if not _is_prose_line(other.text):
+        if not _is_line_shaped(other.bbox):
             continue
-        if _is_fragment_of(candidate.bbox, other.bbox):
+        if not _sits_on_line(candidate.bbox, other.bbox):
+            continue
+        lines += 1
+        fragments = sum(
+            1
+            for item in page_candidates
+            if item is not other and _sits_on_line(item.bbox, other.bbox)
+        )
+        if fragments >= TEXT_LINE_MIN_FRAGMENTS:
             return True
+        if lines >= TEXT_LINE_MAX_LINES_CONSIDERED:
+            break
     return False
 
 
@@ -638,10 +658,10 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
         predicate=_document_metadata,
     ),
     PageValueFilterRule(
-        name="prose_line_fragment",
+        name="text_line_fragment",
         enabled=True,
-        reason="Piece of a line another pass read as a sentence",
-        predicate=_prose_line_fragment,
+        reason="Piece of a line of type detected whole by another pass",
+        predicate=_text_line_fragment,
     ),
 )
 

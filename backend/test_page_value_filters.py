@@ -351,14 +351,24 @@ def _at(text: str, x: float, y: float, width: float, height: float):
     )
 
 
-# The upright detector pass reads this line whole; the quarter-turn pass has
-# no line to join and returns its letters one at a time.
-PROSE_LINE = _at("the following properties must be satisfied.", 100, 200, 460, 16)
+# The upright detector pass returns this line as one box; the quarter-turn
+# pass cannot join a vertical run of glyphs into a line and returns its
+# letters one at a time. Neither box's TEXT is used by the rule: the
+# preliminary pass reads a long line of hairline type as an empty string.
+TEXT_LINE = _at("", 100, 200, 460, 16)
+
+
+def _letters_along_the_line(count: int = 8):
+    return [
+        _at("", 110 + index * 50, 201, 20, 14)
+        for index in range(count)
+    ]
 
 
 def test_a_letter_of_a_printed_line_is_not_a_value() -> None:
-    # "properties" read back as "Roper0" at this size, which is three
-    # characters with a letter and a digit — a part number, by the grammar.
+    # "properties" read back as "Roper0" at this size, and a single letter of
+    # it as "031" — three characters with a letter and a digit.
+    others = _letters_along_the_line()
     for fragment in (
         _at("Roper0", 250, 201, 70, 15),
         _at("031", 330, 202, 22, 14),
@@ -366,38 +376,60 @@ def test_a_letter_of_a_printed_line_is_not_a_value() -> None:
     ):
         decision = evaluate_page_value(
             fragment,
-            page_candidates=[PROSE_LINE, fragment],
+            page_candidates=[TEXT_LINE, fragment, *others],
         )
         assert not decision.accepted, fragment.text
-        assert decision.rule_name == "prose_line_fragment", fragment.text
+        assert decision.rule_name == "text_line_fragment", fragment.text
 
 
-def test_the_line_itself_is_judged_on_its_own_text() -> None:
-    decision = evaluate_page_value(PROSE_LINE, page_candidates=[PROSE_LINE])
-    assert not decision.accepted
-    assert decision.rule_name == "no_numeric_component"
+def test_an_ascender_still_counts_as_sitting_on_the_line() -> None:
+    # The line box is tight to the x-height; a 'd' or a 'p' stands outside it.
+    tall = _at("031", 330, 193, 20, 30)
+    decision = evaluate_page_value(
+        tall,
+        page_candidates=[TEXT_LINE, tall, *_letters_along_the_line()],
+    )
+    assert decision.rule_name == "text_line_fragment"
 
 
-def test_a_dimension_beside_a_note_is_still_a_value() -> None:
-    # Overlapping nothing: the rule needs the value to sit INSIDE the line.
-    value = _at("Ø18.6", 700, 201, 60, 15)
-    decision = evaluate_page_value(value, page_candidates=[PROSE_LINE, value])
+def test_two_pieces_are_a_split_callout_not_a_line_of_type() -> None:
+    # A detector box spanning two stacked dimensions must not suppress them.
+    fused = _at("", 100, 200, 460, 16)
+    left = _at("25.4", 110, 201, 180, 14)
+    right = _at("31.8", 310, 201, 180, 14)
+    decision = evaluate_page_value(
+        left,
+        page_candidates=[fused, left, right],
+    )
     assert decision.accepted, decision.rule_name
 
 
-def test_a_short_label_is_not_a_prose_line() -> None:
-    # Two words and a value must not be able to suppress their neighbours.
-    label = _at("SECTION A-A", 100, 200, 460, 16)
-    value = _at("25.4", 250, 201, 50, 15)
-    decision = evaluate_page_value(value, page_candidates=[label, value])
-    assert decision.rule_name != "prose_line_fragment"
+def test_a_dimension_beside_a_line_is_still_a_value() -> None:
+    value = _at("Ø18.6", 700, 201, 60, 15)
+    decision = evaluate_page_value(
+        value,
+        page_candidates=[TEXT_LINE, value, *_letters_along_the_line()],
+    )
+    assert decision.accepted, decision.rule_name
+
+
+def test_a_compact_box_cannot_be_a_line_of_type() -> None:
+    # Wide enough to hold several callouts, but not line-shaped.
+    block = _at("", 100, 200, 460, 120)
+    value = _at("25.4", 150, 240, 60, 16)
+    decision = evaluate_page_value(
+        value,
+        page_candidates=[block, value, *_letters_along_the_line()],
+    )
+    assert decision.rule_name != "text_line_fragment"
 
 
 def test_a_value_the_size_of_the_line_is_not_its_fragment() -> None:
-    # A box that covers the line is a competing read of it, not a character
-    # inside it, and must be judged on its own text.
     twin = _at("119.0", 100, 200, 450, 16)
-    decision = evaluate_page_value(twin, page_candidates=[PROSE_LINE, twin])
+    decision = evaluate_page_value(
+        twin,
+        page_candidates=[TEXT_LINE, twin, *_letters_along_the_line()],
+    )
     assert decision.accepted, decision.rule_name
 
 

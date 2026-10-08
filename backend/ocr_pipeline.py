@@ -5149,7 +5149,7 @@ class OcrPipeline:
             # re-read of that same box comes back empty because a sentence is
             # not one engineering value. Excluding here also spares every
             # fragment of the line a re-read it has no use for.
-            "prose_line_fragment",
+            "text_line_fragment",
         }
 
         def build_filter_candidates() -> list[PageValueCandidate]:
