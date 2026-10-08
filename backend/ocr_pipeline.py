@@ -4884,6 +4884,10 @@ class OcrPipeline:
             normalize_page_value_text,
         )
         from engineering_object_assembly import classify_assembly_role
+        from engineering_value_parser import (
+            engineering_parse_statistics,
+            parse_engineering_value,
+        )
 
         def report(
             *,
@@ -5583,6 +5587,30 @@ class OcrPipeline:
         if notes_region is not None:
             regions.append(notes_region)
 
+        # M5 is descriptive only: attach a lossless structural parse after all
+        # section splitting/normalization has finished, without changing the
+        # existing filter decision or displayed OCR text.
+        for item in regions:
+            item["engineering_parse"] = parse_engineering_value(
+                str(item.get("text") or "")
+            ).to_dict()
+        for item in candidate_outcomes:
+            item["engineering_parse"] = parse_engineering_value(
+                str(item.get("text") or "")
+            ).to_dict()
+        parsed_objects = [
+            item["engineering_parse"] for item in candidate_outcomes
+        ]
+        candidate_ids = {
+            str(item.get("candidate_id") or "") for item in candidate_outcomes
+        }
+        parsed_objects.extend(
+            item["engineering_parse"]
+            for item in regions
+            if not item.get("candidate_id")
+            or str(item.get("candidate_id")) not in candidate_ids
+        )
+
         excluded_count = recognized_count - len(regions)
         return {
             "count": len(regions),
@@ -5607,6 +5635,9 @@ class OcrPipeline:
                 "conflict_count": 0,
                 "rule_counts": {},
             },
+            "engineering_parse_stats": engineering_parse_statistics(
+                parsed_objects
+            ),
             "regions": regions,
             "review_candidates": [],
             "candidate_outcomes": candidate_outcomes,
@@ -5780,6 +5811,10 @@ class OcrPipeline:
             assembly_statistics,
             atomic_object_evidence,
             plan_engineering_object_assemblies,
+        )
+        from engineering_value_parser import (
+            engineering_parse_statistics,
+            parse_engineering_value,
         )
 
         def report(
@@ -7960,6 +7995,36 @@ class OcrPipeline:
         regions = dedupe_regions(regions)
         detected_count -= before_dedupe - len(regions)
 
+        # Parse only after the final limit-stack, dual-unit, slanted, notes,
+        # and deduplication passes.  Earlier text can be replaced by those
+        # passes; attaching M5 evidence here guarantees the structure matches
+        # the exact text returned to the client.  The parse is metadata only
+        # and cannot change the M4/M6 state machine.
+        for collection in (regions, review_candidates, candidate_outcomes):
+            for item in collection:
+                item["engineering_parse"] = parse_engineering_value(
+                    str(item.get("text") or "")
+                ).to_dict()
+
+        parsed_objects = [
+            item["engineering_parse"] for item in candidate_outcomes
+        ]
+        candidate_ids = {
+            str(item.get("candidate_id") or "") for item in candidate_outcomes
+        }
+        parsed_objects.extend(
+            item["engineering_parse"]
+            for item in regions
+            if not item.get("candidate_id")
+            or str(item.get("candidate_id")) not in candidate_ids
+        )
+        parsed_objects.extend(
+            item["engineering_parse"]
+            for item in review_candidates
+            if not item.get("candidate_id")
+            or str(item.get("candidate_id")) not in candidate_ids
+        )
+
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
         )
@@ -8015,6 +8080,9 @@ class OcrPipeline:
                 sorted(recognition_source_counts.items())
             ),
             "assembly_stats": assembly_stats,
+            "engineering_parse_stats": engineering_parse_statistics(
+                parsed_objects
+            ),
             "regions": regions,
             "review_candidates": review_candidates,
             "candidate_outcomes": candidate_outcomes,

@@ -94,6 +94,7 @@ export function buildChecksheetCreationSnapshot({
         recovery_attempted: candidate.recoveryAttempted ?? false,
         authoritative_reread: candidate.authoritativeReread ?? false,
         assembly: candidate.assembly ?? null,
+        engineering_parse: candidate.engineeringParse ?? null,
         bbox: { ...candidate.valueBox },
         oriented_box: candidate.orientedBox
           ? { ...candidate.orientedBox }
@@ -120,6 +121,7 @@ export function buildChecksheetCreationSnapshot({
         tool: annotation.tool ?? "",
         dimension_type: annotation.type,
         assembly: annotation.assembly ?? null,
+        engineering_parse: annotation.engineeringParse ?? null,
       })),
     },
     document: new File([project.fileBlob], project.fileName, {

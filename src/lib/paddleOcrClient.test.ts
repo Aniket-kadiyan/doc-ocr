@@ -300,4 +300,44 @@ describe("scan result coordinate mapping", () => {
       height: 12,
     });
   });
+
+  it("maps lossless engineering parse evidence without changing text", () => {
+    const [mapped] = mapSegmentCandidateOutcomes(
+      [
+        {
+          candidate_id: "C0099",
+          bbox: { x: 20, y: 40, width: 90, height: 18 },
+          state: "review",
+          text: "R0.6-0.",
+          raw_text: "R0.6-0.",
+          engineering_parse: {
+            schema_version: 1,
+            raw_text: "R0.6-0.",
+            normalized_text: "R0.6-0.",
+            status: "partial",
+            kind: "linear",
+            complete: false,
+            components: { nominal: "0.6", prefix: "R" },
+            tokens: [],
+            unparsed_fragments: [],
+            warnings: ["incomplete_tolerance_decimal"],
+            normalization_steps: [],
+          },
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 },
+      1,
+      "page"
+    );
+
+    expect(mapped.text).toBe("R0.6-0.");
+    expect(mapped.engineeringParse).toMatchObject({
+      schemaVersion: 1,
+      rawText: "R0.6-0.",
+      status: "partial",
+      kind: "linear",
+      complete: false,
+      warnings: ["incomplete_tolerance_decimal"],
+    });
+  });
 });

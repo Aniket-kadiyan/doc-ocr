@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
 import type { ProjectRecord } from "@/lib/db";
 import { makeAnnotation } from "@/test/annotationFixture";
+import type { EngineeringValueParse } from "@/types/annotation";
 import type { ScanCandidate } from "@/types/scanCandidate";
 
 const project: ProjectRecord = {
@@ -12,6 +13,20 @@ const project: ProjectRecord = {
   fileBlob: new Blob(["drawing"], { type: "image/png" }),
   mimeType: "image/png",
   updatedAt: 1,
+};
+
+const engineeringParse: EngineeringValueParse = {
+  schemaVersion: 1,
+  rawText: "25+0.1",
+  normalizedText: "25+0.1",
+  status: "complete",
+  kind: "linear",
+  complete: true,
+  components: { nominal: "25" },
+  tokens: [],
+  unparsedFragments: [],
+  warnings: ["single_bound_tolerance"],
+  normalizationSteps: [],
 };
 
 const otherCandidate: ScanCandidate = {
@@ -47,6 +62,7 @@ const otherCandidate: ScanCandidate = {
       },
     ],
   },
+  engineeringParse,
   valueBox: { x: 90, y: 120, width: 40, height: 10 },
   duplicateCount: 1,
   duplicateSourceIds: ["C0012", "C0013"],
@@ -117,8 +133,25 @@ describe("checksheet creation snapshot", () => {
       bbox: otherCandidate.valueBox,
       duplicate_count: 1,
       assembly: otherCandidate.assembly,
+      engineering_parse: engineeringParse,
     });
     expect(JSON.stringify(creation.payload.items)).not.toContain("candidate-1");
+  });
+
+  it("preserves parse evidence on accepted checksheet rows", () => {
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "Parsed values",
+      readingColumns: ["Part 1"],
+      annotations: [makeAnnotation({ engineeringParse })],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project,
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.items[0].engineering_parse).toEqual(
+      engineeringParse
+    );
   });
 
   it("keeps oriented geometry and completes one-sided tolerance bounds", () => {

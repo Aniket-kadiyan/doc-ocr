@@ -136,6 +136,9 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     assert outcome["state"] == "eligible"
     assert outcome["text"] == outcome["raw_text"] == "50"
     assert outcome["recognized"] is True
+    assert result["regions"][0]["engineering_parse"]["kind"] == "linear"
+    assert outcome["engineering_parse"]["components"]["nominal"] == "50"
+    assert result["engineering_parse_stats"]["complete_count"] == 1
     assert events[0]["stage"] == "preparing"
     assert events[-1]["stage"] == "finalizing"
     detection_events = [
@@ -434,6 +437,13 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
     ]
     assert result["regions"][0]["page_filter_rule"] == "engineering_value"
     assert all(region["authoritative_reread"] for region in result["regions"])
+    assert result["regions"][0]["engineering_parse"]["kind"] == "angle"
+    assert result["regions"][1]["engineering_parse"]["kind"] == "linear"
+    assert all(
+        "engineering_parse" in outcome
+        for outcome in result["candidate_outcomes"]
+    )
+    assert result["engineering_parse_stats"]["object_count"] == 4
     assert result["filter_rule_counts"] == {
         "engineering_value": 2,
         "note_information": 1,

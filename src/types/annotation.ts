@@ -99,6 +99,51 @@ export interface EngineeringObjectAssembly {
   children: EngineeringObjectChildEvidence[];
 }
 
+export type EngineeringValueParseStatus =
+  | "complete"
+  | "partial"
+  | "unparsed"
+  | "empty";
+
+export type EngineeringValueKind =
+  | "linear"
+  | "angle"
+  | "chamfer"
+  | "thread"
+  | "dual_unit"
+  | "ratio"
+  | "standalone_tolerance"
+  | "identifier"
+  | "unknown";
+
+export interface EngineeringValueToken {
+  kind: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface EngineeringValueUnparsedFragment {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** M5 structural evidence. It describes text but never decides disposition. */
+export interface EngineeringValueParse {
+  schemaVersion: 1;
+  rawText: string;
+  normalizedText: string;
+  status: EngineeringValueParseStatus;
+  kind: EngineeringValueKind;
+  complete: boolean;
+  components: Record<string, unknown>;
+  tokens: EngineeringValueToken[];
+  unparsedFragments: EngineeringValueUnparsedFragment[];
+  warnings: string[];
+  normalizationSteps: string[];
+}
+
 /** Legacy label metadata retained only so older saved projects can be read. */
 export type LabelSource = "manual" | "ocr";
 
@@ -145,6 +190,8 @@ export interface Annotation {
   recognitionEvidence?: RecognitionEvidence;
   /** Primitive detections retained when this value was assembled. */
   assembly?: EngineeringObjectAssembly;
+  /** Lossless backend parse of the assembled engineering text. */
+  engineeringParse?: EngineeringValueParse;
   /** Presentation-only per-balloon visibility. Hidden values remain numbered,
    * persisted, exported, and active for duplicate prevention. */
   hidden?: boolean;
@@ -189,6 +236,7 @@ export interface OCRResult {
   /** Native-PDF/OCR readings and the source selected for this value. */
   recognitionEvidence?: RecognitionEvidence;
   assembly?: EngineeringObjectAssembly;
+  engineeringParse?: EngineeringValueParse;
   /** Rule-engine classification returned by manual region OCR. */
   category?: string;
   subtype?: string;

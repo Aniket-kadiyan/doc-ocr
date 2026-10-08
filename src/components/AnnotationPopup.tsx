@@ -94,6 +94,13 @@ export function AnnotationPopup({
       needsReview: isScanCandidate ? false : needsReview,
       recognitionEvidence: pending.ocrResult.recognitionEvidence,
       assembly: pending.ocrResult.assembly,
+      // A manual correction invalidates the backend's parse of the original
+      // OCR text. Preserve parse evidence only while it still describes the
+      // exact value being saved; a later backend parse can replace it.
+      engineeringParse:
+        cleanValue === pending.ocrResult.engineeringParse?.normalizedText
+          ? pending.ocrResult.engineeringParse
+          : undefined,
       range: range.trim() || undefined,
     };
     addAnnotation(annotation);

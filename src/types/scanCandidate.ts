@@ -2,6 +2,7 @@ import type {
   BBox,
   DimensionType,
   EngineeringObjectAssembly,
+  EngineeringValueParse,
   RecognitionEvidence,
 } from "@/types/annotation";
 
@@ -47,6 +48,8 @@ export interface ScanCandidate {
   recognitionEvidence?: RecognitionEvidence;
   /** Primitive detector evidence retained on the logical review object. */
   assembly?: EngineeringObjectAssembly;
+  /** Lossless parse evidence retained while the object awaits disposition. */
+  engineeringParse?: EngineeringValueParse;
   valueBox: BBox;
   orientedBox?: BBox & { rotation: number };
   /** Audit trail for geometry-equivalent reads merged during rescans. */

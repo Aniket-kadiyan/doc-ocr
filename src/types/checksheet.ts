@@ -2,6 +2,7 @@ import type {
   BBox,
   DimensionType,
   EngineeringObjectAssembly,
+  EngineeringValueParse,
 } from "@/types/annotation";
 import type { DocumentMetadata } from "@/types/documentMetadata";
 import type { ScanCandidateState } from "@/types/scanCandidate";
@@ -22,6 +23,7 @@ export interface ChecksheetSnapshotItem {
   tool: string;
   dimension_type: DimensionType;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_parse?: EngineeringValueParse | null;
 }
 
 export interface ChecksheetSnapshotPayload {
@@ -59,6 +61,7 @@ export interface ChecksheetScanCandidate {
   recovery_attempted: boolean;
   authoritative_reread: boolean;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_parse?: EngineeringValueParse | null;
   bbox: BBox;
   oriented_box?: (BBox & { rotation: number }) | null;
   duplicate_source_ids: string[];
@@ -88,6 +91,7 @@ export interface ChecksheetRow {
   tool: string;
   dimension_type: DimensionType;
   assembly?: EngineeringObjectAssembly | null;
+  engineering_parse?: EngineeringValueParse | null;
   readings: Record<string, string>;
 }
 

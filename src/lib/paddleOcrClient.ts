@@ -1,6 +1,9 @@
 import type {
   BBox,
   EngineeringObjectAssembly,
+  EngineeringValueParse,
+  EngineeringValueKind,
+  EngineeringValueParseStatus,
   OCRResult,
   RecognitionEvidence,
   RecognitionSource,
@@ -159,6 +162,8 @@ export interface SegmentRegion {
   sourceConflict?: boolean;
   /** Lossless primitive detections used to build this logical object. */
   assembly?: EngineeringObjectAssembly;
+  /** Lossless structural parse; current eligibility remains independent. */
+  engineeringParse?: EngineeringValueParse;
   /** Region box mapped into source-canvas coordinates. */
   valueBox: BBox;
   /**
@@ -167,6 +172,24 @@ export interface SegmentRegion {
    * Konva-drawable box (top-left corner + size + clockwise rotation degrees).
    */
   orientedBox?: BBox & { rotation: number };
+}
+
+export interface ApiEngineeringValueParse {
+  schema_version: 1;
+  raw_text: string;
+  normalized_text: string;
+  status: EngineeringValueParseStatus;
+  kind: EngineeringValueKind;
+  complete: boolean;
+  components?: Record<string, unknown>;
+  tokens?: Array<{ kind: string; text: string; start: number; end: number }>;
+  unparsed_fragments?: Array<{
+    text: string;
+    start: number;
+    end: number;
+  }>;
+  warnings?: string[];
+  normalization_steps?: string[];
 }
 
 export interface ApiSegmentRegion {
@@ -217,6 +240,7 @@ export interface ApiSegmentRegion {
   assembly_conflict?: boolean;
   assembly_review_reason?: string;
   assembly_children?: ApiAssemblyChild[];
+  engineering_parse?: ApiEngineeringValueParse;
 }
 
 export interface ApiAssemblyChild {
@@ -261,6 +285,17 @@ export interface ApiSegmentResponse {
     conflict_count?: number;
     rule_counts?: Record<string, number>;
   };
+  engineering_parse_stats?: {
+    schema_version?: number;
+    object_count?: number;
+    complete_count?: number;
+    partial_count?: number;
+    unparsed_count?: number;
+    empty_count?: number;
+    status_counts?: Record<string, number>;
+    kind_counts?: Record<string, number>;
+    warning_counts?: Record<string, number>;
+  };
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
   candidate_outcomes?: ApiCandidateOutcome[];
@@ -304,6 +339,7 @@ export interface ApiCandidateOutcome {
   assembly_conflict?: boolean;
   assembly_review_reason?: string;
   assembly_children?: ApiAssemblyChild[];
+  engineering_parse?: ApiEngineeringValueParse;
 }
 
 export interface SegmentCandidateOutcome extends SegmentRegion {
@@ -322,6 +358,22 @@ function mappedSegmentRegion(
   mapBBox: (bbox: BBox) => BBox = (bbox) => bbox,
   mapPoint: (point: [number, number]) => [number, number] = (point) => point
 ): SegmentRegion {
+  const parsed = r.engineering_parse;
+  const engineeringParse: EngineeringValueParse | undefined = parsed
+    ? {
+        schemaVersion: parsed.schema_version,
+        rawText: parsed.raw_text,
+        normalizedText: parsed.normalized_text,
+        status: parsed.status,
+        kind: parsed.kind,
+        complete: parsed.complete,
+        components: parsed.components ?? {},
+        tokens: parsed.tokens ?? [],
+        unparsedFragments: parsed.unparsed_fragments ?? [],
+        warnings: parsed.warnings ?? [],
+        normalizationSteps: parsed.normalization_steps ?? [],
+      }
+    : undefined;
   const evidence = r.recognition_evidence;
   const recognitionEvidence: RecognitionEvidence | undefined = evidence
     ? {
@@ -406,6 +458,7 @@ function mappedSegmentRegion(
     recognitionEvidence,
     sourceConflict: r.source_conflict,
     assembly,
+    engineeringParse,
     valueBox,
     orientedBox,
   };
@@ -573,6 +626,7 @@ export function mapSegmentCandidateOutcomes(
     assembly_conflict: outcome.assembly_conflict,
     assembly_review_reason: outcome.assembly_review_reason,
     assembly_children: outcome.assembly_children,
+    engineering_parse: outcome.engineering_parse,
   }));
   const mapped =
     coordinateSpace === "page"

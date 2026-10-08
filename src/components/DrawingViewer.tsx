@@ -947,6 +947,7 @@ export function DrawingViewer() {
               needsReview: r.needsReview || !r.recognized,
               recognitionEvidence: r.recognitionEvidence,
               assembly: r.assembly,
+              engineeringParse: r.engineeringParse,
               range: deriveRange(cleanValue) || undefined,
             };
           });
@@ -990,6 +991,7 @@ export function DrawingViewer() {
           authoritativeReread: candidate.authoritativeReread,
           recognitionEvidence: candidate.recognitionEvidence,
           assembly: candidate.assembly,
+          engineeringParse: candidate.engineeringParse,
           valueBox: candidate.valueBox,
           orientedBox: candidate.orientedBox,
           createdAt: now,
@@ -1299,6 +1301,7 @@ export function DrawingViewer() {
           valueBox: candidate.valueBox,
           recognitionEvidence: candidate.recognitionEvidence,
           assembly: candidate.assembly,
+          engineeringParse: candidate.engineeringParse,
         },
       });
     },

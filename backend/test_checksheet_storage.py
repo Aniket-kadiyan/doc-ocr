@@ -16,6 +16,7 @@ def _snapshot(
     metadata: dict[str, str] | None = None,
     with_candidate: bool = False,
     with_assembly: bool = False,
+    with_engineering_parse: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -69,6 +70,28 @@ def _snapshot(
             ],
         }
         payload["items"][0]["assembly"] = assembly  # type: ignore[index]
+    engineering_parse = {
+        "schemaVersion": 1,
+        "rawText": "25+0.1",
+        "normalizedText": "25+0.1",
+        "status": "complete",
+        "kind": "linear",
+        "complete": True,
+        "components": {
+            "nominal": "25",
+            "tolerance": {
+                "mode": "single_deviation",
+                "upper": "+0.1",
+                "lower": None,
+            },
+        },
+        "tokens": [],
+        "unparsedFragments": [],
+        "warnings": ["single_bound_tolerance"],
+        "normalizationSteps": [],
+    }
+    if with_engineering_parse:
+        payload["items"][0]["engineering_parse"] = engineering_parse  # type: ignore[index]
     if with_candidate:
         payload["scan_candidates"] = [
             {
@@ -93,6 +116,11 @@ def _snapshot(
                 "created_at": 100,
                 "updated_at": 200,
                 **({"assembly": assembly} if with_assembly else {}),
+                **(
+                    {"engineering_parse": engineering_parse}
+                    if with_engineering_parse
+                    else {}
+                ),
             }
         ]
     return ChecksheetSnapshot.model_validate(payload)
@@ -263,6 +291,24 @@ def test_engineering_object_evidence_survives_storage_and_duplicate(
 
     duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
     assert duplicate["rows"][0]["assembly"] == created["rows"][0]["assembly"]
+
+
+def test_engineering_parse_survives_storage_and_duplicate(tmp_path: Path) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(
+        storage,
+        _snapshot(with_candidate=True, with_engineering_parse=True),
+    )
+
+    item_parse = created["rows"][0]["engineering_parse"]
+    candidate_parse = created["revision"]["scan_candidates"][0][
+        "engineering_parse"
+    ]
+    assert item_parse["components"]["nominal"] == "25"
+    assert candidate_parse["warnings"] == ["single_bound_tolerance"]
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["rows"][0]["engineering_parse"] == item_parse
 
 
 def test_existing_database_without_metadata_table_migrates_to_blanks(
