@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -685,6 +686,99 @@ def cancel_scan_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
+
+
+@app.post("/ocr/reference-points")
+async def read_reference_points(
+    file: UploadFile = File(..., description="The whole rendered sheet"),
+    display_scale: float = Form(
+        1.0,
+        description=(
+            "Submitted pixels per annotation pixel, so geometry comes back "
+            "in the coordinates the drawing's annotations already use"
+        ),
+    ),
+) -> dict[str, Any]:
+    """
+    Read the sheet's coordinate reference table and locate its point names.
+
+    Separate from /ocr/scan-jobs because nothing here is a dimension: the
+    result is one table of named points plus every place those names are
+    printed in the views, and the page scanner masks ruled tables out before
+    it starts.
+
+    Submit the sheet at the highest resolution available. The point names are
+    printed at note size, and recall on the benchmark drawing went from 10 of
+    17 markers at 576dpi to 16 of 17 at 720dpi with no false positives at
+    either.
+    """
+
+    scale = display_scale if display_scale > 0 else 1.0
+    raw = await file.read()
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    # Off the event loop. This is tens of seconds of blocking CPU on a sheet
+    # rendered for point names, and run inline it stops the server answering
+    # anything — including the progress polls of the scan that just finished
+    # and asked for this, which then looks like the app has hung.
+    result = await run_in_threadpool(get_pipeline().reference_points, image)
+
+    def box(layout: Any) -> dict[str, float]:
+        return {
+            "x": round(layout.x / scale, 1),
+            "y": round(layout.y / scale, 1),
+            "width": round(layout.width / scale, 1),
+            "height": round(layout.height / scale, 1),
+        }
+
+    table = result["table"]
+    if table is None:
+        return {
+            "found": False,
+            "tableCount": result["table_count"],
+            "table": None,
+            "unmatchedSymbols": [],
+        }
+
+    markers_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for marker in result["markers"]:
+        markers_by_symbol.setdefault(marker.symbol, []).append(
+            {
+                "bbox": box(marker.bbox),
+                "score": marker.score,
+                "margin": marker.margin,
+            }
+        )
+
+    points = [
+        {
+            "symbol": point.symbol,
+            "coordinates": [
+                {"axis": axis, "value": value}
+                for axis, value in point.coordinates
+            ],
+            "nameBox": box(point.name_box),
+            "rowBox": box(point.row_box),
+            "markers": markers_by_symbol.get(point.symbol, []),
+        }
+        for point in table.points
+    ]
+    return {
+        "found": True,
+        "tableCount": result["table_count"],
+        "table": {
+            "bbox": box(table.bbox),
+            "headerBox": box(table.header_box),
+            "axes": list(table.axes),
+            "nameHeader": table.name_header,
+            "points": points,
+        },
+        # Named in the table but never found in the views. Surfaced rather
+        # than hidden: the row is still worth showing, and a blank marker
+        # count is the only honest way to say the callout was not located.
+        "unmatchedSymbols": [
+            point["symbol"] for point in points if not point["markers"]
+        ],
+    }
 
 
 @app.post("/ocr/text-layer")

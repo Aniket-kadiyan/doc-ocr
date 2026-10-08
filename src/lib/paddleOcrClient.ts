@@ -4,6 +4,7 @@ import { fixEngineeringSymbols } from "@/lib/engineeringSymbols";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { isOcrDebugDumpEnabled, isOcrDebugDumpForce } from "@/lib/ocrDebugDump";
 import { mergeSymbolHints } from "@/lib/visualSymbols";
+import type { ReferencePointsResult } from "@/types/referencePoint";
 
 export type OcrEngine = "paddleocr" | "paddleocr+vision" | "paddleocr+compose";
 
@@ -399,6 +400,38 @@ export async function runTitleFields(
 
   const data = (await res.json()) as { fields?: TitleField[] };
   return data.fields ?? [];
+}
+
+/**
+ * Read the sheet's coordinate reference table and locate its point names.
+ *
+ * `displayScale` is the submitted canvas's pixels per annotation pixel, and
+ * every box comes back already divided by it — the same contract the scan job
+ * uses, so the result drops straight onto the drawing.
+ */
+export async function runReferencePoints(
+  pageCanvas: HTMLCanvasElement,
+  displayScale = 1
+): Promise<ReferencePointsResult> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    pageCanvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error("Failed to encode page"));
+    }, "image/png");
+  });
+
+  const form = new FormData();
+  form.append("file", blob, "page.png");
+  form.append("display_scale", String(displayScale));
+
+  const res = await fetch(`${getOcrApiUrl()}/ocr/reference-points`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`Reference points API error: ${res.status}`);
+  }
+  return (await res.json()) as ReferencePointsResult;
 }
 
 export async function runPaddleOcr(

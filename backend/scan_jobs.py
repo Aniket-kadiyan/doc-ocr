@@ -112,12 +112,45 @@ class ScanJobManager:
         work: ScanWork,
         *,
         metadata: dict[str, Any] | None = None,
+        supersede: bool = True,
     ) -> dict[str, Any]:
-        """Queue one scan and return its initial public snapshot."""
+        """Queue one scan and return its initial public snapshot.
+
+        A new scan cancels whatever was still running, because there is only
+        one worker and only one scan the operator can be looking at. Without
+        this, a scan nobody is watching any more — the browser was reloaded,
+        the tab was closed, a second scan was started on top of the first —
+        keeps the worker for the twenty minutes a whole page can take, and
+        every later scan sits at "queued, 0%" behind it with no way out but
+        restarting the service. That is the one failure that looks exactly
+        like the application being broken.
+
+        Cancellation is cooperative, so a superseded scan releases the worker
+        at its next progress checkpoint rather than instantly; the new job
+        says so instead of claiming to be merely queued.
+        """
+
         job = _ScanJob(job_id=str(uuid4()), metadata=dict(metadata or {}))
         with self._lock:
             self._discard_expired_locked()
+            displaced = [
+                existing.job_id
+                for existing in self._jobs.values()
+                if existing.status in {"queued", "running", "cancelling"}
+            ]
+            was_running = supersede and any(
+                self._jobs[job_id].status in {"running", "cancelling"}
+                for job_id in displaced
+            )
+            if was_running:
+                job.stage = "waiting"
+                job.message = "Stopping the previous scan first"
+                job.operation_label = "Waiting for the previous scan"
             self._jobs[job.job_id] = job
+        # Outside the lock: cancel() takes it, and this one is not reentrant.
+        if supersede:
+            for job_id in displaced:
+                self.cancel(job_id)
         self._executor.submit(self._run, job.job_id, work)
         return self.get(job.job_id) or {}
 

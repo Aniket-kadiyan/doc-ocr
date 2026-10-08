@@ -22,6 +22,8 @@ interface ToolbarProps {
   hasBalloons: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
+  onFindReferencePoints: () => void;
+  findingReferencePoints: boolean;
   onToggleDrawValue: () => void;
   onToggleBalloons: () => void;
   onZoomIn: () => void;
@@ -47,6 +49,8 @@ export function Toolbar({
   hasBalloons,
   onSelectScanSection,
   onScanWholePage,
+  onFindReferencePoints,
+  findingReferencePoints,
   onToggleDrawValue,
   onToggleBalloons,
   onZoomIn,
@@ -135,6 +139,20 @@ export function Toolbar({
         onSelectSection={onSelectScanSection}
         onScanWholePage={onScanWholePage}
       />
+
+      <button
+        type="button"
+        onClick={onFindReferencePoints}
+        disabled={isProcessing || !canSaveProject}
+        title="Read the sheet's X/Y/Z point table and tag each point where the views call it out. Auto Balloon ▸ Whole Page does this too."
+        className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+          findingReferencePoints
+            ? "bg-teal-600 text-white"
+            : "border border-slate-200 text-slate-700 hover:bg-slate-50"
+        } disabled:opacity-50`}
+      >
+        {findingReferencePoints ? "Reading table…" : "Reference Points"}
+      </button>
 
       <button
         type="button"

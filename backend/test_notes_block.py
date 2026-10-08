@@ -14,7 +14,7 @@ The box geometry is taken from real PaddleOCR output for two drawings:
 
 from __future__ import annotations
 
-from ocr_pipeline import OcrPipeline
+from ocr_pipeline import OcrPipeline, _centre_inside
 
 
 def _b(text, x, y, w, h, conf=0.9):
@@ -111,6 +111,129 @@ def test_numbered_table_rows_are_not_a_notes_block():
 def test_a_single_point_is_not_a_notes_block():
     one = [_b("1. SOMETHING HERE", 60, 40, 200, 20)]
     assert OcrPipeline._detect_notes_block(one)[0] is None
+
+
+# ── Markers with no "." or ")" separator ──────────────────────────────────
+# ballwoon drawing.pdf numbers its notes with a bare digit and a space, and
+# prints the same list twice, once in Japanese and once in English. Both
+# blocks were missed entirely, and every line of both came back as its own
+# balloon.
+
+UNPUNCTUATED_NOTES = [
+    _b("NOTES", 628, 500, 50, 16),
+    _b("1 UNSPECIFIED BENDING RADIUS OF PIPE IS", 645, 519, 420, 18),
+    _b("R15 ON A CENTER LINE.", 659, 536, 220, 18),
+    _b("2 BOTH SIDES OF PIPE END SHALL BE DOUBLE", 637, 554, 430, 18),
+    _b("FLARED AFTER INSERTED FLARE NUT.", 659, 575, 330, 18),
+    _b("3 DETAILED SHAPE OF THE FLARE NUT", 639, 595, 350, 18),
+    _b("4 MUST BE FREE FROM BURRS AND SHARP EDGES.", 639, 615, 440, 18),
+]
+
+# The CJK block: each marker is its own box, with the note's text beside it.
+DETACHED_MARKER_NOTES = [
+    _b("注記", 639, 88, 40, 18),
+    _b("1", 662, 116, 8, 18),
+    _b("指示無き曲げRは全て2軸を含む平面内における", 698, 116, 430, 18),
+    _b("2", 662, 173, 8, 18),
+    _b("PIPE両側はフレアナット挿入後ダブルフレアのこと", 698, 168, 430, 18),
+    _b("3", 662, 198, 8, 18),
+    _b("フレアナット及びダブルフレアの詳細形状は", 697, 196, 400, 18),
+    _b("4", 661, 251, 8, 18),
+    _b("有害なバリ及びシャープエッジ等無きこと", 698, 249, 390, 18),
+]
+
+
+def test_notes_numbered_without_a_separator_are_recognised():
+    region, _ = OcrPipeline._detect_notes_block(UNPUNCTUATED_NOTES)
+    assert region is not None
+    assert "UNSPECIFIED BENDING RADIUS" in region["text"]
+    assert "MUST BE FREE FROM BURRS" in region["text"]
+
+
+def test_a_count_callout_is_not_an_unpunctuated_note_marker():
+    # "2 PLACES" and "4 HOLES" are callouts. Two of them must not read as a
+    # numbered list just because a digit is followed by a word.
+    callouts = [
+        _b("2 PLACES", 60, 40, 90, 20),
+        _b("4 HOLES", 60, 90, 80, 20),
+    ]
+    assert OcrPipeline._detect_notes_block(callouts)[0] is None
+
+
+def test_a_marker_detected_apart_from_its_text_still_opens_a_note():
+    region, _ = OcrPipeline._detect_notes_block(DETACHED_MARKER_NOTES)
+    assert region is not None
+    assert "指示無き曲げ" in region["text"]
+    # The block spans the text column, not just the narrow marker column.
+    assert region["bbox"]["width"] > 300
+
+
+def test_both_language_blocks_are_reported_separately():
+    blocks = OcrPipeline._detect_notes_blocks(
+        DETACHED_MARKER_NOTES + UNPUNCTUATED_NOTES
+    )
+    assert len(blocks) == 2
+    texts = [region["text"] for region, _ in blocks]
+    assert any("指示無き曲げ" in text for text in texts)
+    assert any("UNSPECIFIED BENDING RADIUS" in text for text in texts)
+
+
+def test_a_misread_marker_does_not_reject_the_whole_block():
+    # PaddleOCR reads the "6" of note 6 as "0" on this sheet. The list must
+    # survive it; the growth pass picks the line up as ordinary prose.
+    boxes = list(UNPUNCTUATED_NOTES) + [
+        _b("0 THE RESTRICTED SUBSTANCES SHALL BE", 639, 635, 400, 18),
+    ]
+    region, _ = OcrPipeline._detect_notes_block(boxes)
+    assert region is not None
+    assert "UNSPECIFIED BENDING RADIUS" in region["text"]
+    assert "RESTRICTED SUBSTANCES" in region["text"]
+
+
+def test_numbers_scattered_across_the_drawing_are_not_a_numbered_list():
+    # Page-scan candidates are atomic, so every lone dimension value is its
+    # own box and pairs with whatever word is printed near it. Across a sheet
+    # that reads as "1 RUBBER / 2 SLIT AREA / 3 DETAIL AT …" and once
+    # assembled into one region it was a balloon 1730 pixels wide.
+    scattered = [
+        _b("2", 300, 400, 12, 18),   _b("RUBBER", 340, 398, 70, 18),
+        _b("3", 900, 410, 12, 18),   _b("SLIT AREA", 940, 408, 90, 18),
+        _b("4", 1500, 420, 12, 18),  _b("DETAIL AT", 1540, 418, 95, 18),
+        _b("5", 1900, 430, 12, 18),  _b("DELIVERY", 1940, 428, 90, 18),
+    ]
+
+    assert OcrPipeline._detect_notes_blocks(scattered) == []
+
+
+def test_a_real_block_keeps_its_markers_in_one_column():
+    region, _ = OcrPipeline._detect_notes_block(DETACHED_MARKER_NOTES)
+    assert region is not None
+    assert "指示無き曲げ" in region["text"]
+
+
+# ── What a notes block suppresses ─────────────────────────────────────────
+
+
+def _box(x, y, w, h):
+    return {"x": x, "y": y, "width": w, "height": h}
+
+
+def test_a_fragment_of_the_paragraph_is_covered_by_its_block():
+    block = _box(2198, 417, 520, 301)
+    assert _centre_inside(_box(2373, 600, 67, 22), block)
+
+
+def test_a_line_poking_past_the_block_edge_is_still_covered():
+    # Boxes routinely overhang the paragraph the block assembled by a pixel
+    # or two, which is why the test is on the centre and not on overlap.
+    block = _box(2198, 417, 520, 301)
+    assert _centre_inside(_box(2650, 700, 80, 22), block)
+
+
+def test_a_dimension_outside_the_block_is_not_covered():
+    block = _box(2198, 417, 520, 301)
+    assert not _centre_inside(_box(1317, 962, 25, 67), block)
+    assert not _centre_inside(_box(2700, 417, 80, 22), block)
 
 
 if __name__ == "__main__":

@@ -19,9 +19,11 @@ import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
 import {
+  abandonAutoBalloonScan,
   isScanJobCancelledError,
   preloadOcr,
   runAutoBalloonScan,
+  runPageReferencePoints,
   runPageTitleFields,
   runOCR,
   stopAutoBalloonScan,
@@ -42,6 +44,7 @@ import {
   renderPdfPage,
   loadImageFile,
   PDF_RENDER_SCALE,
+  displayRenderScale,
 } from "@/lib/pdfLoader";
 import {
   saveAnnotations,
@@ -60,6 +63,13 @@ import {
 } from "@/lib/project";
 import { downloadFile } from "@/lib/export";
 import { Balloon } from "@/components/Balloon";
+import {
+  ReferenceMarker,
+  referenceTagSize,
+} from "@/components/ReferenceMarker";
+import { layoutReferenceTags } from "@/lib/referenceTagLayout";
+import { ReferencePanel } from "@/components/ReferencePanel";
+import { referenceColor } from "@/lib/referenceColors";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
@@ -76,6 +86,7 @@ import type {
   ScanProgress,
   ScanScopeKind,
 } from "@/types/scanJob";
+import type { PageReferenceTable } from "@/types/referencePoint";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 /**
@@ -92,6 +103,20 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
  * drawings, worse on 56103-0182B (14/24 -> 12/24).
  */
 const OCR_RENDER_SCALE = 250 / 72;
+
+/**
+ * Resolution the page is re-rendered at to look for reference points, and the
+ * pixel budget that caps it.
+ *
+ * Far above {@link OCR_RENDER_SCALE} on purpose. A point name is printed at
+ * the sheet's note size — a tenth the height of a dimension callout — and
+ * recall on the benchmark drawing went from 10 of 17 markers at 576dpi to 16
+ * of 17 at 720dpi, with no false positives at either. The budget is what
+ * keeps a large sheet from asking the browser for a canvas it will refuse;
+ * an E-size sheet comes back at a lower resolution rather than not at all.
+ */
+const REFERENCE_RENDER_SCALE = 10;
+const REFERENCE_MAX_PIXELS = 48_000_000;
 
 const MIN_BOX = 8;
 const DRAWING_BACKGROUND_NAME = "drawing-background";
@@ -129,7 +154,11 @@ export function DrawingViewer() {
   const stageRef = useRef<Konva.Stage>(null);
   const projectIdRef = useRef("");
 
-  const [konvaImage, setKonvaImage] = useState<HTMLImageElement | null>(null);
+  const [konvaImage, setKonvaImage] = useState<
+    HTMLImageElement | HTMLCanvasElement | null
+  >(null);
+  /** Guards the async display render against a page flip landing after it. */
+  const renderSeqRef = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [projectId, setProjectId] = useState(() => uuidv4());
@@ -158,6 +187,12 @@ export function DrawingViewer() {
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
+  const [referenceTable, setReferenceTable] =
+    useState<PageReferenceTable | null>(null);
+  const [selectedReferenceSymbol, setSelectedReferenceSymbol] = useState<
+    string | null
+  >(null);
+  const [findingReferencePoints, setFindingReferencePoints] = useState(false);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -213,6 +248,37 @@ export function DrawingViewer() {
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
+  // Carried with their table position, because that is what fixes a point's
+  // colour: the row keeps its hue whether or not its name was found.
+  const pageReferencePoints =
+    referenceTable && referenceTable.page === currentPage
+      ? referenceTable.points.map((point, index) => ({ point, index }))
+      : [];
+  const selectedReferenceRow = pageReferencePoints
+    .filter(({ point }) => point.symbol === selectedReferenceSymbol)
+    .map(({ point, index }) => ({
+      box: point.rowBox,
+      color: referenceColor(index),
+    }))[0];
+  // Tags hold their screen size, so where they fit depends on the zoom: the
+  // placement is recomputed with it rather than baked in once.
+  const referenceTagPlacements = (() => {
+    const anchors = pageReferencePoints.flatMap(({ point }) =>
+      point.markers.map((marker, place) => ({
+        id: `${point.symbol}-${place}`,
+        glyph: marker.bbox,
+      }))
+    );
+    if (anchors.length === 0) return new Map<string, { x: number; y: number }>();
+    const axes = referenceTable?.points[0]?.coordinates ?? [];
+    const size = referenceTagSize(axes);
+    return layoutReferenceTags(anchors, {
+      width: size.width / scale,
+      height: size.height / scale,
+      gap: 7 / scale,
+      bounds: stageSize,
+    });
+  })();
 
   const replaceScanReviewCandidates = useCallback(
     (next: PageScanReviewCandidate[]) => {
@@ -222,27 +288,52 @@ export function DrawingViewer() {
     []
   );
 
-  const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
-    const img = new window.Image();
-    img.src = canvas.toDataURL("image/png");
-    img.onload = () => {
-      setKonvaImage(img);
-      setStageSize({ width: canvas.width, height: canvas.height });
-    };
-  }, []);
-
+  /**
+   * Put a page bitmap on the stage.
+   *
+   * The canvas goes to Konva as it is. Encoding it to a PNG data URL first
+   * cost a multi-megabyte base64 round-trip on every page change, and at
+   * display resolution it would be several times worse; Konva draws a canvas
+   * as readily as an image. It also made the hand-off asynchronous, so the
+   * bitmap and the stage size it belongs to were set a frame apart.
+   */
   const renderCurrentPage = useCallback(
     async (doc: PDFDocumentProxy, page: number) => {
+      const seq = ++renderSeqRef.current;
+
+      // Two renders of the same page, for two different jobs. The first is the
+      // annotation coordinate space — every stored bbox is measured in it, and
+      // it is what OCR and the scanners crop from — so its scale is fixed and
+      // it goes up first, to get the sheet on screen. The second is only ever
+      // looked at, so it is rendered as fine as this sheet's size allows and
+      // swapped in behind it.
       const { canvas, width, height } = await renderPdfPage(
         doc,
         page,
         PDF_RENDER_SCALE
       );
+      if (renderSeqRef.current !== seq) return;
       sourceCanvasRef.current = canvas;
-      canvasToKonvaImage(canvas);
       setStageSize({ width, height });
+      setKonvaImage(canvas);
+
+      const unscaled = (await doc.getPage(page)).getViewport({ scale: 1 });
+      const displayScale = displayRenderScale(unscaled.width, unscaled.height);
+      if (displayScale <= PDF_RENDER_SCALE) return;
+      try {
+        const { canvas: display } = await renderPdfPage(
+          doc,
+          page,
+          displayScale
+        );
+        if (renderSeqRef.current !== seq) return;
+        setKonvaImage(display);
+      } catch {
+        // A canvas the browser refuses costs sharpness, not the drawing: the
+        // coordinate-space render is already on screen and stays there.
+      }
     },
-    [canvasToKonvaImage]
+    []
   );
 
   // Re-render only when the document or page changes — never on zoom. Zoom is a
@@ -259,16 +350,32 @@ export function DrawingViewer() {
   }, [currentPage, projectId]);
 
   useEffect(() => {
-    // Review boxes are temporary scan output, never project data.
+    // Review boxes are temporary scan output, never project data. A read
+    // reference table is the same: it belongs to the sheet it was read from,
+    // so opening another drawing has to drop it rather than leave its
+    // markers floating over different artwork.
     replaceScanReviewCandidates([]);
     reviewOrderRef.current = 0;
     setSelectedReviewCandidateId(null);
     setSelectedScanSections([]);
+    setReferenceTable(null);
+    setSelectedReferenceSymbol(null);
   }, [projectId, replaceScanReviewCandidates]);
 
   useEffect(() => {
     void preloadOcr();
   }, []);
+
+  // A closed tab leaves its scan running on the backend, and the backend has
+  // one scan worker, so the next scan queues behind a job nobody is watching
+  // for as long as a whole page takes. Tell it on the way out.
+  useEffect(() => {
+    const jobId = scanProgress?.jobId;
+    if (!jobId) return;
+    const stop = () => abandonAutoBalloonScan(jobId);
+    window.addEventListener("pagehide", stop);
+    return () => window.removeEventListener("pagehide", stop);
+  }, [scanProgress?.jobId]);
 
   useEffect(() => {
     if (annotations.length === 0) return;
@@ -322,12 +429,11 @@ export function DrawingViewer() {
         setPdfDoc(null);
         setTotalPages(1);
         setCurrentPage(1);
-        canvasToKonvaImage(canvas);
         setStageSize({ width, height });
+        setKonvaImage(canvas);
       }
     },
     [
-      canvasToKonvaImage,
       renderCurrentPage,
       setCurrentPage,
       setScale,
@@ -1055,13 +1161,134 @@ export function DrawingViewer() {
     setSelectedScanSections([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
-    await runAutoBalloon(
+    setReferenceTable(null);
+    const outcome = await runAutoBalloon(
       { x: 0, y: 0, width: source.width, height: source.height },
       "page",
       currentPage
     );
+    // A coordinate point table is part of reading the whole sheet, so the
+    // page scan looks for one too rather than leaving it to a second click.
+    // It runs after, not instead: it needs its own much finer render, and a
+    // sheet without such a table must still get its balloons.
+    if (outcome.status === "succeeded") {
+      await findReferencePointsRef.current?.({ announce: false });
+    }
   }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
   );
+
+  // findReferencePoints is declared below and depends on state this callback
+  // does not, so it is reached through a ref rather than by reordering the
+  // two and making scanWholePage rebuild on every change to it.
+  const findReferencePointsRef = useRef<
+    ((options?: { announce?: boolean }) => Promise<void>) | null
+  >(null);
+
+  /**
+   * Read the sheet's coordinate table and tag its points in the views.
+   *
+   * Deliberately not part of auto-ballooning. These are not values to be
+   * inspected: they carry no tolerance and no balloon number, the page
+   * scanner masks the table they come from out before it starts, and the
+   * sheet is re-rendered here several times finer than a scan needs.
+   */
+  const findReferencePoints = useCallback(async (
+    { announce = true }: { announce?: boolean } = {}
+  ) => {
+    const source = sourceCanvasRef.current;
+    if (!source) return;
+
+    if (announce) {
+      // Chained onto a page scan this would wipe the balloon count the scan
+      // just reported, and most sheets have no coordinate table at all — so
+      // saying so is news only when the operator asked the question.
+      setSelectionError(null);
+      setScanSummary(null);
+      setSelectedScanSections([]);
+      setIsDrawingValue(false);
+      setIsSegmenting(false);
+    }
+    setSelectedReferenceSymbol(null);
+    setFindingReferencePoints(true);
+    setIsProcessing(true);
+
+    const projectAtStart = projectIdRef.current;
+    const page = currentPage;
+    try {
+      // Fall back to the displayed canvas for an image file, or if the
+      // re-render is refused — a coarser look is better than none.
+      let readCanvas = source;
+      let readScale = 1;
+      if (pdfDoc) {
+        const base = await pdfDoc.getPage(page);
+        const unscaled = base.getViewport({ scale: 1 });
+        const budget = Math.sqrt(
+          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
+        );
+        const renderScale = Math.min(REFERENCE_RENDER_SCALE, budget);
+        if (renderScale > PDF_RENDER_SCALE) {
+          try {
+            const { canvas } = await renderPdfPage(pdfDoc, page, renderScale);
+            readCanvas = canvas;
+            readScale = renderScale / PDF_RENDER_SCALE;
+          } catch {
+            readCanvas = source;
+            readScale = 1;
+          }
+        }
+      }
+
+      const result = await runPageReferencePoints(readCanvas, readScale);
+      if (projectIdRef.current !== projectAtStart) return;
+
+      if (!result.found || !result.table) {
+        setReferenceTable(null);
+        if (announce) {
+          setSelectionError(
+            result.tableCount === 0
+              ? "No ruled table was found on this sheet."
+              : "None of this sheet's tables has a point column with X/Y/Z coordinates."
+          );
+        }
+        return;
+      }
+
+      setReferenceTable({ ...result.table, page });
+      const located = result.table.points.length -
+        result.unmatchedSymbols.length;
+      // Missing names are worth saying either way: the row is shown with the
+      // coordinates it does have, and only the callout is absent.
+      if (located === 0) {
+        setSelectionError(
+          "The coordinate table was read, but none of its point names could be found in the views."
+        );
+      } else if (result.unmatchedSymbols.length > 0) {
+        setSelectionError(
+          `Not found in the views: ${result.unmatchedSymbols.join(", ")}.`
+        );
+      }
+    } catch (error) {
+      setReferenceTable(null);
+      if (announce) {
+        setSelectionError(
+          error instanceof Error
+            ? error.message
+            : "Reading the reference table failed."
+        );
+      }
+    } finally {
+      setFindingReferencePoints(false);
+      setIsProcessing(false);
+    }
+  }, [
+    currentPage,
+    pdfDoc,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+  ]);
+
+  findReferencePointsRef.current = findReferencePoints;
 
   const openScanReviewCandidate = useCallback(
     (candidate: PageScanReviewCandidate) => {
@@ -1383,6 +1610,8 @@ export function DrawingViewer() {
           setIsSegmenting(true);
         }}
         onScanWholePage={() => void scanWholePage()}
+        onFindReferencePoints={() => void findReferencePoints()}
+        findingReferencePoints={findingReferencePoints}
         onToggleDrawValue={() => {
           setSelectionError(null);
           setScanSummary(null);
@@ -1521,6 +1750,21 @@ export function DrawingViewer() {
                       );
                     })}
 
+                    {selectedReferenceRow && (
+                      <Rect
+                        x={selectedReferenceRow.box.x}
+                        y={selectedReferenceRow.box.y}
+                        width={selectedReferenceRow.box.width}
+                        height={selectedReferenceRow.box.height}
+                        fill={selectedReferenceRow.color.fill}
+                        opacity={0.22}
+                        stroke={selectedReferenceRow.color.fill}
+                        strokeWidth={2 / scale}
+                        cornerRadius={2 / scale}
+                        listening={false}
+                      />
+                    )}
+
                     {currentBox && (
                       <Rect
                         x={currentBox.x}
@@ -1531,6 +1775,36 @@ export function DrawingViewer() {
                         strokeWidth={2 / scale}
                         dash={[4 / scale, 4 / scale]}
                       />
+                    )}
+
+                    {pageReferencePoints.map(({ point, index }) =>
+                      point.markers.map((marker, place) => (
+                        <ReferenceMarker
+                          key={`ref-${point.symbol}-${index}-${place}`}
+                          symbol={point.symbol}
+                          coordinates={point.coordinates}
+                          marker={marker}
+                          placement={
+                            referenceTagPlacements.get(
+                              `${point.symbol}-${place}`
+                            ) ?? { x: marker.bbox.x, y: marker.bbox.y }
+                          }
+                          color={referenceColor(index)}
+                          scale={scale}
+                          selected={
+                            selectedReferenceSymbol === point.symbol
+                          }
+                          dimmed={
+                            selectedReferenceSymbol !== null &&
+                            selectedReferenceSymbol !== point.symbol
+                          }
+                          onSelect={(symbol) =>
+                            setSelectedReferenceSymbol((current) =>
+                              current === symbol ? null : symbol
+                            )
+                          }
+                        />
+                      ))
                     )}
 
                     {visiblePageAnnotations.map((ann) => (
@@ -1552,6 +1826,20 @@ export function DrawingViewer() {
         </div>
 
         <Sidebar
+          referencePanel={
+            referenceTable && referenceTable.page === currentPage ? (
+              <ReferencePanel
+                table={referenceTable}
+                selectedSymbol={selectedReferenceSymbol}
+                disabled={isProcessing}
+                onSelect={setSelectedReferenceSymbol}
+                onClear={() => {
+                  setReferenceTable(null);
+                  setSelectedReferenceSymbol(null);
+                }}
+              />
+            ) : null
+          }
           annotations={annotations}
           reviewCandidates={scanReviewCandidates}
           disabled={isSegmenting || isProcessing}

@@ -253,6 +253,27 @@ export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
 }
 
 /**
+ * Stop a scan on the way out of the page, without waiting for a reply.
+ *
+ * A closed tab leaves its scan running: the backend has one scan worker and
+ * a whole page can occupy it for twenty minutes, so the abandoned job holds
+ * the queue shut against whatever is started next. The server also drops a
+ * superseded scan when a new one arrives, which covers a reload; this covers
+ * simply walking away.
+ *
+ * `sendBeacon` because the document is being torn down — a normal fetch is
+ * cancelled with it.
+ */
+export function abandonScanJob(jobId: string): void {
+  if (!jobId || typeof navigator === "undefined" || !navigator.sendBeacon) {
+    return;
+  }
+  navigator.sendBeacon(
+    `${getOcrApiUrl()}/ocr/scan-jobs/${encodeURIComponent(jobId)}/cancel`
+  );
+}
+
+/**
  * Run one backend scan job and return candidates only after it succeeds.
  * Polling exposes genuine stage/counter progress without publishing partial
  * annotations into the drawing.

@@ -70,6 +70,19 @@ PREFIX_RECHECK_PHI_SCORE = 0.20
 # never expand into unbounded OCR work during a whole-page scan.
 GROUPING_MAX_REFINEMENTS = 8
 
+# Height one table row is rescaled to before a reference table is recognised,
+# and how many ruled tables one reference-points call may read. The sheet that
+# set both carries five ruled grids and finds its coordinate table in the
+# first one read.
+TABLE_READ_ROW_HEIGHT = 30.0
+MAX_TABLES_READ = 6
+
+# How much of a sheet one notes paragraph may cover and still be allowed to
+# suppress the balloons inside it. The two blocks on the sheet this was
+# measured on cover 2.7% and 1.7%, so the cap is far away; it exists only so
+# that a block which grew wrong cannot delete a drawing's worth of values.
+NOTES_MAX_PAGE_FRACTION = 0.25
+
 
 def sort_reading_order(
     items: list[PaddleLine],
@@ -126,10 +139,42 @@ def assemble_paddle_lines(
 # ── Drawing NOTES block ────────────────────────────────────────────────────
 # One numbered note line: "1.MAT'L GRADE…", "2) HOT DIP…". The marker must be
 # followed by a letter, so a decimal callout (".12R", "1.5") can never match.
-# The "." or ")" separator is REQUIRED. Making it optional was tried and is a
-# regression: it turns ordinary lines into false markers, which breaks the
-# "markers must climb" guard below and the whole block is then rejected.
+# The "." or ")" separator is REQUIRED here. Simply making it optional was
+# tried and is a regression: it turns ordinary lines into false markers.
 _NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]\s*[A-Za-z]")
+
+# Plenty of drawing offices number their notes with no separator at all —
+# "1 UNSPECIFIED BENDING RADIUS OF PIPE IS". Admitting that shape needs a
+# narrower test than "digit then letter", because "2 PLACES" and "4 HOLES"
+# are callouts, not notes: the marker has to be followed by a word of three
+# or more letters AND then by something else, which is prose and not a count.
+# `[^\W\d_]` is a letter in any script, so a Japanese note block matches too.
+_NOTE_POINT_PROSE_RE = re.compile(r"^\s*(\d{1,2})\s+[^\W\d_]{3,}\s+\S")
+
+# A marker recognised as its own box, with the note's text in a separate box
+# beside it. Wide-set CJK note blocks come back this way, the detector having
+# nothing to bridge the gap between the number and the first character.
+_NOTE_MARKER_ONLY_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]?\s*$")
+
+# How many climbing markers each shape has to produce before the block is
+# believed. The punctuated shape is distinctive enough on its own; the two
+# looser shapes have to show a longer list, because that is the evidence that
+# replaces the separator they are missing.
+_NOTE_MIN_POINTS = 2
+_NOTE_MIN_POINTS_UNPUNCTUATED = 3
+
+# A numbered list is a COLUMN: its markers hang off one left edge. Markers
+# that do not share one are not a list, they are separate things that each
+# happen to start with a number — a row of lone dimension values beside a
+# word apiece will otherwise assemble into one "note" the width of the
+# sheet. Measured against the marker height so it holds at any resolution.
+_NOTE_MARKER_COLUMN_TOLERANCE = 1.5
+
+# One numbered marker: its index among the detection boxes, the marker box,
+# the number it carries, and the marker joined to its text. The last is the
+# marker box itself unless the two were detected separately, and it is what
+# the block's bounds are measured from.
+_NotePoint = tuple[int, dict[str, Any], int, dict[str, Any]]
 # The block's own heading. PaddleOCR reads the CAD "O" as a zero often enough
 # on these sheets that both spellings are accepted.
 _NOTES_HEADING_RE = re.compile(r"^\s*N[O0]TES?\s*[:.\-]?\s*$", re.I)
@@ -143,6 +188,22 @@ _TITLE_BLOCK_WORDS_RE = re.compile(
     r"|FRACTION|DECIMAL|REVISIONS|DESCRIPTION|ZONE|INCHES|MILLIMETERS)\b",
     re.I,
 )
+
+
+def _centre_inside(inner: Mapping[str, float], outer: Mapping[str, float]) -> bool:
+    """True when `inner`'s centre falls within `outer`.
+
+    Centre rather than overlap: a note line's box routinely pokes a pixel or
+    two past the paragraph the block assembled, and an overlap test would let
+    it survive as a balloon on the strength of that pixel.
+    """
+
+    centre_x = float(inner["x"]) + float(inner["width"]) / 2
+    centre_y = float(inner["y"]) + float(inner["height"]) / 2
+    return (
+        float(outer["x"]) <= centre_x <= float(outer["x"]) + float(outer["width"])
+        and float(outer["y"]) <= centre_y <= float(outer["y"]) + float(outer["height"])
+    )
 
 
 def _covers_digits(whole: str, part: str) -> bool:
@@ -1886,6 +1947,116 @@ class OcrPipeline:
         whole = extract_title_fields(_read(image, 0, 0), keywords)
         return whole if any(field["value"] for field in whole) else fields
 
+    def _read_table_cells(
+        self,
+        image: Image.Image,
+        table: "GridTable",
+    ) -> dict[tuple[int, int], str]:
+        """Recognise one ruled table and return its text per cell.
+
+        The crop is rescaled so that one row stands about
+        :data:`TABLE_READ_ROW_HEIGHT` pixels tall before it is recognised.
+        Row height is a direct proxy for the size of the type inside it, and
+        the detector is far more accurate on text in a narrow band of sizes:
+        handed the reference table at its printed resolution it returned the
+        last five rows and nothing above them, and normalised it returned all
+        nine with every coordinate exact.
+        """
+
+        from reference_table import assign_text_to_cells
+
+        heights = sorted(cell.box.height for cell in table.cells)
+        row_height = float(heights[len(heights) // 2]) if heights else 0.0
+        if row_height <= 0:
+            return {}
+        factor = max(0.1, min(4.0, TABLE_READ_ROW_HEIGHT / row_height))
+
+        crop = image.crop(table.bbox.box)
+        if abs(factor - 1.0) > 0.02:
+            crop = crop.resize(
+                (
+                    max(1, int(round(crop.width * factor))),
+                    max(1, int(round(crop.height * factor))),
+                ),
+                Image.LANCZOS,
+            )
+        boxes = self._detect_regions_ocr(crop)
+        for box in boxes:
+            box["x"] = float(box["x"]) / factor + table.bbox.x
+            box["y"] = float(box["y"]) / factor + table.bbox.y
+            box["w"] = float(box["w"]) / factor
+            box["h"] = float(box["h"]) / factor
+        return assign_text_to_cells(table, boxes)
+
+    def reference_points(self, image: Image.Image) -> dict[str, Any]:
+        """Read the sheet's coordinate table and find its names in the views.
+
+        Two stages, both documented in their own modules:
+        :mod:`reference_table` recovers the ruled grids and decides which one
+        is a coordinate table from its header, and :mod:`symbol_markers`
+        matches the point names it found against the glyphs printed in the
+        drawing.
+
+        Candidate tables are read largest-first and the search stops at the
+        first one that identifies, because recognition is the whole cost of
+        this call and a sheet carries several ruled tables that are plainly
+        not coordinate tables. The order only decides which qualifying table
+        is reported when a sheet somehow has two.
+        """
+
+        from reference_table import (
+            MAX_TABLE_COLUMNS,
+            MIN_TABLE_COLUMNS,
+            MIN_TABLE_ROWS,
+            extract_grid_tables,
+            identify_reference_table,
+        )
+        from symbol_markers import build_templates, locate_markers
+
+        page = image.convert("RGB")
+        tables = extract_grid_tables(page)
+        readable = sorted(
+            (
+                table
+                for table in tables
+                if table.row_count > MIN_TABLE_ROWS
+                and MIN_TABLE_COLUMNS <= table.column_count <= MAX_TABLE_COLUMNS
+            ),
+            key=lambda table: (
+                table.row_count,
+                table.bbox.width * table.bbox.height,
+            ),
+            reverse=True,
+        )[:MAX_TABLES_READ]
+
+        reference = None
+        for table in readable:
+            reference = identify_reference_table(
+                [table],
+                [self._read_table_cells(page, table)],
+            )
+            if reference is not None:
+                break
+
+        if reference is None:
+            return {"table": None, "markers": [], "table_count": len(tables)}
+
+        templates = build_templates(
+            page,
+            {point.symbol: point.name_box for point in reference.points},
+            reference.value_boxes,
+        )
+        markers = locate_markers(
+            page,
+            templates,
+            excluded=[table.bbox for table in tables],
+        )
+        return {
+            "table": reference,
+            "markers": markers,
+            "table_count": len(tables),
+        }
+
     @staticmethod
     def _lines_from_boxes(
         boxes: list[dict[str, Any]], line_h: float
@@ -2063,17 +2234,162 @@ class OcrPipeline:
         return cleaned if len(markers) >= 2 else []
 
     @staticmethod
-    def _detect_notes_block(
+    def _note_marker_points(
         boxes: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any] | None, list[int]]:
+    ) -> tuple[list[_NotePoint], int]:
+        """Numbered markers that could open a note, and how many are needed.
+
+        Three shapes: the punctuated "1." form, the bare "1 WORD WORD" form,
+        and a lone number in its own box with the note's text beside it. The
+        punctuated form is distinctive enough to be used alone whenever a
+        sheet has it; the other two are only ever used together, because a
+        sheet that prints its notes twice, once per language, routinely needs
+        one shape for each block.
+
         """
-        Recover the drawing's NOTES paragraph as ONE region.
+
+        punctuated: list[_NotePoint] = []
+        prose: list[_NotePoint] = []
+        detached: list[_NotePoint] = []
+
+        for index, box in enumerate(boxes):
+            text = box.get("text") or ""
+            match = _NOTE_POINT_RE.match(text)
+            if match:
+                punctuated.append((index, box, int(match.group(1)), box))
+                continue
+            match = _NOTE_POINT_PROSE_RE.match(text)
+            if match:
+                prose.append((index, box, int(match.group(1)), box))
+                continue
+            match = _NOTE_MARKER_ONLY_RE.match(text)
+            if match:
+                beside = OcrPipeline._prose_beside(box, boxes)
+                if beside is not None:
+                    detached.append(
+                        (
+                            index,
+                            box,
+                            int(match.group(1)),
+                            OcrPipeline._union_box(box, beside),
+                        )
+                    )
+
+        if len(punctuated) >= _NOTE_MIN_POINTS:
+            return punctuated, _NOTE_MIN_POINTS
+        return prose + detached, _NOTE_MIN_POINTS_UNPUNCTUATED
+
+    @staticmethod
+    def _prose_beside(
+        marker: dict[str, Any],
+        boxes: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """The run of words a lone number box is the marker for, if any."""
+
+        line_h = max(float(marker["h"]), 1.0)
+        nearest: dict[str, Any] | None = None
+        for box in boxes:
+            if box is marker:
+                continue
+            text = (box.get("text") or "").strip()
+            if sum(character.isalpha() for character in text) < 3:
+                continue
+            gap = float(box["x"]) - (float(marker["x"]) + float(marker["w"]))
+            if not 0.0 <= gap <= 4.0 * line_h:
+                continue
+            overlap = min(
+                float(box["y"]) + float(box["h"]),
+                float(marker["y"]) + line_h,
+            ) - max(float(box["y"]), float(marker["y"]))
+            if overlap < 0.5 * min(float(box["h"]), line_h):
+                continue
+            if nearest is None or float(box["x"]) < float(nearest["x"]):
+                nearest = box
+        return nearest
+
+    @staticmethod
+    def _union_box(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+        x0 = min(float(left["x"]), float(right["x"]))
+        y0 = min(float(left["y"]), float(right["y"]))
+        x1 = max(float(left["x"]) + float(left["w"]), float(right["x"]) + float(right["w"]))
+        y1 = max(float(left["y"]) + float(left["h"]), float(right["y"]) + float(right["h"]))
+        return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+    @staticmethod
+    def _note_point_groups(
+        points: list[_NotePoint],
+        *,
+        minimum: int,
+    ) -> list[list[_NotePoint]]:
+        """Split markers into one group per numbered list, top to bottom.
+
+        A sheet often prints the same notes twice, once per language, and the
+        second list restarts its numbering. Splitting wherever the number
+        stops climbing separates them, and also drops a misread marker — a
+        "6" that came back as "0" — out of the list rather than rejecting the
+        whole block over it, because the growth pass below picks its line up
+        as ordinary prose anyway.
+        """
+
+        groups: list[list[_NotePoint]] = []
+        current: list[_NotePoint] = []
+        for point in sorted(points, key=lambda item: item[1]["y"]):
+            if current and point[2] <= current[-1][2]:
+                # A restart opens a new list; anything else that fails to
+                # climb is a misread and is simply not a marker.
+                if point[2] > 2:
+                    continue
+                groups.append(current)
+                current = []
+            current.append(point)
+        if current:
+            groups.append(current)
+        # The list has to hang off one left edge, and has to start at its own
+        # top — otherwise a column of unrelated numbered table rows, or a row
+        # of lone numbers spread across the drawing, is swept up as "notes".
+        aligned = (
+            OcrPipeline._one_marker_column(group) for group in groups
+        )
+        return [
+            group
+            for group in aligned
+            if len(group) >= minimum and group[0][2] <= 2
+        ]
+
+    @staticmethod
+    def _one_marker_column(group: list[_NotePoint]) -> list[_NotePoint]:
+        """Keep only the markers that hang off the group's own left edge."""
+
+        if not group:
+            return group
+        lefts = sorted(float(point[1]["x"]) for point in group)
+        median_left = lefts[len(lefts) // 2]
+        heights = sorted(float(point[1]["h"]) for point in group)
+        tolerance = max(
+            4.0, heights[len(heights) // 2] * _NOTE_MARKER_COLUMN_TOLERANCE
+        )
+        return [
+            point
+            for point in group
+            if abs(float(point[1]["x"]) - median_left) <= tolerance
+        ]
+
+    @staticmethod
+    def _detect_notes_blocks(
+        boxes: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], list[int]]]:
+        """
+        Recover the drawing's NOTES paragraphs, one region per numbered list.
 
         Every line of a notes block fails ``has_dimension_value`` — it opens
         with a word and carries nothing measurable — so ``segment`` drops the
         whole paragraph. The notes are still wanted on the inspection sheet,
-        just not as dimensions, so the block is assembled here and returned as
-        a single General Note region.
+        just not as dimensions, so each block is assembled here and returned
+        as a single General Note region.
+
+        Plural because a sheet routinely prints its notes twice, once per
+        language, and reporting only the larger list leaves the other one to
+        break into fragments that each come back as a balloon.
 
         The text is taken from the detection boxes rather than by re-reading
         the crop: each box is already one line, and preserving that line
@@ -2081,38 +2397,35 @@ class OcrPipeline:
         numbered points. Re-reading a whole paragraph through the dimension
         recogniser would also lose the line breaks.
 
-        Returns ``(region, indices)`` — the region and the indices of the boxes
-        it consumed — or ``(None, [])`` when the drawing carries no notes.
+        Returns ``(region, indices)`` per block — the region and the indices
+        of the boxes it consumed.
         """
-        points = [
-            (i, b)
-            for i, b in enumerate(boxes)
-            if _NOTE_POINT_RE.match(b.get("text") or "")
+        found, minimum = OcrPipeline._note_marker_points(boxes)
+        return [
+            block
+            for group in OcrPipeline._note_point_groups(found, minimum=minimum)
+            for block in (OcrPipeline._assemble_notes_block(boxes, group),)
+            if block is not None
         ]
-        # Two points is the smallest thing that is recognisably a list. A lone
-        # "1. SOMETHING" is far more likely to be a stray callout.
-        if len(points) < 2:
-            return None, []
 
-        points.sort(key=lambda p: p[1]["y"])
-        numbers = [
-            int(_NOTE_POINT_RE.match(b["text"]).group(1)) for _, b in points
-        ]
-        # The markers must climb as the eye moves down the block, and the list
-        # has to start at its top. Without this a column of unrelated numbered
-        # table rows would be swept up as "notes".
-        if numbers[0] > 2 or any(
-            b <= a for a, b in zip(numbers, numbers[1:])
-        ):
-            return None, []
+    @staticmethod
+    def _assemble_notes_block(
+        boxes: list[dict[str, Any]],
+        points: list[_NotePoint],
+    ) -> tuple[dict[str, Any], list[int]] | None:
+        """Grow one numbered list into the paragraph it heads."""
 
-        left = min(b["x"] for _, b in points)
-        right = max(b["x"] + b["w"] for _, b in points)
-        line_h = sorted(b["h"] for _, b in points)[len(points) // 2]
-        top = min(b["y"] for _, b in points)
-        bottom = max(b["y"] + b["h"] for _, b in points)
+        # The span box, not the marker box: when the number and its text were
+        # detected separately the marker alone is a few pixels wide, and the
+        # join test below is anchored on this span.
+        spans = [span for _, _, _, span in points]
+        left = min(b["x"] for b in spans)
+        right = max(b["x"] + b["w"] for b in spans)
+        line_h = sorted(b["h"] for b in spans)[len(spans) // 2]
+        top = min(b["y"] for b in spans)
+        bottom = max(b["y"] + b["h"] for b in spans)
 
-        chosen = {i for i, _ in points}
+        chosen = {index for index, _, _, _ in points}
 
         # Wrapped continuation lines sit between and below the markers, and the
         # heading sits just above. Grow the block until it stops absorbing
@@ -2170,7 +2483,7 @@ class OcrPipeline:
         # Keep the heading out of the text: the sheet writes its own NOTES row.
         lines = [ln for ln in lines if ln and not _NOTES_HEADING_RE.match(ln)]
         if not lines:
-            return None, []
+            return None
 
         confs = [float(b.get("conf") or 0.0) for b in members]
         region = {
@@ -2198,6 +2511,18 @@ class OcrPipeline:
         region["_bounds"] = (left, top, right, bottom)
         region["_line_h"] = line_h
         return region, sorted(chosen)
+
+
+    @staticmethod
+    def _detect_notes_block(
+        boxes: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, list[int]]:
+        """The one largest notes paragraph, for the single-region callers."""
+
+        blocks = OcrPipeline._detect_notes_blocks(boxes)
+        if not blocks:
+            return None, []
+        return max(blocks, key=lambda block: len(block[1]))
 
     @staticmethod
     def _region_from_result(
@@ -3352,20 +3677,50 @@ class OcrPipeline:
         neighbouring dimension clusters, which is how a balloon came out as
         "AN.2WTOOPING.".
         """
+        regions = self._notes_regions(
+            image,
+            debug_dump=debug_dump,
+            debug_dump_force=debug_dump_force,
+        )
+        if not regions:
+            return None
+        return max(
+            regions,
+            key=lambda region: region["bbox"]["width"] * region["bbox"]["height"],
+        )
+
+    def _notes_regions(
+        self,
+        image: Image.Image,
+        *,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Every NOTES paragraph on the sheet, each read as one region.
+
+        The dedicated recognition pass is not redundant with the page scan's
+        own, and reusing the scan's candidates here was tried and reverted:
+        those are ATOMIC objects, so every lone dimension number on the sheet
+        arrives as its own box, pairs with whatever word is printed near it,
+        and a row of them across the drawing reads as a numbered list. One
+        sheet produced a single bogus "note" 1730 pixels wide that way. This
+        detector needs boxes that are whole lines.
+        """
+
         try:
             boxes = self._detect_regions_ocr(image)
         except Exception:
-            return None
-        region, _ = self._detect_notes_block(boxes)
-        if region is None:
-            return None
-        bounds = region.pop("_bounds", None)
-        line_h = region.pop("_line_h", 0.0)
-        if bounds is not None:
-            better = self._reread_notes_block(image, bounds, line_h)
-            if better:
-                region["text"] = "\n".join(better)
-        return region
+            return []
+        found: list[dict[str, Any]] = []
+        for region, _ in self._detect_notes_blocks(boxes):
+            bounds = region.pop("_bounds", None)
+            line_h = region.pop("_line_h", 0.0)
+            if bounds is not None:
+                better = self._reread_notes_block(image, bounds, line_h)
+                if better:
+                    region["text"] = "\n".join(better)
+            found.append(region)
+        return found
 
     def segment(
         self,
@@ -4788,6 +5143,13 @@ class OcrPipeline:
             "revision_history",
             "note_information",
             "document_metadata",
+            # Decided on the PRELIMINARY reading and never revisited, which
+            # is the only point at which the evidence still exists: the
+            # upright pass reads a printed line whole, and the authoritative
+            # re-read of that same box comes back empty because a sentence is
+            # not one engineering value. Excluding here also spares every
+            # fragment of the line a re-read it has no use for.
+            "prose_line_fragment",
         }
 
         def build_filter_candidates() -> list[PageValueCandidate]:
@@ -5199,13 +5561,49 @@ class OcrPipeline:
         regions = [r for r in regions if not r.pop("superseded", False)]
         detected_count -= before_supersede - len(regions)
 
-        # The NOTES paragraph, read as one region rather than left to leak into
-        # neighbouring clusters as fragments. Same accounting as the angled
-        # pass, so the state invariant below still balances.
-        notes_region = self._notes_region(
+        # The NOTES paragraphs, each read as one region rather than left to
+        # leak into neighbouring clusters as fragments. Same accounting as the
+        # angled pass, so the state invariant below still balances.
+        #
+        # Publishing the paragraph is only half of it: the detector has
+        # already broken the same prose into dozens of word-sized boxes, and
+        # the ones carrying a number — "R15", "2", "647.8", a standard's
+        # "500Y" — read as perfectly good engineering values on their own and
+        # were each ballooned. One sheet's two note blocks produced forty
+        # balloons that way. Nothing inside a paragraph is a dimension, so
+        # every region the block covers is dropped in favour of the block.
+        notes_regions = self._notes_regions(
             image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
         )
-        if notes_region is not None:
+        page_area = float(image.width) * float(image.height)
+        for notes_region in notes_regions:
+            before_notes = len(regions)
+            # A block that has somehow grown over a quarter of the sheet is
+            # not a paragraph, and deleting every balloon under it would be
+            # far worse than the fragments it was meant to replace. Publish
+            # it, but let it suppress nothing.
+            covers = (
+                notes_region["bbox"]["width"] * notes_region["bbox"]["height"]
+            )
+            if page_area > 0 and covers <= NOTES_MAX_PAGE_FRACTION * page_area:
+                regions = [
+                    region
+                    for region in regions
+                    if not _centre_inside(region["bbox"], notes_region["bbox"])
+                ]
+                # Prose the recogniser gave up on is still prose. Offering a
+                # garbled half-line of a note for review is the same clutter
+                # as ballooning it, and there is no value behind it to find.
+                before_review = len(review_candidates)
+                review_candidates = [
+                    candidate
+                    for candidate in review_candidates
+                    if not _centre_inside(
+                        candidate["bbox"], notes_region["bbox"]
+                    )
+                ]
+                detected_count -= before_review - len(review_candidates)
+            detected_count -= before_notes - len(regions)
             regions.append(notes_region)
             detected_count += 1
 

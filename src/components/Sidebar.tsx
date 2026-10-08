@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Annotation } from "@/types/annotation";
 import { BalloonThumbnail } from "@/components/BalloonThumbnail";
 
 interface SidebarProps {
   annotations: Annotation[];
+  /** The sheet's reference-point table, when one has been read. */
+  referencePanel?: ReactNode;
   reviewCandidates: ReviewSidebarItem[];
   disabled?: boolean;
   selectedId: string | null;
@@ -30,6 +32,7 @@ export interface ReviewSidebarItem {
  * metadata on that same record rather than separate annotations. */
 export function Sidebar({
   annotations,
+  referencePanel = null,
   reviewCandidates,
   disabled = false,
   selectedId,
@@ -64,6 +67,14 @@ export function Sidebar({
           )}
         </p>
       </div>
+
+      {referencePanel && (
+        // Bounded and scrollable on its own: a point table can run to twenty
+        // rows, and it must not push the balloon list off the sidebar.
+        <div className="max-h-[45%] shrink-0 overflow-y-auto bg-white">
+          {referencePanel}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2">
         {values.length === 0 && reviews.length === 0 ? (

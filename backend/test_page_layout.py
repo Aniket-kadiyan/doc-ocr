@@ -102,3 +102,54 @@ def test_page_layout_cache_is_bounded_and_reuses_geometry() -> None:
     assert cache.get("one") is None
     assert cache.get("two") is layout
     assert cache.get("three") is layout
+
+
+def test_a_table_the_page_cuts_through_keeps_its_last_column() -> None:
+    """A media box that clips the sheet leaves a column with three sides.
+
+    Without the page edge standing in for the missing rule no cell forms
+    there, the column is never masked, and whatever it holds is scanned as
+    free drawing text — on a real sheet that published a tensile-strength
+    figure from a materials table as if it were a dimension.
+    """
+
+    width, height = 640, 420
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    y_values = (80, 130, 180, 230, 280)
+    # Rules at 300, 400 and 500; the fourth column runs off the paper.
+    for x in (300, 400, 500):
+        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
+    for y in y_values:
+        draw.line((300, y, width, y), fill="black", width=2)
+
+    masks = detect_table_masks(image)
+
+    assert masks
+    # The closed columns were always found.
+    assert any(_contains(mask, 450, 180) for mask in masks)
+    # The clipped one is what this test is about.
+    assert any(_contains(mask, 580, 180) for mask in masks)
+
+
+def test_a_framed_sheet_does_not_grow_cells_out_to_the_paper() -> None:
+    """The border frame must not become the far side of every row."""
+
+    width, height = 640, 420
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 20, width - 20, height - 20), outline="black", width=2)
+    x_values = (280, 340, 400, 460)
+    y_values = (80, 130, 180, 230, 280)
+    for x in x_values:
+        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
+    for y in y_values:
+        draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
+
+    masks = detect_table_masks(image)
+
+    assert masks
+    assert any(_contains(mask, 370, 180) for mask in masks)
+    # Nothing between the frame and the paper is a table cell.
+    assert not any(_contains(mask, 10, 180) for mask in masks)
+    assert not any(_contains(mask, width - 10, 180) for mask in masks)

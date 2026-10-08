@@ -88,13 +88,27 @@ DATE_VALUE = _compile(
 )
 NUMERIC_COMPONENT = re.compile(r"\d")
 SCALE_RATIO_VALUE = _compile(r"^\s*\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s*$")
-COMPACT_IDENTIFIER_VALUE = _compile(
+# Deliberately case-SENSITIVE, unlike every other pattern in this file. A
+# part number, a material code or a standard reference is set in capitals on
+# a drawing; nothing is printed as "listed2". Compiled with IGNORECASE this
+# accepted any three characters carrying one letter and one digit, which is
+# what a misread word looks like — "e11" out of "ties", "Roper0" out of
+# "proper", "mus1" out of "must" — and eleven of the hundred and thirteen
+# values published from the benchmark sheet reached the drawing through this
+# pattern alone, every one of them a word the recogniser had mangled.
+COMPACT_IDENTIFIER_VALUE = re.compile(
     r"^(?=.{3,}$)(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]*$"
 )
 CONTEXT_IDENTIFIER_VALUE = _compile(
     r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]{5,}$"
 )
 SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
+# A plain run of digits this long, with no decimal point and no symbol, is a
+# document number rather than a measurement: nothing on a drawing is
+# dimensioned to six significant figures. Matching only makes the value
+# eligible for the nearby-label test — it still needs a DWG NO or PART NO
+# printed beside it before anything is excluded.
+BARE_IDENTIFIER_NUMBER = _compile(r"^\d{6,}$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
@@ -340,6 +354,7 @@ def _is_context_exclusion_prone(text: str) -> bool:
         SCALE_RATIO_VALUE.fullmatch(normalized)
         or _is_compact_identifier(normalized)
         or SINGLE_CHARACTER_VALUE.fullmatch(normalized)
+        or BARE_IDENTIFIER_NUMBER.fullmatch(normalized)
         or not is_complete_engineering_value(normalized)
     )
 
@@ -502,6 +517,87 @@ def _document_metadata(
     )
 
 
+# What makes a reading a line of prose rather than a callout: several words
+# of it, mostly letters, and no complete value anywhere in the string.
+PROSE_LINE_MIN_WORDS = 3
+PROSE_LINE_MIN_CHARACTERS = 12
+PROSE_LINE_MIN_LETTER_SHARE = 0.6
+
+# How much of a candidate has to lie inside that line, and how much smaller
+# than the line it has to be, before it is one of its characters.
+PROSE_FRAGMENT_MIN_CONTAINED = 0.8
+PROSE_FRAGMENT_MAX_AREA_SHARE = 0.5
+
+_WORD_TOKEN = re.compile(r"[A-Za-z]{2,}")
+
+
+def _is_prose_line(text: str) -> bool:
+    """Whether a reading is a printed sentence rather than a value."""
+
+    stripped = str(text or "").strip()
+    if len(stripped) < PROSE_LINE_MIN_CHARACTERS:
+        return False
+    if len(_WORD_TOKEN.findall(stripped)) < PROSE_LINE_MIN_WORDS:
+        return False
+    letters = sum(1 for character in stripped if character.isalpha())
+    if letters / len(stripped) < PROSE_LINE_MIN_LETTER_SHARE:
+        return False
+    return not is_complete_engineering_value(stripped)
+
+
+def _is_fragment_of(inner: BBox, outer: BBox) -> bool:
+    """Whether one box is a piece of a larger one rather than its equal."""
+
+    inner_area = max(
+        float(inner["width"]) * float(inner["height"]),
+        1.0,
+    )
+    outer_area = max(
+        float(outer["width"]) * float(outer["height"]),
+        1.0,
+    )
+    if inner_area > outer_area * PROSE_FRAGMENT_MAX_AREA_SHARE:
+        return False
+    contained = _bbox_intersection_area(inner, outer) / inner_area
+    return contained >= PROSE_FRAGMENT_MIN_CONTAINED
+
+
+def _prose_line_fragment(
+    candidate: PageValueCandidate,
+    page_candidates: Sequence[PageValueCandidate],
+) -> bool:
+    """Reject a piece of a line that some other pass read as a sentence.
+
+    A whole-page scan inspects each panel upright and turned a quarter turn.
+    A line of type is one box to the upright pass and, to the turned one,
+    nothing it can join into a line at all — so it comes back as a box per
+    letter or per syllable, and a drawing office that letter-spaces its
+    headings ("G u a r a n t e e d  M e c h a n i c a l  P r o p e r t i e s")
+    gives the turned pass nothing else to do. On the benchmark sheet one
+    panel returned five boxes upright over that block and thirty-seven turned.
+
+    Those pieces are then read on their own, at a size no recogniser can do
+    anything with, and whatever digit comes back is published: "proper" came
+    back "Roper0", "listed" came back "listed2", one letter of "properties"
+    came back "031". Deduplication cannot help, because it refuses on
+    principle to let a large box suppress a small one — a dimension string
+    must never be swallowed by the note above it.
+
+    What settles it is that the upright pass already read those exact pixels,
+    and read them as a sentence. A box inside that line, and much smaller
+    than it, is one of its characters.
+    """
+
+    for other in page_candidates:
+        if other is candidate:
+            continue
+        if not _is_prose_line(other.text):
+            continue
+        if _is_fragment_of(candidate.bbox, other.bbox):
+            return True
+    return False
+
+
 # Edit this ordered tuple to change whole-page exclusions.  Earlier enabled
 # rules win, making behavior deterministic and easy to audit in result counts.
 NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
@@ -540,6 +636,12 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
         enabled=True,
         reason="Drawing, document, part, or sheet metadata",
         predicate=_document_metadata,
+    ),
+    PageValueFilterRule(
+        name="prose_line_fragment",
+        enabled=True,
+        reason="Piece of a line another pass read as a sentence",
+        predicate=_prose_line_fragment,
     ),
 )
 

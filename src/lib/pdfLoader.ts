@@ -3,6 +3,32 @@ import * as pdfjs from "pdfjs-dist";
 /** Base PDF raster scale used by stored annotation coordinates and previews. */
 export const PDF_RENDER_SCALE = 1.5;
 
+/**
+ * Resolution the on-screen page bitmap is rendered at, and the pixel budget
+ * that caps it.
+ *
+ * Deliberately independent of {@link PDF_RENDER_SCALE}. Zoom in the viewer is
+ * a display transform over a bitmap rendered once per page, so that bitmap's
+ * own resolution is the ceiling on how sharp the sheet can ever look —  at
+ * 1.5 the ceiling is 108dpi, and the drawing goes soft the moment it is
+ * zoomed past 1:1. Rendering the displayed copy finer changes no geometry,
+ * because it is drawn into the same PDF_RENDER_SCALE-sized box that every
+ * stored annotation is measured in.
+ *
+ * The budget is what keeps a large sheet from asking the browser for a canvas
+ * it will refuse. It sits well below the scan and reference-point budgets on
+ * purpose: those renders are cropped, sent, and dropped, while this one is
+ * held for as long as the page is open.
+ */
+export const DISPLAY_RENDER_SCALE = 4;
+export const DISPLAY_MAX_PIXELS = 24_000_000;
+
+/** The finest scale this page can be displayed at within the pixel budget. */
+export function displayRenderScale(width: number, height: number): number {
+  const budget = Math.sqrt(DISPLAY_MAX_PIXELS / (width * height));
+  return Math.max(PDF_RENDER_SCALE, Math.min(DISPLAY_RENDER_SCALE, budget));
+}
+
 if (typeof window !== "undefined") {
   pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
 }

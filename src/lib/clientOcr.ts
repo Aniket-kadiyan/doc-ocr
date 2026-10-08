@@ -9,6 +9,7 @@ import type {
   ScanJobResult,
 } from "@/lib/scanJobClient";
 import {
+  abandonScanJob,
   cancelScanJob,
   isScanJobCancelledError,
   runScanJob,
@@ -18,6 +19,7 @@ import {
   checkOcrApiHealth,
   runPaddleOcr,
   runSegmentOcr,
+  runReferencePoints,
   runTitleFields,
   type OcrApiHealth,
   type OcrEngine,
@@ -109,6 +111,26 @@ export async function runPageTitleFields(pageCanvas: HTMLCanvasElement) {
   return runTitleFields(pageCanvas);
 }
 
+/**
+ * Read the sheet's coordinate reference table and locate its point names.
+ *
+ * Beside {@link runPageTitleFields} for the same reason: it is a whole-sheet
+ * read whose subject sits wherever the drawing office put it, not inside any
+ * rectangle the user drew.
+ */
+export async function runPageReferencePoints(
+  pageCanvas: HTMLCanvasElement,
+  displayScale = 1
+) {
+  apiHealth = await checkOcrApiHealth();
+  if (!apiHealth.available) {
+    throw new Error(
+      "PaddleOCR API is not running. Start it with: uvicorn main:app --reload --port 8000"
+    );
+  }
+  return runReferencePoints(pageCanvas, displayScale);
+}
+
 export async function runAutoBalloonScan(
   options: RunScanJobOptions
 ): Promise<ScanJobResult> {
@@ -128,6 +150,11 @@ export async function stopAutoBalloonScan(
   jobId: string
 ): Promise<ScanProgress> {
   return cancelScanJob(jobId);
+}
+
+/** Stop a scan during page unload; see {@link abandonScanJob}. */
+export function abandonAutoBalloonScan(jobId: string): void {
+  abandonScanJob(jobId);
 }
 
 export async function terminateOCR(): Promise<void> {

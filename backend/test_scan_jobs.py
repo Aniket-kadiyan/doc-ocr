@@ -168,7 +168,9 @@ def test_queued_job_can_be_cancelled_before_its_worker_starts() -> None:
     try:
         first = manager.submit(blocking_work)
         assert first_started.wait(1.0)
-        queued = manager.submit(queued_work)
+        # supersede=False: this submit exists only to put a job in the queue,
+        # and the default would cancel the running one it is queued behind.
+        queued = manager.submit(queued_work, supersede=False)
         cancelled = manager.cancel(queued["job_id"])
         assert cancelled is not None
         assert cancelled["status"] == "cancelled"
@@ -181,6 +183,73 @@ def test_queued_job_can_be_cancelled_before_its_worker_starts() -> None:
         assert manager.get(queued["job_id"])["status"] == "cancelled"
     finally:
         release_first.set()
+        manager.shutdown()
+
+
+def test_a_new_scan_supersedes_the_one_still_running() -> None:
+    # One worker, and a whole-page scan runs for minutes. A scan nobody is
+    # watching any more must not hold the queue shut against the next one.
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    second_ran = Event()
+
+    def long_work(report):
+        first_started.set()
+        for step in range(200):
+            # Cancellation is observed at a progress checkpoint.
+            report(stage="working", message="step", percent=step)
+            sleep(0.01)
+        return {"count": 0, "regions": []}
+
+    def second_work(_report):
+        second_ran.set()
+        return {"count": 1, "regions": []}
+
+    try:
+        first = manager.submit(long_work)
+        assert first_started.wait(1.0)
+
+        second = manager.submit(second_work)
+
+        assert _wait_for_terminal(manager, first["job_id"])["status"] == "cancelled"
+        assert _wait_for_terminal(manager, second["job_id"])["status"] == "succeeded"
+        assert second_ran.is_set()
+    finally:
+        manager.shutdown()
+
+
+def test_superseding_says_it_is_waiting_rather_than_merely_queued() -> None:
+    manager = ScanJobManager(max_workers=1)
+    started = Event()
+    release = Event()
+
+    def blocking_work(_report):
+        started.set()
+        release.wait(2.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        manager.submit(blocking_work)
+        assert started.wait(1.0)
+
+        second = manager.submit(lambda _r: {"count": 0, "regions": []})
+
+        assert second["stage"] == "waiting"
+        assert "previous scan" in second["message"]
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_the_first_scan_of_a_session_is_not_marked_as_waiting() -> None:
+    manager = ScanJobManager(max_workers=1)
+    try:
+        # The worker may already have picked it up, so the test is only that
+        # it never claims to be waiting on a previous scan.
+        first = manager.submit(lambda _r: {"count": 0, "regions": []})
+        assert first["stage"] != "waiting"
+        assert "previous scan" not in first["message"]
+    finally:
         manager.shutdown()
 
 

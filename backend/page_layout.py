@@ -323,6 +323,55 @@ def _line_covers(
     return line.start - tolerance <= start and line.end + tolerance >= end
 
 
+# How close to the sheet's edge a row's rules have to run before the edge is
+# read as the missing side of a cell, and how far in a real rule may be and
+# still count as that side instead.
+_CLIPPED_EDGE_REACH = 0.004
+_CLIPPED_EDGE_RULE_GAP = 0.02
+
+
+def _clipped_edges(
+    top: _LineSegment,
+    bottom: _LineSegment,
+    rules: set[int],
+    *,
+    page_width: int,
+    tolerance: int,
+) -> set[int]:
+    """Page edges that close a cell the sheet itself does not close.
+
+    A PDF whose media box cuts through the drawing leaves its right-hand
+    column with three sides: the table's rules run off the paper and there is
+    no fourth line to pair them with, so no cell forms there and nothing in
+    that column is ever masked as table content. On the benchmark sheet that
+    published the tensile-strength figure as a dimension and queued the
+    column's heading for review, while the yield column beside it — closed on
+    both sides — was masked correctly.
+
+    The edge is only taken when the row's own rules run to it and no real
+    rule is already standing near it, which is what distinguishes a clipped
+    table from a sheet whose border frame happens to sit close to the paper.
+    """
+
+    reach = max(tolerance, int(round(page_width * _CLIPPED_EDGE_REACH)))
+    gap = max(tolerance, int(round(page_width * _CLIPPED_EDGE_RULE_GAP)))
+    edges: set[int] = set()
+    for edge, runs_to_edge in (
+        (0, top.start <= reach and bottom.start <= reach),
+        (
+            page_width - 1,
+            top.end >= page_width - 1 - reach
+            and bottom.end >= page_width - 1 - reach,
+        ),
+    ):
+        if not runs_to_edge:
+            continue
+        if any(abs(rule - edge) <= gap for rule in rules):
+            continue
+        edges.add(edge)
+    return edges
+
+
 def _detect_grid_cells(
     horizontal: Sequence[_LineSegment],
     vertical: Sequence[_LineSegment],
@@ -353,29 +402,37 @@ def _detect_grid_cells(
             if row_height > maximum_row_height:
                 break
 
+            rules = {
+                line.coordinate
+                for line in vertical
+                if _line_covers(
+                    line,
+                    top.coordinate,
+                    bottom.coordinate,
+                    tolerance=tolerance,
+                )
+                and _line_covers(
+                    top,
+                    line.coordinate,
+                    line.coordinate,
+                    tolerance=tolerance,
+                )
+                and _line_covers(
+                    bottom,
+                    line.coordinate,
+                    line.coordinate,
+                    tolerance=tolerance,
+                )
+            }
             boundaries = sorted(
-                {
-                    line.coordinate
-                    for line in vertical
-                    if _line_covers(
-                        line,
-                        top.coordinate,
-                        bottom.coordinate,
-                        tolerance=tolerance,
-                    )
-                    and _line_covers(
-                        top,
-                        line.coordinate,
-                        line.coordinate,
-                        tolerance=tolerance,
-                    )
-                    and _line_covers(
-                        bottom,
-                        line.coordinate,
-                        line.coordinate,
-                        tolerance=tolerance,
-                    )
-                }
+                rules
+                | _clipped_edges(
+                    top,
+                    bottom,
+                    rules,
+                    page_width=page_width,
+                    tolerance=tolerance,
+                )
             )
             row_cells: list[LayoutBox] = []
             for left, right in zip(boundaries, boundaries[1:]):

@@ -73,7 +73,7 @@ export function AutoBalloonMenu({
           >
             <span className="font-medium">Whole Page</span>
             <span className="block text-[11px] text-slate-400">
-              Scan the complete current drawing page
+              Scan the page, and read its X/Y/Z point table
             </span>
           </button>
         </div>

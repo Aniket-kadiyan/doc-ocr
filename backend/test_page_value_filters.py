@@ -129,6 +129,34 @@ def test_split_metadata_value_is_rejected_only_when_its_label_is_nearby() -> Non
     assert standalone.accepted
 
 
+def test_a_drawing_number_beside_its_label_is_not_a_dimension() -> None:
+    # A plain ten-digit run reads as a valid linear value, so without this it
+    # never got as far as the "DWG NO" printed next to it and the sheet's own
+    # drawing number came back as the first balloon on the page.
+    label = candidate("DWG NO", x=10, y=10, width=60)
+    number = candidate("7475870300", x=80, y=10, width=200)
+
+    decision = evaluate_page_value(number, page_candidates=(label, number))
+
+    assert not decision.accepted
+    assert decision.rule_name == "document_metadata"
+
+
+def test_a_long_bare_number_with_no_label_is_still_a_value() -> None:
+    # Length alone proves nothing: dropping it would need a label beside it.
+    number = candidate("123456", x=900, y=900, width=140)
+
+    assert evaluate_page_value(number, page_candidates=(number,)).accepted
+
+
+def test_a_short_integer_dimension_keeps_its_balloon() -> None:
+    label = candidate("DWG NO", x=10, y=10, width=60)
+    for text in ("21", "140", "12345"):
+        value = candidate(text, x=80, y=10, width=60)
+        decision = evaluate_page_value(value, page_candidates=(label, value))
+        assert decision.accepted, text
+
+
 def test_distant_metadata_label_does_not_exclude_a_numeric_value() -> None:
     label = candidate("PART NUMBER", x=10, y=10, width=90)
     value = candidate("50", x=700, y=500, width=30)
@@ -314,3 +342,74 @@ def test_widening_the_grammar_still_rejects_prose() -> None:
     ):
         decision = evaluate_page_value(candidate(text))
         assert not decision.accepted, text
+
+
+def _at(text: str, x: float, y: float, width: float, height: float):
+    return PageValueCandidate(
+        text=text,
+        bbox={"x": x, "y": y, "width": width, "height": height},
+    )
+
+
+# The upright detector pass reads this line whole; the quarter-turn pass has
+# no line to join and returns its letters one at a time.
+PROSE_LINE = _at("the following properties must be satisfied.", 100, 200, 460, 16)
+
+
+def test_a_letter_of_a_printed_line_is_not_a_value() -> None:
+    # "properties" read back as "Roper0" at this size, which is three
+    # characters with a letter and a digit — a part number, by the grammar.
+    for fragment in (
+        _at("Roper0", 250, 201, 70, 15),
+        _at("031", 330, 202, 22, 14),
+        _at("35", 410, 203, 12, 12),
+    ):
+        decision = evaluate_page_value(
+            fragment,
+            page_candidates=[PROSE_LINE, fragment],
+        )
+        assert not decision.accepted, fragment.text
+        assert decision.rule_name == "prose_line_fragment", fragment.text
+
+
+def test_the_line_itself_is_judged_on_its_own_text() -> None:
+    decision = evaluate_page_value(PROSE_LINE, page_candidates=[PROSE_LINE])
+    assert not decision.accepted
+    assert decision.rule_name == "no_numeric_component"
+
+
+def test_a_dimension_beside_a_note_is_still_a_value() -> None:
+    # Overlapping nothing: the rule needs the value to sit INSIDE the line.
+    value = _at("Ø18.6", 700, 201, 60, 15)
+    decision = evaluate_page_value(value, page_candidates=[PROSE_LINE, value])
+    assert decision.accepted, decision.rule_name
+
+
+def test_a_short_label_is_not_a_prose_line() -> None:
+    # Two words and a value must not be able to suppress their neighbours.
+    label = _at("SECTION A-A", 100, 200, 460, 16)
+    value = _at("25.4", 250, 201, 50, 15)
+    decision = evaluate_page_value(value, page_candidates=[label, value])
+    assert decision.rule_name != "prose_line_fragment"
+
+
+def test_a_value_the_size_of_the_line_is_not_its_fragment() -> None:
+    # A box that covers the line is a competing read of it, not a character
+    # inside it, and must be judged on its own text.
+    twin = _at("119.0", 100, 200, 450, 16)
+    decision = evaluate_page_value(twin, page_candidates=[PROSE_LINE, twin])
+    assert decision.accepted, decision.rule_name
+
+
+def test_a_misread_word_is_no_longer_a_part_number() -> None:
+    # The compact-identifier escape hatch is for ISD-600-500Y, not for what
+    # the recogniser makes of three letters at note size.
+    for text in ("e11", "listed2", "Roper0", "mus1", "1el", "proper1"):
+        decision = evaluate_page_value(candidate(text))
+        assert not decision.accepted, text
+
+
+def test_a_real_part_number_still_passes() -> None:
+    for text in ("ISD-600-500Y", "ISC-A00-008Y", "SCM415", "E545", "R24"):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, text

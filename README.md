@@ -15,6 +15,10 @@ symbol recovery. No cloud OCR service is required.
 7. Save a reloadable `.docbox.json` project, create an internal inspection
    checksheet, or export JSON, CSV, XML, or a verification payload.
 
+On a sheet with a coordinate point table, a whole-page scan also tags each of
+its named points where the views call it out — see
+[Reference points](#reference-points).
+
 The box saved with a manually created value is the box drawn by the user.
 Balloon numbers are always contiguous `1…N`; deleting a value immediately
 renumbers the remaining values. Labels are optional metadata and do not create
@@ -109,6 +113,49 @@ CHECKSHEET_MAX_DOCUMENT_MB=200
 Keep `CHECKSHEET_DATA_DIR` on a backed-up server volume. Other computers access
 it through the backend API; the browser is not the persistence layer for these
 checksheets.
+
+## Reference points
+
+Some sheets carry a small table of named points — `a`, `b`, `c` … — each with
+its X/Y/Z coordinates, and print the bare name beside the matching feature in
+the views. **Auto Balloon → Whole Page** reads that table and tags every place
+the views call one of its names out, showing all three coordinates on the
+sheet. **Reference Points** runs the same pass on its own, without rescanning
+for dimensions.
+
+Selecting a row highlights its markers on the drawing, dims the rest, and
+tints the matching row of the drawing's own printed table. Each row keeps its
+own colour; the name is always printed on the marker, so colour is only a way
+of finding a point, never the thing that identifies it.
+
+The table is found from its header, never from a caption: a column of short
+names with X/Y/Z columns to its right. "(REFERENCE)", "(参考)" and no caption
+at all all work, and a sheet whose tables have no coordinate columns reports
+that rather than guessing. Point names are then located by matching the
+table's own printed glyphs against the drawing, so nothing has to generalize
+across fonts or scanners.
+
+Names the matcher could not find are listed and their rows are marked `?` —
+the coordinates are still correct, only the callout was not located.
+
+These are not ballooned values: they carry no tolerance, no inspection
+method, and no balloon number, and they are not saved into a project or an
+export. The sheet is re-rendered several times finer than an auto-balloon
+scan for this, because point names are printed at note size — which is also
+why the pass runs after the scan rather than sharing its render.
+
+## Notes paragraphs
+
+A drawing's NOTES paragraph is published as one **General Note** region, not
+as one balloon per line. The detector breaks the same prose into word-sized
+boxes, and the ones carrying a number — `R15`, a resonance frequency, a
+standard's `500Y` — read as perfectly good engineering values on their own, so
+every region a notes block covers is dropped in favour of the block.
+
+Numbered markers are recognized in three shapes: `1.` / `1)`, a bare `1 WORD
+WORD` with no separator, and a lone number box with the note's text beside it
+(how wide-set CJK blocks come back). A sheet that prints its notes twice, once
+per language, gets one region per block.
 
 ## Drawing and OCR tips
 
