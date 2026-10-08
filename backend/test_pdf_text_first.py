@@ -10,6 +10,7 @@ from pdf_text_first import (
     crop_text_layer_result,
     merge_native_and_ocr_results,
     native_text_segment_result,
+    native_vector_result_is_primary,
 )
 from pdf_text_layer import (
     TextRun,
@@ -272,3 +273,36 @@ def test_hybrid_keeps_non_overlapping_ocr_candidate() -> None:
     assert merged["source_profile"]["text_layer_strategy"] == (
         "native_text_first_hybrid_ocr"
     )
+
+
+def test_vector_native_result_remains_primary_when_graphics_are_present() -> None:
+    native = _scan_result(_outcome("PDF:P1:T00001", "45.3", "eligible"))
+    native["structured_symbol_stats"] = {
+        "object_count": 2,
+        "complete_count": 1,
+        "review_count": 1,
+    }
+
+    assert native_vector_result_is_primary(
+        native,
+        evidence_profile="vector",
+    )
+
+
+def test_structured_ocr_evidence_never_replaces_exact_native_text() -> None:
+    native = _scan_result(_outcome("PDF:P1:T00001", "0.5 A B C", "review"))
+    native["review_candidates"][0]["recognition_source"] = "native_pdf"
+    ocr_outcome = _outcome("C0001", "⟂ | 0.5AC | 0.5AC", "review", x=12)
+    ocr_outcome["engineering_symbol"] = {
+        "kind": "feature_control_frame",
+        "complete": True,
+        "completed_symbol": "⟂",
+    }
+    ocr = _scan_result(ocr_outcome)
+
+    merged = merge_native_and_ocr_results(native, ocr)
+
+    assert merged["candidate_outcomes"][0]["text"] == "0.5 A B C"
+    assert merged["candidate_outcomes"][0]["recognition_evidence"][
+        "selected_source"
+    ] == "native_pdf"

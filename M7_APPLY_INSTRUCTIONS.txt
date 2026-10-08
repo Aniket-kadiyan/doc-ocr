@@ -1,12 +1,13 @@
-M7 — GRAPHICAL ENGINEERING SYMBOL SUPPORT
-==========================================
+M7R1 — GRAPHICAL SYMBOLS WITHOUT NATIVE-TEXT REGRESSION
+========================================================
 
 Base
 ----
-This incremental package was produced from commit:
+This replacement package was produced from commit:
   7fab455 feat(ocr): add structure-first candidate disposition
 
-It contains only M7 additions/changes. It does not contain a Git commit.
+It contains M7 plus the native-text-preservation correction. It does not
+contain a Git commit and does not push anything.
 
 Apply on Windows / VS Code
 --------------------------
@@ -17,6 +18,8 @@ Apply on Windows / VS Code
 3. Confirm your own work is saved or committed:
      git status --short
 4. Extract this ZIP over the doc-ocr repository root, preserving folders.
+   It is safe to paste directly over the earlier flawed M7 package; reverting
+   that package first is not required.
 5. Review the result:
      git status --short
      git diff --check
@@ -47,15 +50,21 @@ Run backend with GPU (same terminal, from doc-ocr/backend):
   $env:OCR_RELOAD="false"
   .\.venv-gpu\Scripts\python.exe main.py
 
-Expected M7 behavior
---------------------
+Expected M7R1 behavior
+----------------------
+- A usable vector PDF text layer remains authoritative for the whole page or
+  selected section. The presence of a possible frame, datum, or surface mark
+  no longer launches full-page raster OCR.
+- Exact native text and bounding boxes are preserved. OCR/geometry may attach
+  structured evidence on fallback/hybrid paths, but cannot replace native text.
 - Feature-control frames, boxed datum letters, and surface-finish evidence are
   detected from pixels and combined with OCR text.
 - Complete geometry-backed objects can become balloons.
 - Unresolved feature-control symbols remain visible in Review.
 - Text-only GD&T is never auto-accepted without matching frame geometry.
-- Native PDF text remains the first pass; pages/sections containing graphical
-  structured symbols invoke the raster path for visual confirmation.
+- A lone horizontal stroke cannot manufacture a straightness symbol, and large
+  nearby drawing diagonals cannot relabel an ordinary dimension as a surface
+  finish value.
 - Every absorbed OCR fragment remains in assembly_children.
 - Structured evidence persists in projects, review candidates, and backend
   checksheet revisions.
@@ -64,4 +73,4 @@ Expected M7 behavior
 
 Suggested commit message
 ------------------------
-feat(ocr): detect and persist structured engineering symbols
+fix(ocr): preserve native PDF text during symbol detection

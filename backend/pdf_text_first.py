@@ -22,6 +22,30 @@ from page_value_filters import (
 )
 
 
+def native_vector_result_is_primary(
+    result: Mapping[str, Any] | None,
+    *,
+    evidence_profile: str | None,
+) -> bool:
+    """Return whether a vector PDF result should bypass page-wide OCR.
+
+    A usable vector text layer is authoritative for the page.  Graphical
+    symbol discovery may enrich individual candidates later, but must never
+    turn a vector page into a full-page OCR job: doing so discards exact CAD
+    text and lets lower-confidence raster reads replace it.
+    """
+
+    return bool(
+        result
+        and evidence_profile == "vector"
+        and (
+            int(result.get("eligible_count", 0))
+            + int(result.get("review_count", 0))
+            > 0
+        )
+    )
+
+
 def _box(item: Mapping[str, Any]) -> dict[str, float]:
     raw = item.get("bbox") if isinstance(item.get("bbox"), Mapping) else item
     return {
@@ -349,8 +373,10 @@ def _merge_evidence(native: dict[str, Any], ocr: Mapping[str, Any]) -> None:
             if field in ocr:
                 native[field] = deepcopy(ocr[field])
         native["engineering_symbol"] = deepcopy(dict(structured))
-        if structured.get("completed_symbol") and str(structured.get("completed_symbol")) not in native_text:
-            native["text"] = ocr_text
+        # Geometry can supplement an exact native value, but raster OCR must
+        # never replace that value.  The completed graphical symbol remains
+        # available in engineering_symbol for display/export.
+        native["text"] = native_text
         if ocr.get("state") in {"eligible", "review"}:
             native["state"] = ocr.get("state")
             native["needs_review"] = ocr.get("state") == "review"

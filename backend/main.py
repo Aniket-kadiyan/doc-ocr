@@ -49,6 +49,7 @@ from pdf_text_first import (
     crop_text_layer_result,
     merge_native_and_ocr_results,
     native_text_segment_result,
+    native_vector_result_is_primary,
 )
 from pdf_text_layer import text_layer_regions
 from scan_jobs import ProgressReporter, ScanJobManager
@@ -438,28 +439,6 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "review_candidates": review_candidates,
         "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
     }
-
-
-def _native_result_has_structured_graphics(
-    image: Image.Image,
-    native_result: Mapping[str, Any] | None,
-) -> bool:
-    if native_result is None:
-        return False
-    from structured_symbol_vision import plan_structured_engineering_symbols
-
-    hard = {"table_region", "sheet_frame_label", "detail_view_section",
-            "scale_information", "date", "revision_history",
-            "note_information", "document_metadata"}
-    records = []
-    for outcome in native_result.get("candidate_outcomes", ()):
-        record = dict(outcome)
-        record["table_excluded"] = str(outcome.get("page_filter_rule") or "") in hard
-        records.append(record)
-    plans = plan_structured_engineering_symbols(image, records)
-    return any(plan.evidence.kind in {"feature_control_frame", "datum"}
-               or bool(plan.evidence.visual_features.get("texture_mark"))
-               for plan in plans)
 
 
 def _map_section_result_to_page(
@@ -913,16 +892,13 @@ async def create_scan_job(
                 if native_text_layer and native_text_layer.get("usable")
                 else None
             )
-            native_is_primary = bool(
-                native_seg
-                and native_evidence is not None
-                and native_evidence.profile == "vector"
-                and (
-                    int(native_seg["eligible_count"])
-                    + int(native_seg["review_count"])
-                    > 0
-                )
-                and not _native_result_has_structured_graphics(image, native_seg)
+            native_is_primary = native_vector_result_is_primary(
+                native_seg,
+                evidence_profile=(
+                    native_evidence.profile
+                    if native_evidence is not None
+                    else None
+                ),
             )
             if native_is_primary:
                 seg = native_seg
@@ -1027,18 +1003,13 @@ async def create_scan_job(
                 if section_text_layer is not None
                 else None
             )
-            native_is_primary = bool(
-                native_seg
-                and section_native_evidence is not None
-                and section_native_evidence.profile == "vector"
-                and (
-                    int(native_seg["eligible_count"])
-                    + int(native_seg["review_count"])
-                    > 0
-                )
-                and not _native_result_has_structured_graphics(
-                    section_image, native_seg
-                )
+            native_is_primary = native_vector_result_is_primary(
+                native_seg,
+                evidence_profile=(
+                    section_native_evidence.profile
+                    if section_native_evidence is not None
+                    else None
+                ),
             )
 
             def report_section_progress(**event: Any) -> None:

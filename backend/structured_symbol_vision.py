@@ -30,6 +30,15 @@ _SURFACE_RE = re.compile(
 _EXPLICIT_SURFACE_RE = re.compile(
     r"^(?:RA|RZ|RMAX|RQ)\s*\d|^N\s?(?:1[0-2]|[1-9])$", re.IGNORECASE
 )
+_FCF_TOLERANCE_RE = re.compile(
+    r"^(?:[⌀Ø])?\s*(?:\d+(?:\.\d+)?|\.\d+)"
+    r"(?:\s*[ⓂⓁⓅMLP])?$",
+    re.IGNORECASE,
+)
+_FCF_DATUM_RE = re.compile(
+    r"^[A-Z](?:\s*[ⓂⓁⓅMLP])?$",
+    re.IGNORECASE,
+)
 _GDT_GLYPHS: dict[str, tuple[str, str]] = {
     "⏤": ("⏤", "Straightness"), "⏥": ("⏥", "Flatness"),
     "▱": ("⏥", "Flatness"), "○": ("○", "Circularity"),
@@ -266,15 +275,25 @@ def _infer_characteristic(image: Image.Image, cell: BBox) -> tuple[str, str, flo
     strong_v = [(col, _longest(binary[:, col])) for col in range(width)
                 if _longest(binary[:, col]) >= .45 * height]
     if strong_h and strong_v:
-        return "⟂", "Perpendicularity", .82
+        # A position symbol crosses near the middle of the cell.  A
+        # perpendicularity symbol has its horizontal stroke near the bottom.
+        strongest_h = max(strong_h, key=lambda item: item[1])[0]
+        strongest_v = max(strong_v, key=lambda item: item[1])[0]
+        h_fraction = strongest_h / max(height - 1, 1)
+        v_fraction = strongest_v / max(width - 1, 1)
+        if .28 <= h_fraction <= .72 and .28 <= v_fraction <= .72:
+            return "⌖", "Position", .84
+        if h_fraction >= .62:
+            return "⟂", "Perpendicularity", .82
     positions: list[int] = []
     for pos, _ in strong_v:
         if not positions or pos - positions[-1] >= .2 * width:
             positions.append(pos)
     if len(positions) >= 2:
         return "∥", "Parallelism", .78
-    if strong_h and not strong_v:
-        return "⏤", "Straightness", .76
+    # A lone horizontal stroke is indistinguishable from a frame border or a
+    # dimension line.  Straightness is completed only from explicit text;
+    # ambiguous graphical strokes remain ordinary candidates.
     return None
 
 
@@ -316,6 +335,29 @@ def _frame_plan(image: Image.Image, frame: _Frame, records: Sequence[Mapping[str
             source = "frame_geometry+symbol_completion"
         else:
             visual_conf = 0
+    # Geometry alone is not enough to reinterpret a generic two-cell box.
+    # Keeping it in the normal value pipeline is safer than manufacturing a
+    # GD&T characteristic from a dimension or surface-treatment box.
+    if characteristic is None and len(frame.cells) < 3:
+        return None
+
+    tolerance_index = next(
+        (
+            index
+            for index, value in enumerate(cell_texts[1:], start=1)
+            if value and _NUMBER_RE.search(value)
+        ),
+        None,
+    )
+    if tolerance_index is None:
+        return None
+    tolerance_text = " ".join(cell_texts[tolerance_index].split())
+    if not _FCF_TOLERANCE_RE.fullmatch(tolerance_text):
+        return None
+    for datum_text in cell_texts[tolerance_index + 1:]:
+        datum_text = " ".join(datum_text.split())
+        if datum_text and not _FCF_DATUM_RE.fullmatch(datum_text):
+            return None
     symbol = characteristic[0] if characteristic else None
     subtype = characteristic[1] if characteristic else None
     if symbol and (not cell_texts or _characteristic_text(cell_texts[0]) is None):
@@ -396,6 +438,18 @@ def _surface_plan(image: Image.Image, index: int, record: Mapping[str, Any]) -> 
     text, box = _text(record), _box(record)
     explicit = bool(_EXPLICIT_SURFACE_RE.search(text))
     mark = _surface_mark(image, box)
+    if mark is not None and not explicit:
+        mark_box, _ = mark
+        height = max(box["height"], 1.0)
+        mark_right = mark_box["x"] + mark_box["width"]
+        gap = box["x"] - mark_right
+        if (
+            mark_box["width"] > 2.8 * height
+            or mark_box["height"] > 3.0 * height
+            or gap < -0.6 * height
+            or gap > 1.0 * height
+        ):
+            mark = None
     if not explicit and mark is None:
         return None
     mark_box, score = mark if mark else (dict(box), 0)

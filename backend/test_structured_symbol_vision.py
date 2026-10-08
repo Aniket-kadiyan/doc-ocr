@@ -49,3 +49,49 @@ def test_plain_numeric_without_texture_geometry_is_not_relabelled():
     image = Image.new("RGB", (160, 80), "white")
     assert plan_structured_engineering_symbols(
         image, [_record("1.6", {"x": 70, "y": 30, "width": 30, "height": 15})]) == []
+
+
+def test_two_cell_box_with_horizontal_stroke_does_not_invent_straightness():
+    image = Image.new("RGB", (180, 90), "white"); draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 32, 130, 54), outline="black", width=2)
+    draw.line((66, 32, 66, 54), fill="black", width=2)
+    draw.line((40, 43, 57, 43), fill="black", width=2)
+
+    assert plan_structured_engineering_symbols(
+        image, [_record("0.2", {"x": 78, "y": 36, "width": 28, "height": 14})]
+    ) == []
+
+
+def test_position_crosshair_is_distinguished_from_perpendicularity():
+    image = Image.new("RGB", (240, 100), "white"); draw = ImageDraw.Draw(image)
+    draw.rectangle((25, 34, 205, 58), outline="black", width=2)
+    for x in (65, 125, 155, 180):
+        draw.line((x, 34, x, 58), fill="black", width=2)
+    draw.ellipse((36, 38, 54, 56), outline="black", width=2)
+    draw.line((45, 38, 45, 56), fill="black", width=2)
+    draw.line((36, 47, 54, 47), fill="black", width=2)
+    records = [
+        _record("0.5", {"x": 80, "y": 38, "width": 30, "height": 14}),
+        {**_record("A", {"x": 135, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C2"},
+        {**_record("B", {"x": 162, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C3"},
+        {**_record("C", {"x": 187, "y": 38, "width": 10, "height": 14}),
+         "candidate_id": "C4"},
+    ]
+
+    plans = plan_structured_engineering_symbols(image, records)
+
+    assert len(plans) == 1
+    assert plans[0].evidence.subtype == "Position"
+    assert plans[0].text.startswith("⌖ | 0.5 | A | B | C")
+
+
+def test_large_nearby_diagonals_do_not_relabel_a_dimension_as_surface_finish():
+    image = Image.new("RGB", (260, 180), "white"); draw = ImageDraw.Draw(image)
+    draw.line((20, 160, 130, 20), fill="black", width=2)
+    draw.line((30, 20, 145, 160), fill="black", width=2)
+
+    assert plan_structured_engineering_symbols(
+        image, [_record("45.3", {"x": 150, "y": 75, "width": 40, "height": 16})]
+    ) == []
