@@ -41,6 +41,31 @@ def _native_region(
     }
 
 
+def _native_child(
+    candidate_id: str,
+    text: str,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "text": text,
+        "raw_text": text,
+        "bbox": {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        },
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.0,
+        "recognition_source": "native_pdf",
+    }
+
+
 def _outcome(
     candidate_id: str,
     text: str,
@@ -226,6 +251,101 @@ def test_native_nominal_and_tolerance_are_assembled_before_filtering() -> None:
     assert len(result["regions"][0]["assembly_children"]) == 2
     assert result["regions"][0]["recognition_source"] == "native_pdf"
     assert result["assembly_stats"]["absorbed_fragment_count"] == 1
+
+
+def test_native_geometry_repairs_lower_zero_appended_to_angle_nominal() -> None:
+    malformed = _native_region("210", x=100, y=100, needs_review=True)
+    malformed["bbox"].update({"width": 48, "height": 25})
+    malformed["assembly_children"] = [
+        _native_child("R1", "2", 104, 108, 6, 10),
+        _native_child("R2", "1", 114, 108, 4, 10),
+        _native_child("R3", "0", 132, 117, 10, 7),
+    ]
+    upper = _native_region("+1", x=128, y=99, needs_review=True)
+    upper["bbox"].update({"width": 18, "height": 10})
+    upper["assembly_children"] = [
+        _native_child("R4", "+", 129, 101, 5, 6),
+        _native_child("R5", "1", 138, 100, 4, 8),
+    ]
+
+    result = native_text_segment_result(
+        {
+            "usable": True,
+            "page_size": (500, 300),
+            "regions": [malformed],
+            "excluded": [upper],
+        },
+        page_number=1,
+        scope_kind="page",
+    )
+
+    candidate = result["candidate_outcomes"][0]
+    assert candidate["text"] == "21 +1/0"
+    assert candidate["state"] == "review"
+    assert candidate["native_structure_ambiguous"] is False
+    assert candidate["assembly_rule"] == (
+        "native_geometry_stacked_tolerance_repair"
+    )
+    assert [child["text"] for child in candidate["assembly_children"]] == [
+        "2",
+        "1",
+        "0",
+        "+",
+        "1",
+    ]
+    assert result["excluded_count"] == 0
+
+
+def test_ordinary_native_210_on_one_baseline_is_not_reinterpreted() -> None:
+    ordinary = _native_region("210", x=100, y=100, needs_review=True)
+    ordinary["assembly_children"] = [
+        _native_child("R1", "2", 104, 108, 6, 10),
+        _native_child("R2", "1", 114, 108, 4, 10),
+        _native_child("R3", "0", 122, 108, 6, 10),
+    ]
+
+    result = native_text_segment_result(
+        {
+            "usable": True,
+            "page_size": (500, 300),
+            "regions": [ordinary],
+            "excluded": [],
+        },
+        page_number=1,
+        scope_kind="page",
+    )
+
+    candidate = result["candidate_outcomes"][0]
+    assert candidate["text"] == "210"
+    assert candidate["state"] == "review"
+    assert not candidate.get("native_structure_ambiguous", False)
+
+
+def test_unpaired_native_stacked_zero_stays_visible_in_review() -> None:
+    malformed = _native_region("210", x=100, y=100, needs_review=True)
+    malformed["bbox"].update({"width": 48, "height": 25})
+    malformed["assembly_children"] = [
+        _native_child("R1", "2", 104, 108, 6, 10),
+        _native_child("R2", "1", 114, 108, 4, 10),
+        _native_child("R3", "0", 132, 117, 10, 7),
+    ]
+
+    result = native_text_segment_result(
+        {
+            "usable": True,
+            "page_size": (500, 300),
+            "regions": [malformed],
+            "excluded": [],
+        },
+        page_number=1,
+        scope_kind="page",
+    )
+
+    candidate = result["candidate_outcomes"][0]
+    assert candidate["text"] == "210"
+    assert candidate["state"] == "review"
+    assert candidate["native_structure_ambiguous"] is True
+    assert candidate["assembly_review_reason"].startswith("Native stacked")
 
 
 def test_section_crop_translates_candidate_and_native_provenance() -> None:

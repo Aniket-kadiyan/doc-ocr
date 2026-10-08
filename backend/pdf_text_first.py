@@ -229,6 +229,249 @@ def _flatten_native_children(
     return children
 
 
+_NATIVE_DIGITS_RE = re.compile(r"^\d{2,}$")
+_NATIVE_SIGNED_TOLERANCE_RE = re.compile(
+    r"^[+\-−]\s*\d+(?:\.\d+)?$"
+)
+
+
+def _projected_box(
+    bbox: Mapping[str, float], angle_degrees: float
+) -> tuple[float, float, float, float]:
+    """Return along/cross extents in a native run's reading frame."""
+
+    angle = math.radians(angle_degrees)
+    along_x, along_y = math.cos(angle), math.sin(angle)
+    cross_x, cross_y = -along_y, along_x
+    x0, y0 = float(bbox["x"]), float(bbox["y"])
+    x1 = x0 + float(bbox["width"])
+    y1 = y0 + float(bbox["height"])
+    corners = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    along = [x * along_x + y * along_y for x, y in corners]
+    cross = [x * cross_x + y * cross_y for x, y in corners]
+    return min(along), max(along), min(cross), max(cross)
+
+
+def _angle_distance(left: float, right: float) -> float:
+    delta = abs((left - right) % 360.0)
+    return min(delta, 360.0 - delta)
+
+
+def _union_native_boxes(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    boxes = [_box(item) for item in items]
+    left = min(box["x"] for box in boxes)
+    top = min(box["y"] for box in boxes)
+    right = max(box["x"] + box["width"] for box in boxes)
+    bottom = max(box["y"] + box["height"] for box in boxes)
+    return {
+        "x": left,
+        "y": top,
+        "width": right - left,
+        "height": bottom - top,
+    }
+
+
+def _stacked_zero_pattern(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Find a lower zero that the PDF layer appended to a nominal.
+
+    Some CAD PDFs expose ``21`` as two baseline runs and the lower ``0`` of
+    ``+1/0`` as a third run. At some raster sizes the text grouper therefore
+    emits the exact characters as ``210``. We only identify the structure
+    here; a matching signed upper deviation is still required before text is
+    reconstructed.
+    """
+
+    text = re.sub(r"\s+", "", str(item.get("text") or ""))
+    if not bool(item.get("needs_review")) or not _NATIVE_DIGITS_RE.fullmatch(text):
+        return None
+    children = [
+        deepcopy(dict(child))
+        for child in item.get("assembly_children") or ()
+        if isinstance(child, Mapping) and isinstance(child.get("bbox"), Mapping)
+    ]
+    if len(children) < 2 or any(
+        re.fullmatch(r"\d+", str(child.get("text") or "").strip()) is None
+        for child in children
+    ):
+        return None
+
+    angle = float(item.get("rotation") or 0.0)
+    candidates: list[dict[str, Any]] = []
+    for zero_index, zero in enumerate(children):
+        if str(zero.get("text") or "").strip() != "0":
+            continue
+        baseline = [
+            child for index, child in enumerate(children) if index != zero_index
+        ]
+        projected = [(_projected_box(_box(child), angle), child) for child in baseline]
+        projected.sort(key=lambda entry: entry[0][0])
+        nominal = "".join(str(child.get("text") or "").strip() for _, child in projected)
+        if not nominal or nominal + "0" != text:
+            continue
+
+        cross_centres = [(extent[2] + extent[3]) / 2.0 for extent, _ in projected]
+        cross_sizes = [extent[3] - extent[2] for extent, _ in projected]
+        baseline_cross = sum(cross_centres) / len(cross_centres)
+        baseline_size = max(1.0, sum(cross_sizes) / len(cross_sizes))
+        if max(cross_centres) - min(cross_centres) > 0.24 * baseline_size:
+            continue
+
+        zero_extent = _projected_box(_box(zero), angle)
+        zero_cross = (zero_extent[2] + zero_extent[3]) / 2.0
+        zero_size = zero_extent[3] - zero_extent[2]
+        cross_delta = zero_cross - baseline_cross
+        baseline_end = max(extent[1] for extent, _ in projected)
+        zero_along = (zero_extent[0] + zero_extent[1]) / 2.0
+        if (
+            abs(cross_delta) < 0.35 * baseline_size
+            or zero_size > 1.10 * baseline_size
+            or zero_along < baseline_end - 0.25 * baseline_size
+            or zero_along - baseline_end > 3.5 * baseline_size
+        ):
+            continue
+        candidates.append(
+            {
+                "nominal": nominal,
+                "baseline_children": [child for _, child in projected],
+                "zero_child": zero,
+                "baseline_cross": baseline_cross,
+                "baseline_size": baseline_size,
+                "baseline_start": min(extent[0] for extent, _ in projected),
+                "baseline_end": baseline_end,
+                "zero_cross_delta": cross_delta,
+                "zero_along": zero_along,
+                "angle": angle,
+            }
+        )
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
+def _signed_upper_matches(
+    pattern: Mapping[str, Any], signed: Mapping[str, Any]
+) -> bool:
+    text = re.sub(r"\s+", "", str(signed.get("text") or ""))
+    if not _NATIVE_SIGNED_TOLERANCE_RE.fullmatch(text):
+        return False
+    angle = float(pattern["angle"])
+    if _angle_distance(angle, float(signed.get("rotation") or 0.0)) > 8.0:
+        return False
+    along0, along1, cross0, cross1 = _projected_box(_box(signed), angle)
+    signed_along = (along0 + along1) / 2.0
+    signed_cross_delta = (cross0 + cross1) / 2.0 - float(
+        pattern["baseline_cross"]
+    )
+    scale = float(pattern["baseline_size"])
+    zero_delta = float(pattern["zero_cross_delta"])
+    return bool(
+        signed_cross_delta * zero_delta < 0.0
+        and abs(signed_cross_delta) >= 0.25 * scale
+        and signed_along >= float(pattern["baseline_end"]) - 0.5 * scale
+        and signed_along - float(pattern["baseline_end"]) <= 4.0 * scale
+        and abs(signed_along - float(pattern["zero_along"])) <= 2.0 * scale
+    )
+
+
+def _repair_native_stacked_zero_sources(
+    common: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reconstruct a split nominal/upper/lower tolerance conservatively."""
+
+    patterns = {
+        index: pattern
+        for index, item in enumerate(common)
+        if (pattern := _stacked_zero_pattern(item)) is not None
+    }
+    if not patterns:
+        return list(common)
+
+    matches = {
+        base_index: [
+            signed_index
+            for signed_index, signed in enumerate(common)
+            if signed_index != base_index
+            and _signed_upper_matches(pattern, signed)
+        ]
+        for base_index, pattern in patterns.items()
+    }
+    signed_use_count = Counter(
+        signed_index
+        for signed_indexes in matches.values()
+        for signed_index in signed_indexes
+    )
+    repaired_by_base: dict[int, dict[str, Any]] = {}
+    consumed_signed: set[int] = set()
+
+    for base_index, pattern in patterns.items():
+        base = common[base_index]
+        signed_indexes = matches[base_index]
+        if (
+            len(signed_indexes) != 1
+            or signed_use_count[signed_indexes[0]] != 1
+        ):
+            base["native_structure_ambiguous"] = True
+            base["needs_review"] = True
+            base["assembly_review_reason"] = (
+                "Native stacked-tolerance geometry requires user confirmation"
+            )
+            continue
+
+        signed_index = signed_indexes[0]
+        signed = common[signed_index]
+        signed_text = re.sub(r"\s+", "", str(signed.get("text") or ""))
+        reconstructed = f"{pattern['nominal']} {signed_text}/0"
+        bbox = _union_native_boxes((base, signed))
+        repaired = deepcopy(base)
+        evidence = deepcopy(dict(repaired.get("recognition_evidence") or {}))
+        evidence.update(
+            {
+                "selected_source": "native_pdf",
+                "sources": ["native_pdf"],
+                "native_text": reconstructed,
+                "ocr_text": "",
+                "agreement": 1.0,
+                "conflict": False,
+                "native_bbox": dict(bbox),
+            }
+        )
+        repaired.update(
+            {
+                "bbox": bbox,
+                "text": reconstructed,
+                "raw_text": reconstructed,
+                "confidence": min(
+                    float(base.get("confidence") or 0.995),
+                    float(signed.get("confidence") or 0.995),
+                ),
+                # The value remains Review until candidate-local geometry
+                # confirms its degree mark.
+                "needs_review": True,
+                "recognition_evidence": evidence,
+                "assembly_rule": "native_geometry_stacked_tolerance_repair",
+                "assembly_conflict": False,
+                "assembly_review_reason": "",
+                "assembly_children": _flatten_native_children((base, signed)),
+                "native_structure_ambiguous": False,
+                "_native_text_layer_accepted": bool(
+                    base.get("_native_text_layer_accepted")
+                    or signed.get("_native_text_layer_accepted")
+                ),
+            }
+        )
+        repaired_by_base[base_index] = repaired
+        consumed_signed.add(signed_index)
+
+    repaired_sources: list[dict[str, Any]] = []
+    for index, item in enumerate(common):
+        if index in consumed_signed:
+            continue
+        repaired_sources.append(repaired_by_base.get(index, item))
+    return repaired_sources
+
+
 def _assemble_native_sources(
     sources: Sequence[Mapping[str, Any]],
     *,
@@ -252,6 +495,8 @@ def _assemble_native_sources(
         )
         item["_native_text_layer_accepted"] = id(source) in accepted_identity
         common.append(item)
+
+    common = _repair_native_stacked_zero_sources(common)
 
     planned = plan_engineering_object_assemblies(
         [_native_result_record(item) for item in common]
@@ -310,6 +555,10 @@ def _assemble_native_sources(
                 "assembly_conflict": plan.conflict,
                 "assembly_review_reason": plan.review_reason,
                 "assembly_children": _flatten_native_children(members),
+                "native_structure_ambiguous": any(
+                    bool(member.get("native_structure_ambiguous"))
+                    for member in members
+                ),
                 # An accepted base remains eligible for evaluation even when
                 # its modifier came from the text layer's non-callout list.
                 "_native_text_layer_accepted": any(

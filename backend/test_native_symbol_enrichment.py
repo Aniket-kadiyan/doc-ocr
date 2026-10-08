@@ -149,3 +149,50 @@ def test_local_degree_ring_enriches_native_tolerance_without_ocr():
     assert candidate["recognition_evidence"]["native_text_before_geometry"] == (
         "22.9 ±1"
     )
+
+
+def test_degree_ring_does_not_promote_ambiguous_native_assembly():
+    image = Image.new("RGB", (260, 100), "white")
+    draw = ImageDraw.Draw(image)
+    for x in (35, 50, 65, 95, 110):
+        draw.rectangle((x, 42, x + 4, 64), fill="black")
+    draw.ellipse((82, 34, 88, 40), outline="black", width=1)
+    source = _outcome(
+        "210 +1",
+        {"x": 25, "y": 30, "width": 105, "height": 36},
+        state="review",
+    )
+    source["native_structure_ambiguous"] = True
+    source["assembly_review_reason"] = (
+        "Native stacked-tolerance geometry requires user confirmation"
+    )
+
+    enriched = enrich_native_result_with_geometry(image, _result(source))
+    candidate = enriched["candidate_outcomes"][0]
+
+    assert candidate["text"] == "210°+1°"
+    assert candidate["state"] == "review"
+    assert candidate["rule"] == "native_degree_geometry_requires_review"
+    assert candidate["review_reason"].startswith("Native stacked")
+
+
+def test_local_degree_ring_completes_repaired_upper_and_lower_angle_tolerance():
+    image = Image.new("RGB", (260, 100), "white")
+    draw = ImageDraw.Draw(image)
+    for x in (35, 50, 65, 95, 110):
+        draw.rectangle((x, 42, x + 4, 64), fill="black")
+    draw.ellipse((82, 34, 88, 40), outline="black", width=1)
+    source = _outcome(
+        "21 +1/0",
+        {"x": 25, "y": 30, "width": 105, "height": 36},
+        state="review",
+    )
+    source["native_structure_ambiguous"] = False
+    source["assembly_rule"] = "native_geometry_stacked_tolerance_repair"
+
+    enriched = enrich_native_result_with_geometry(image, _result(source))
+    candidate = enriched["candidate_outcomes"][0]
+
+    assert candidate["text"] == "21°+1°/0°"
+    assert candidate["state"] == "eligible"
+    assert candidate["rule"] == "native_text+degree_geometry"

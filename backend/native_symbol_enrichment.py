@@ -511,12 +511,27 @@ def _apply_degree_enrichment(
         }
     )
     _update_feature_metadata(outcome)
-    _set_state(
-        outcome,
-        "eligible",
-        "native_text+degree_geometry",
-        "Exact PDF digits enriched by a candidate-local graphical degree mark",
+    structurally_uncertain = bool(
+        outcome.get("native_structure_ambiguous")
+        or outcome.get("assembly_conflict")
+        or outcome.get("source_conflict")
+        or evidence.get("conflict")
     )
+    if structurally_uncertain:
+        _set_state(
+            outcome,
+            "review",
+            "native_degree_geometry_requires_review",
+            str(outcome.get("assembly_review_reason") or "")
+            or "Degree geometry was found, but the native value structure remains uncertain",
+        )
+    else:
+        _set_state(
+            outcome,
+            "eligible",
+            "native_text+degree_geometry",
+            "Exact PDF digits enriched by a candidate-local graphical degree mark",
+        )
 
 
 def _rebuild_result(

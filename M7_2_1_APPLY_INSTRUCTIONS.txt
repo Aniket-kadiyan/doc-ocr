@@ -1,0 +1,94 @@
+M7.2.1 — native stacked-angle tolerance repair
+================================================
+
+Prerequisite
+------------
+Apply this ZIP after M7.2 (native PDF fragment assembly and candidate-local
+symbol enrichment). It is an incremental four-file update for MVP1.
+
+The M7.2 work was based on:
+
+    1a35a57 fix(ocr): preserve native PDF text during symbol detection
+
+M7.2 may be committed or still uncommitted when this update is applied. Codex
+did not create or push a commit.
+
+Apply on Windows / VS Code
+--------------------------
+1. Stop the frontend and backend.
+2. Open the doc-ocr repository in the VS Code terminal:
+
+       git switch MVP1
+       git status --short
+
+3. Confirm that your M7.2 files are present. Save or stash unrelated local
+   work before replacing files.
+4. Extract this ZIP into the doc-ocr repository root. Allow it to replace the
+   listed files. Do not extract it inside backend/; the ZIP already contains
+   the backend/ path.
+5. Review the update:
+
+       git status --short
+       git diff --check
+
+No new dependency is required.
+
+Files in this incremental update
+--------------------------------
+- backend/pdf_text_first.py
+- backend/native_symbol_enrichment.py
+- backend/test_pdf_text_first.py
+- backend/test_native_symbol_enrichment.py
+
+What this milestone fixes
+-------------------------
+- Detects the specific native-PDF geometry where the lower zero of a stacked
+  tolerance is accidentally appended to the nominal (for example, 21 plus
+  upper +1 and lower 0 being grouped as 210 plus +1).
+- Reconstructs that value as 21 +1/0 without changing any source digit.
+- After candidate-local degree geometry is confirmed, publishes the result as
+  21°+1°/0°.
+- Leaves unresolved or multiply matched structures visible in Review.
+- Prevents degree enrichment from automatically accepting a structurally
+  ambiguous or conflicting native assembly.
+- Keeps an ordinary 210 whose digits share one baseline unchanged.
+- Preserves every original native run in assembly_children for audit.
+
+Focused verification
+--------------------
+From doc-ocr/backend:
+
+    .\.venv-gpu\Scripts\python.exe -m pytest -q `
+      test_pdf_text_first.py `
+      test_native_symbol_enrichment.py `
+      test_structured_symbol_vision.py
+
+Or run the complete fast backend suite from the repository root:
+
+    npm run test:backend
+
+Then start the GPU backend as usual:
+
+    cd backend
+    $env:CUDA_VISIBLE_DEVICES="0"
+    $env:OCR_DEVICE="gpu:0"
+    $env:OCR_RELOAD="false"
+    .\.venv-gpu\Scripts\python.exe main.py
+
+Benchmark expectation for 3015-100-2232F.pdf
+---------------------------------------------
+- The angular callout is 21°+1°/0°, not 210°+1°.
+- The candidate is eligible only after its local degree geometry is found.
+- If its stacked structure cannot be resolved uniquely, it remains in Review.
+- A normal 210 on one text baseline remains 210.
+
+Verification completed by Codex
+-------------------------------
+- 304 fast backend tests plus 4 subtests passed.
+- 30 focused native/geometry tests passed after the final test addition.
+- The supplied benchmark PDF produced 21°+1°/0° as an eligible native value.
+- git diff --check passed.
+
+Suggested commit message
+------------------------
+fix(ocr): reconstruct stacked angle tolerances from native geometry
