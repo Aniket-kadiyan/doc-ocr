@@ -160,7 +160,7 @@ export function Toolbar({
         type="button"
         onClick={onToggleBalloons}
         disabled={!canSaveProject || !hasBalloons}
-        title="Show or hide saved balloon markers and value boxes"
+        title="Hide saved balloons and white out their accepted value regions, or show them again"
         className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
       >
         {balloonsVisible ? "Hide Balloons" : "Show Balloons"}

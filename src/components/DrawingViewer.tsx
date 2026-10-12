@@ -41,6 +41,10 @@ import {
   type SectionQueuePosition,
 } from "@/lib/sectionScanQueue";
 import { deriveRange } from "@/lib/valueFields";
+import {
+  areAllValueBalloonsHidden,
+  areAllValueBalloonsVisible,
+} from "@/lib/balloonVisibility";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
@@ -224,9 +228,8 @@ export function DrawingViewer() {
   const valueAnnotations = annotations.filter(
     (annotation) => annotation.kind !== "label"
   );
-  const balloonsVisible =
-    valueAnnotations.length > 0 &&
-    valueAnnotations.every((annotation) => !annotation.hidden);
+  const balloonsVisible = areAllValueBalloonsVisible(annotations);
+  const balloonsGloballyHidden = areAllValueBalloonsHidden(annotations);
   const pageScanCandidates = scanCandidates.filter(
     (candidate) =>
       candidate.page === currentPage && candidate.state !== "ignored"
@@ -1739,6 +1742,26 @@ export function DrawingViewer() {
                       height={stageSize.height}
                       listening={!drawingActive}
                     />
+
+                    {balloonsGloballyHidden &&
+                      pageAnnotations.map((ann) => {
+                        const box = ann.orientedBox ?? ann.bbox;
+                        const boxRotation = ann.orientedBox?.rotation ?? 0;
+                        return (
+                          <Rect
+                            key={`whiteout-${ann.id}`}
+                            x={box.x}
+                            y={box.y}
+                            width={box.width}
+                            height={box.height}
+                            rotation={boxRotation}
+                            fill="#ffffff"
+                            stroke="#ffffff"
+                            strokeWidth={1 / scale}
+                            listening={false}
+                          />
+                        );
+                      })}
 
                     {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
                       <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
