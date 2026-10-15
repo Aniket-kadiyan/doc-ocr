@@ -48,6 +48,11 @@ DETECTION_COVERAGE_RATIO = 0.55
 DETECTION_TILE_MAX_EDGE = 2000
 DETECTION_TILE_OVERLAP = 160
 
+# Detector-only gap passes may enlarge one adaptive panel, but the enlargement
+# stays bounded by both PaddleOCR's normal side limit and a 2x zoom budget.
+DETECTION_TILE_MAX_INPUT_EDGE = 4000
+DETECTION_TILE_MAX_ZOOM = 2.0
+
 
 @dataclass(frozen=True)
 class DetectionPassSpec:
@@ -140,13 +145,21 @@ def detection_tile_target_edge(
     *,
     full_size: tuple[int, int],
     pass_target_edge: int,
+    max_input_edge: int | None = None,
 ) -> int:
-    """Preserve a full-pass scale when PaddleOCR receives only one tile."""
+    """Preserve the primary scale and optionally spend bounded zoom budget."""
 
     full_long_edge = max(full_size)
     tile_long_edge = max(tile.width, tile.height)
     scale = max(1.0, pass_target_edge / max(full_long_edge, 1))
-    return max(tile_long_edge, int(round(tile_long_edge * scale)))
+    preserved = max(tile_long_edge, int(round(tile_long_edge * scale)))
+    if max_input_edge is None:
+        return preserved
+    budget = min(
+        int(max_input_edge),
+        int(round(tile_long_edge * DETECTION_TILE_MAX_ZOOM)),
+    )
+    return max(preserved, budget)
 
 
 def offset_tile_box(

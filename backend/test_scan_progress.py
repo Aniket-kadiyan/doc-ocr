@@ -940,3 +940,197 @@ def test_paddle_prediction_limit_stops_after_one_call(monkeypatch) -> None:
 
     assert len(calls) == 1
     assert result[0] == "25.00"
+
+
+def _page_result(text: str) -> dict:
+    return {
+        "text": text,
+        "raw_ocr": text,
+        "confidence": 0.99,
+        "agreement": 1.0,
+        "confusable_corrected": False,
+        "orientation_confidence": 0.99,
+        "needs_review": False,
+        "type": "Linear",
+        "orientation": "horizontal",
+        "rotation": 0,
+        "engine": "paddleocr",
+        "symbols_detected": {},
+        "ocr_profile": "batch_recognition",
+    }
+
+
+def test_page_gap_pass_recovers_only_missing_value_and_reports_accounting() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    pipeline._worker_pool = lambda: None
+    targets: list[int] = []
+    layout = PageLayout(
+        width=2100,
+        height=1200,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2100, 1200)),),
+        overlaps=(),
+    )
+
+    def detector(_image, *, target_long_edge):
+        targets.append(target_long_edge)
+        if len(targets) == 1:
+            return [{"x": 100, "y": 100, "w": 80, "h": 30, "conf": 0.95}]
+        if len(targets) == 3:
+            return [
+                {"x": 100, "y": 100, "w": 35, "h": 30, "conf": 0.92},
+                {"x": 500, "y": 400, "w": 33, "h": 48, "conf": 0.93},
+            ]
+        return []
+
+    pipeline._detector_only_boxes = detector
+    pipeline._recognize_page_batch = lambda crops, **_kwargs: [
+        _page_result(text) for text in ("25", "10")[: len(crops)]
+    ]
+    authoritative = iter(("25", "10"))
+
+    def recognize(crop, **_kwargs):
+        result = _page_result(next(authoritative))
+        result["text_bbox"] = {
+            "x": 2,
+            "y": 2,
+            "width": max(1, crop.width - 4),
+            "height": max(1, crop.height - 4),
+        }
+        return result
+
+    pipeline.recognize = recognize
+    pipeline._detect_angled_regions = lambda *_args, **_kwargs: []
+    pipeline._notes_region = lambda *_args, **_kwargs: None
+    events: list[dict] = []
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (2100, 1200), "white"),
+        layout=layout,
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert targets == [2100, 2100, 4000, 4000]
+    assert result["eligible_count"] == 2
+    assert [region["text"] for region in result["regions"]] == ["25", "10"]
+    assert result["detection_stats"] == {
+        "primary_pass_count": 2,
+        "gap_pass_count": 2,
+        "detector_pass_count": 4,
+        "primary_raw_count": 1,
+        "primary_deduplicated_count": 1,
+        "gap_raw_count": 2,
+        "gap_recovered_count": 1,
+        "gap_rejected_count": 1,
+        "combined_deduplicated_count": 2,
+        "skipped_existing_count": 0,
+    }
+    detection_events = [event for event in events if event["stage"] == "detecting"]
+    assert detection_events[-1]["completed"] == 4
+    assert detection_events[-1]["total"] == 4
+
+
+def test_cancellation_callback_stops_before_first_gap_detector_call() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    pipeline._worker_pool = lambda: None
+    detector_calls = 0
+    layout = PageLayout(
+        width=2100,
+        height=1200,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2100, 1200)),),
+        overlaps=(),
+    )
+
+    def detector(_image, **_kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return []
+
+    def cancel_before_gap(**event):
+        if (
+            event["stage"] == "detecting"
+            and event["completed"] == 2
+            and event["pass_current"] == 3
+        ):
+            raise RuntimeError("cancelled")
+
+    pipeline._detector_only_boxes = detector
+
+    try:
+        pipeline.segment_page(
+            Image.new("RGB", (2100, 1200), "white"),
+            layout=layout,
+            progress_callback=cancel_before_gap,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "cancelled"
+    else:
+        raise AssertionError("the cancellation callback should stop the scan")
+
+    assert detector_calls == 2
+
+
+def test_worker_pool_runs_primary_and_gap_detection_as_separate_stages() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    map_sizes: list[int] = []
+    detector_calls = 0
+
+    class Pool:
+        def map(self, _operation, payloads, *, local, on_item_done):
+            if _operation == "detect_tile":
+                map_sizes.append(len(payloads))
+            for index, payload in enumerate(payloads):
+                on_item_done(index, local(payload))
+
+    pipeline._worker_pool = lambda: Pool()
+    layout = PageLayout(
+        width=2100,
+        height=1200,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2100, 1200)),),
+        overlaps=(),
+    )
+
+    def detector(_image, *, target_long_edge):
+        nonlocal detector_calls
+        detector_calls += 1
+        if detector_calls == 1:
+            return [{"x": 100, "y": 100, "w": 80, "h": 30, "conf": 0.95}]
+        if detector_calls == 3:
+            return [{"x": 500, "y": 400, "w": 33, "h": 48, "conf": 0.93}]
+        return []
+
+    pipeline._detector_only_boxes = detector
+    pipeline._recognize_page_batch = lambda crops, **_kwargs: [
+        _page_result(text) for text in ("25", "10")[: len(crops)]
+    ]
+    authoritative = iter(("25", "10"))
+
+    def recognize(crop, **_kwargs):
+        result = _page_result(next(authoritative))
+        result["text_bbox"] = {
+            "x": 2,
+            "y": 2,
+            "width": max(1, crop.width - 4),
+            "height": max(1, crop.height - 4),
+        }
+        return result
+
+    pipeline.recognize = recognize
+    pipeline._detect_angled_regions = lambda *_args, **_kwargs: []
+    pipeline._notes_region = lambda *_args, **_kwargs: None
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (2100, 1200), "white"),
+        layout=layout,
+    )
+
+    assert map_sizes == [2, 2]
+    assert result["detection_stats"]["gap_recovered_count"] == 1

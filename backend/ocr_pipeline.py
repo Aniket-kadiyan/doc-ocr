@@ -55,7 +55,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m1-reading-direction"
+OCR_CHANGESET_ID = "mvp1-m2-gap-recovery"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -5937,6 +5937,7 @@ class OcrPipeline:
         from collections import Counter
 
         from detection_passes import (
+            DETECTION_TILE_MAX_INPUT_EDGE,
             DetectionTile,
             build_primary_detection_image,
             detection_primary_target_edge,
@@ -5959,6 +5960,7 @@ class OcrPipeline:
             deduplicate_page_candidates,
             map_tile_candidate,
             overlaps_existing_value,
+            uncovered_gap_candidates,
         )
         from page_candidate_recovery import (
             CONTEXT_MAX_CANDIDATES,
@@ -6109,10 +6111,31 @@ class OcrPipeline:
         tile_total = len(tiles)
         if tile_total < 1 or tile_total > PAGE_SCAN_MAX_TILES:
             raise AssertionError("Whole-page layout exceeded eight panels")
-        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
+        full_target_edge = max(
+            PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+            detection_primary_target_edge(masked_page),
+        )
+        primary_pass_count = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
+        gap_plans: list[tuple[int, DetectionTile, int]] = []
+        for tile_index, tile in enumerate(tiles, start=1):
+            primary_target = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+            )
+            gap_target = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+                max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+            )
+            if gap_target > primary_target:
+                gap_plans.append((tile_index, tile, gap_target))
+        gap_pass_count = len(gap_plans) * len(PAGE_SCAN_ROTATIONS_CW)
+        detector_pass_total = primary_pass_count + gap_pass_count
         if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
-            raise AssertionError("Whole-page scan exceeded sixteen detector calls")
-        page_candidates = []
+            raise AssertionError("Whole-page scan exceeded detector call limit")
+        page_candidates: list[Any] = []
         panel_states = {
             panel.panel_id: "pending" for panel in layout.panels
         }
@@ -6122,7 +6145,7 @@ class OcrPipeline:
                 f"Preparing {tile_total} adaptive panel"
                 f"{'s' if tile_total != 1 else ''}, "
                 f"{len(layout.table_masks)} table masks, and "
-                f"{detector_pass_total} detector-only passes"
+                f"{detector_pass_total} bounded detector-only passes"
             ),
             percent=10,
             completed=0,
@@ -6137,6 +6160,7 @@ class OcrPipeline:
         )
 
         detector_pass_index = 0
+        primary_tiles = tiles
         detection_pool = self._worker_pool() if detector_pass_total > 2 else None
         if detection_pool is not None:
             # Every (panel, rotation) pass is independent, so they are dealt
@@ -6144,10 +6168,6 @@ class OcrPipeline:
             # to the page here, in pass order, exactly as the loop below does.
             from ocr_workers import image_to_png, png_to_image
 
-            full_target_edge = max(
-                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
-                detection_primary_target_edge(masked_page),
-            )
             pass_specs: list[tuple[int, Any, int, int, tuple[int, int]]] = []
             payloads: list[dict[str, Any]] = []
             for tile_index, tile in enumerate(tiles, start=1):
@@ -6245,17 +6265,13 @@ class OcrPipeline:
                 ),
                 on_item_done=on_pass_done,
             )
-            detector_pass_index = detector_pass_total
-            tiles = []
-        for tile_index, tile in enumerate(tiles, start=1):
+            detector_pass_index = primary_pass_count
+            primary_tiles = []
+        for tile_index, tile in enumerate(primary_tiles, start=1):
             panel_id = layout.panels[tile_index - 1].panel_id
             panel_states[panel_id] = "active"
             tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
-            full_target_edge = max(
-                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
-                detection_primary_target_edge(masked_page),
-            )
             target_long_edge = detection_tile_target_edge(
                 tile,
                 full_size=page_size,
@@ -6376,10 +6392,204 @@ class OcrPipeline:
                 ),
             )
 
+        # The primary passes remain authoritative. Enlarged passes are a
+        # bounded, additive recovery route and may only contribute compact
+        # boxes where the primary detector found no object.
+        primary_raw_count = len(page_candidates)
+        primary_candidates = deduplicate_page_candidates(page_candidates)
+        gap_candidates: list[Any] = []
+        if gap_plans and detection_pool is not None:
+            from ocr_workers import image_to_png, png_to_image
+
+            gap_specs: list[tuple[int, Any, int, int, tuple[int, int]]] = []
+            gap_payloads: list[dict[str, Any]] = []
+            for tile_index, tile, gap_target_edge in gap_plans:
+                tile_image = masked_page.crop(tile.box)
+                primary_image = build_primary_detection_image(tile_image)
+                for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                    gap_specs.append(
+                        (
+                            tile_index,
+                            tile,
+                            rotation_cw,
+                            gap_target_edge,
+                            tile_image.size,
+                        )
+                    )
+                    gap_payloads.append(
+                        {
+                            "png": image_to_png(
+                                rotate_for_detection(primary_image, rotation_cw)
+                            ),
+                            "target_long_edge": gap_target_edge,
+                        }
+                    )
+            report(
+                stage="detecting",
+                message=(
+                    f"Running {gap_pass_count} enlarged gap passes across "
+                    "the OCR workers"
+                ),
+                percent=12 + int(40 * primary_pass_count / detector_pass_total),
+                completed=primary_pass_count,
+                total=detector_pass_total,
+                pass_current=primary_pass_count + 1,
+                pass_total=detector_pass_total,
+                tile_total=tile_total,
+                operation_label="Bounded missing-value recovery",
+                candidate_count=len(primary_candidates),
+            )
+            gap_done = 0
+
+            def on_gap_done(index: int, detected_boxes: Any) -> None:
+                nonlocal gap_done
+                gap_done += 1
+                tile_index, tile, rotation_cw, _target, tile_size = gap_specs[index]
+                pass_index = primary_pass_count + index + 1
+                for detected in detected_boxes or []:
+                    restored = map_quarter_turn_box_to_source(
+                        detected, rotation_cw, tile_size
+                    )
+                    if restored is None:
+                        continue
+                    mapped = map_tile_candidate(
+                        {
+                            "x": restored["x"],
+                            "y": restored["y"],
+                            "width": restored["w"],
+                            "height": restored["h"],
+                        },
+                        tile,
+                        tile_index=tile_index,
+                        page_size=page_size,
+                        detection_confidence=float(restored.get("conf", 0.0)),
+                        pass_index=pass_index,
+                        rotation_cw=rotation_cw,
+                        polygon=restored.get("polygon"),
+                    )
+                    if mapped is not None:
+                        gap_candidates.append(mapped)
+                completed = primary_pass_count + gap_done
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Completed enlarged gap pass {gap_done} of "
+                        f"{gap_pass_count}; collected {len(gap_candidates)} "
+                        "gap candidates"
+                    ),
+                    percent=12 + int(40 * completed / detector_pass_total),
+                    completed=completed,
+                    total=detector_pass_total,
+                    pass_current=completed,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Panel {tile_index} · gap · {rotation_cw} deg complete"
+                    ),
+                    candidate_count=len(primary_candidates) + len(gap_candidates),
+                )
+
+            detection_pool.map(
+                "detect_tile",
+                gap_payloads,
+                local=lambda payload: self._detector_only_boxes(
+                    png_to_image(payload["png"]),
+                    target_long_edge=int(payload["target_long_edge"]),
+                ),
+                on_item_done=on_gap_done,
+            )
+            detector_pass_index = detector_pass_total
+        elif gap_plans:
+            for tile_index, tile, gap_target_edge in gap_plans:
+                tile_image = masked_page.crop(tile.box)
+                primary_image = build_primary_detection_image(tile_image)
+                for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                    detector_pass_index += 1
+                    report(
+                        stage="detecting",
+                        message=(
+                            f"Running enlarged gap pass {detector_pass_index} "
+                            f"of {detector_pass_total}"
+                        ),
+                        percent=(
+                            12
+                            + int(
+                                40
+                                * (detector_pass_index - 1)
+                                / detector_pass_total
+                            )
+                        ),
+                        completed=detector_pass_index - 1,
+                        total=detector_pass_total,
+                        pass_current=detector_pass_index,
+                        pass_total=detector_pass_total,
+                        tile_current=tile_index,
+                        tile_total=tile_total,
+                        operation_label=(
+                            f"Panel {tile_index} · gap · {rotation_cw} deg · "
+                            f"{gap_target_edge}px"
+                        ),
+                        candidate_count=len(primary_candidates) + len(gap_candidates),
+                    )
+                    rotated = rotate_for_detection(primary_image, rotation_cw)
+                    for detected in self._detector_only_boxes(
+                        rotated,
+                        target_long_edge=gap_target_edge,
+                    ):
+                        restored = map_quarter_turn_box_to_source(
+                            detected,
+                            rotation_cw,
+                            tile_image.size,
+                        )
+                        if restored is None:
+                            continue
+                        mapped = map_tile_candidate(
+                            {
+                                "x": restored["x"],
+                                "y": restored["y"],
+                                "width": restored["w"],
+                                "height": restored["h"],
+                            },
+                            tile,
+                            tile_index=tile_index,
+                            page_size=page_size,
+                            detection_confidence=float(restored.get("conf", 0.0)),
+                            pass_index=detector_pass_index,
+                            rotation_cw=rotation_cw,
+                            polygon=restored.get("polygon"),
+                        )
+                        if mapped is not None:
+                            gap_candidates.append(mapped)
+                    report(
+                        stage="detecting",
+                        message=(
+                            f"Completed enlarged gap pass {detector_pass_index} "
+                            f"of {detector_pass_total}"
+                        ),
+                        percent=12 + int(40 * detector_pass_index / detector_pass_total),
+                        completed=detector_pass_index,
+                        total=detector_pass_total,
+                        pass_current=detector_pass_index,
+                        pass_total=detector_pass_total,
+                        tile_current=tile_index,
+                        tile_total=tile_total,
+                        operation_label=(
+                            f"Panel {tile_index} · gap · {rotation_cw} deg complete"
+                        ),
+                        candidate_count=len(primary_candidates) + len(gap_candidates),
+                    )
+
+        recovered_gap_candidates = uncovered_gap_candidates(
+            gap_candidates,
+            primary_candidates,
+        )
+        combined_candidates = primary_candidates + recovered_gap_candidates
+
         report(
             stage="grouping",
             message=(
-                f"Strictly deduplicating {len(page_candidates)} atomic "
+                f"Strictly deduplicating {len(combined_candidates)} atomic "
                 "detector candidates"
             ),
             percent=54,
@@ -6390,10 +6600,13 @@ class OcrPipeline:
             pass_current=detector_pass_total,
             pass_total=detector_pass_total,
             operation_label="Atomic candidate deduplication",
-            candidate_count=len(page_candidates),
+            candidate_count=len(combined_candidates),
         )
-        deduplicated_candidates = deduplicate_page_candidates(page_candidates)
-        duplicates_removed = len(page_candidates) - len(deduplicated_candidates)
+        deduplicated_candidates = deduplicate_page_candidates(combined_candidates)
+        duplicates_removed = (
+            primary_raw_count + len(recovered_gap_candidates)
+            - len(deduplicated_candidates)
+        )
         new_candidates = [
             candidate
             for candidate in deduplicated_candidates
@@ -6405,6 +6618,27 @@ class OcrPipeline:
         skipped_existing_count = (
             len(deduplicated_candidates) - len(new_candidates)
         )
+        detection_stats = {
+            "primary_pass_count": primary_pass_count,
+            "gap_pass_count": gap_pass_count,
+            "detector_pass_count": detector_pass_total,
+            "primary_raw_count": primary_raw_count,
+            "primary_deduplicated_count": len(primary_candidates),
+            "gap_raw_count": len(gap_candidates),
+            "gap_recovered_count": max(
+                0,
+                len(deduplicated_candidates) - len(primary_candidates),
+            ),
+            "gap_rejected_count": (
+                len(gap_candidates)
+                - max(
+                    0,
+                    len(deduplicated_candidates) - len(primary_candidates),
+                )
+            ),
+            "combined_deduplicated_count": len(deduplicated_candidates),
+            "skipped_existing_count": skipped_existing_count,
+        }
         final_candidates = assign_candidate_ids(new_candidates)
         neutral_overlay_candidates = [
             {
@@ -8493,6 +8727,7 @@ class OcrPipeline:
             "unread_count": unread_count,
             "duplicates_removed": duplicates_removed,
             "skipped_existing_count": skipped_existing_count,
+            "detection_stats": detection_stats,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "source_profile": source_profile,
             "recognition_source_counts": dict(

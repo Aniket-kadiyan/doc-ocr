@@ -19,7 +19,11 @@ from detection_passes import DetectionTile
 
 PAGE_SCAN_ROTATIONS_CW = (0, 90)
 PAGE_SCAN_MAX_TILES = 8
-PAGE_SCAN_MAX_DETECTOR_CALLS = 16
+PAGE_SCAN_MAX_DETECTOR_CALLS = 32
+GAP_CANDIDATE_CLEARANCE = 0.2
+GAP_CANDIDATE_MAX_ASPECT = 6.0
+GAP_CANDIDATE_MIN_SHORT_EDGE = 12.0
+GAP_CANDIDATE_MIN_LONG_EDGE = 20.0
 # Preserve approximately the text scale that worked in selection scans without
 # restoring the selection cascade. The shared detector still caps at 2400px.
 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
@@ -313,6 +317,39 @@ def deduplicate_page_candidates(
             candidate.tile_index,
         ),
     )
+
+
+def looks_like_a_small_callout(bbox: Mapping[str, float]) -> bool:
+    """Return whether a box has the size and shape of a missed callout."""
+
+    width = float(bbox["width"])
+    height = float(bbox["height"])
+    long_edge = max(width, height)
+    short_edge = max(min(width, height), 1.0)
+    if short_edge < GAP_CANDIDATE_MIN_SHORT_EDGE:
+        return False
+    if long_edge < GAP_CANDIDATE_MIN_LONG_EDGE:
+        return False
+    return long_edge / short_edge <= GAP_CANDIDATE_MAX_ASPECT
+
+
+def uncovered_gap_candidates(
+    gap_candidates: list[PageCandidate],
+    covered: list[PageCandidate],
+    *,
+    clearance: float = GAP_CANDIDATE_CLEARANCE,
+) -> list[PageCandidate]:
+    """Keep compact enlarged-pass boxes only where primary detection was silent."""
+
+    return [
+        candidate
+        for candidate in gap_candidates
+        if looks_like_a_small_callout(candidate.bbox)
+        and not any(
+            bbox_overlap_fraction(candidate.bbox, existing.bbox) >= clearance
+            for existing in covered
+        )
+    ]
 
 
 def assign_candidate_ids(

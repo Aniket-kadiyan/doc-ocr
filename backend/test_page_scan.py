@@ -8,8 +8,10 @@ from page_scan import (
     bbox_overlap_fraction,
     deduplicate_page_candidates,
     map_tile_candidate,
+    looks_like_a_small_callout,
     overlaps_existing_value,
     strict_same_object,
+    uncovered_gap_candidates,
 )
 
 
@@ -144,3 +146,48 @@ def test_existing_balloon_overlap_uses_the_smaller_box() -> None:
     assert bbox_overlap_fraction(detector_box, saved_box) > 0.55
     assert overlaps_existing_value(detector_box, (saved_box,))
     assert not overlaps_existing_value(detector_box, (neighbour,))
+
+
+def _candidate(x, y, width, height, *, rotation_cw=0):
+    tile = DetectionTile(x=0, y=0, width=2600, height=1500)
+    candidate = map_tile_candidate(
+        {"x": x, "y": y, "width": width, "height": height},
+        tile,
+        tile_index=1,
+        page_size=(2600, 1500),
+        rotation_cw=rotation_cw,
+    )
+    assert candidate is not None
+    return candidate
+
+
+def test_gap_pass_only_adds_an_uncovered_compact_value() -> None:
+    primary = [_candidate(500, 400, 120, 44)]
+    first_fragment = _candidate(500, 400, 40, 44)
+    second_fragment = _candidate(580, 400, 40, 44)
+    new_value = _candidate(1200, 900, 33, 48, rotation_cw=90)
+
+    kept = uncovered_gap_candidates(
+        [first_fragment, second_fragment, new_value],
+        primary,
+    )
+
+    assert [candidate.bbox for candidate in kept] == [new_value.bbox]
+
+
+def test_gap_shape_filter_rejects_margin_text_and_specks() -> None:
+    assert looks_like_a_small_callout(
+        {"x": 2201, "y": 3157, "width": 34, "height": 50}
+    )
+    assert not looks_like_a_small_callout(
+        {"x": 100, "y": 1988, "width": 39, "height": 622}
+    )
+    assert not looks_like_a_small_callout(
+        {"x": 2501, "y": 1197, "width": 11, "height": 7}
+    )
+
+
+def test_gap_shape_filter_applies_even_in_empty_space() -> None:
+    strip = _candidate(100, 500, 39, 622)
+
+    assert uncovered_gap_candidates([strip], []) == []

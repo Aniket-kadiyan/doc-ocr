@@ -9,7 +9,10 @@ from PIL import Image
 from detection_passes import (
     DETECTION_PRIMARY_MAX_EDGE,
     DETECTION_ROTATIONS_CW,
+    DETECTION_TILE_MAX_INPUT_EDGE,
+    DETECTION_TILE_MAX_ZOOM,
     DETECTION_VARIANTS,
+    DetectionTile,
     build_detection_pass_plan,
     build_refinement_regions,
     build_detection_tiles,
@@ -441,3 +444,42 @@ def test_morphology_is_used_even_when_the_pass_plan_runs(monkeypatch) -> None:
     assert len(boxes) == 1
     assert boxes[0]["_detection_pass"] == "morphology"
     assert boxes[0]["conf"] == 0.0
+
+
+def test_gap_target_spends_the_bounded_detector_budget() -> None:
+    panel = DetectionTile(x=0, y=0, width=2400, height=2576)
+    page = (4800, 2576)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=page,
+        pass_target_edge=2400,
+    ) == 2576
+    assert detection_tile_target_edge(
+        panel,
+        full_size=page,
+        pass_target_edge=2400,
+        max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+    ) == DETECTION_TILE_MAX_INPUT_EDGE
+
+
+def test_small_panel_gap_target_is_capped_at_two_times_zoom() -> None:
+    panel = DetectionTile(x=0, y=0, width=600, height=900)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=(1800, 900),
+        pass_target_edge=2400,
+        max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+    ) == int(900 * DETECTION_TILE_MAX_ZOOM)
+
+
+def test_gap_budget_never_lowers_the_preserved_primary_scale() -> None:
+    panel = DetectionTile(x=0, y=0, width=300, height=500)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=(500, 300),
+        pass_target_edge=5000,
+        max_input_edge=1200,
+    ) == 5000
