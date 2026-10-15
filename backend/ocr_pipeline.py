@@ -55,7 +55,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m2-gap-recovery"
+OCR_CHANGESET_ID = "mvp1-m3-full-page-slanted-callouts"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -4166,6 +4166,10 @@ class OcrPipeline:
         image: Image.Image,
         base_regions: list[dict[str, Any]],
         det_boxes: list[dict[str, Any]] | None = None,
+        *,
+        max_neighbourhoods: int | None = None,
+        progress_callback: Callable[..., None] | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
@@ -4179,8 +4183,31 @@ class OcrPipeline:
         the detector's quad angle, then the slant vote — re-detected, read, and
         mapped back. Results are deduped against ``base_regions`` so a value
         already read upright is not reported twice.
+
+        ``max_neighbourhoods`` is a shared budget across leader corridors and
+        detector-quad neighbourhoods. ``None`` preserves the smaller manual
+        selection defaults; whole-page scanning supplies its own bounded cap.
         """
         from region_detect import detect_leader_lines
+
+        if max_neighbourhoods is not None and max_neighbourhoods < 1:
+            raise ValueError("max_neighbourhoods must be positive")
+        if diagnostics is not None:
+            diagnostics.clear()
+            diagnostics.update(
+                {
+                    "max_neighbourhoods": max_neighbourhoods,
+                    "whole_image_pass": False,
+                    "leader_job_count": 0,
+                    "quad_job_count": 0,
+                    "job_count": 0,
+                    "completed_job_count": 0,
+                    "raw_recovered_count": 0,
+                    "recovered_count": 0,
+                    "worker_pool_used": False,
+                    "status": "planning",
+                }
+            )
 
         found: list[dict[str, Any]] = []
         # The whole selection first, which is what a zoomed-in crop needs. A
@@ -4189,6 +4216,8 @@ class OcrPipeline:
         # neighbourhood together.
         if max(image.size) <= _ANGLED_WHOLE_IMAGE_MAX_EDGE:
             found = self._angled_in_roi(image)
+            if diagnostics is not None:
+                diagnostics["whole_image_pass"] = True
 
         # The slanted quads at OTHER angles: text on a neighbouring leader. It
         # is erased from each neighbourhood before levelling, because levelled
@@ -4245,8 +4274,19 @@ class OcrPipeline:
         # stack quad 16°, and the longest "seed" quad was a box around the
         # surface-finish triangles. Each leader gets one levelled pass over
         # its own corridor, with the neighbouring leader's text painted out.
+        leader_limit = (
+            8
+            if max_neighbourhoods is None
+            else min(8, max_neighbourhoods)
+        )
         try:
-            page_leaders = detect_leader_lines(image)
+            if max_neighbourhoods is None:
+                page_leaders = detect_leader_lines(image)
+            else:
+                page_leaders = detect_leader_lines(
+                    image,
+                    max_lines=leader_limit,
+                )
         except Exception:
             page_leaders = []
         # The sheet's slanted line height: the median thickness of quads that
@@ -4275,7 +4315,7 @@ class OcrPipeline:
         line_h = max(slanted_h, upright_h, 30.0)
         line_h = max(12.0, min(line_h, 160.0))
         corridors: list[list[tuple[float, float]]] = []
-        page_leaders = page_leaders[:8]
+        page_leaders = page_leaders[:leader_limit]
         leader_sides = [self._leader_text_side(image, line, line_h) for line in page_leaders]
         for index, line in enumerate(page_leaders):
             built = self._leader_corridor(
@@ -4307,12 +4347,27 @@ class OcrPipeline:
                 )
             )
 
+        leader_job_count = len(jobs)
+
         def in_polygon(poly: list[tuple[float, float]], pt: tuple[float, float]) -> bool:
             return inside(poly, pt)
 
-        for (x0, y0, x1, y1), quad_angle, seed_box, seed_quad in self._callout_neighbourhoods(
-            image, det_boxes or [], with_quads=True
-        ):
+        quad_budget = (
+            8
+            if max_neighbourhoods is None
+            else max(0, max_neighbourhoods - len(jobs))
+        )
+        quad_neighbourhoods = (
+            self._callout_neighbourhoods(
+                image,
+                det_boxes or [],
+                max_rois=quad_budget,
+                with_quads=True,
+            )
+            if quad_budget
+            else []
+        )
+        for (x0, y0, x1, y1), quad_angle, seed_box, seed_quad in quad_neighbourhoods:
             # A seed whose text lies in a leader's corridor was read there.
             seed_centre = (
                 sum(px for px, _ in seed_quad) / 4.0,
@@ -4427,23 +4482,103 @@ class OcrPipeline:
                     },
                 )
             )
+            if (
+                max_neighbourhoods is not None
+                and len(jobs) >= max_neighbourhoods
+            ):
+                break
+
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "leader_job_count": leader_job_count,
+                    "quad_job_count": len(jobs) - leader_job_count,
+                    "job_count": len(jobs),
+                    "status": "running" if jobs else "complete",
+                }
+            )
+
+        def notify_progress(
+            completed: int,
+            *,
+            candidate_count: int,
+            operation_label: str,
+        ) -> None:
+            if diagnostics is not None:
+                diagnostics["completed_job_count"] = completed
+                diagnostics["raw_recovered_count"] = candidate_count
+            if progress_callback is not None:
+                progress_callback(
+                    completed=completed,
+                    total=len(jobs),
+                    candidate_count=candidate_count,
+                    operation_label=operation_label,
+                )
 
         # Each neighbourhood is independent, so they are dealt across the OCR
         # workers when the server has them; otherwise read here, in order.
         pool = self._worker_pool() if len(jobs) > 1 else None
+        notify_progress(
+            0,
+            candidate_count=len(found),
+            operation_label=(
+                "Slanted callout neighbourhoods"
+                if jobs
+                else "No slanted callout neighbourhoods"
+            ),
+        )
         if pool is not None:
             from ocr_workers import image_to_png, run_task
 
             payloads = [
                 {"png": image_to_png(roi), "kwargs": kwargs} for _box, roi, kwargs in jobs
             ]
+            completed_jobs = 0
+            raw_recovered = len(found)
+
+            def on_job_done(_index: int, result: Any) -> None:
+                nonlocal completed_jobs, raw_recovered
+                completed_jobs += 1
+                raw_recovered += len(result or [])
+                notify_progress(
+                    completed_jobs,
+                    candidate_count=raw_recovered,
+                    operation_label=(
+                        f"Slanted neighbourhood {completed_jobs} of {len(jobs)}"
+                    ),
+                )
+
+            if diagnostics is not None:
+                diagnostics["worker_pool_used"] = True
             per_roi = pool.map(
                 "angled_roi",
                 payloads,
                 local=lambda payload: run_task(self, "angled_roi", payload),
+                on_item_done=on_job_done,
             )
         else:
-            per_roi = [self._angled_in_roi(roi, **kwargs) for _box, roi, kwargs in jobs]
+            per_roi = []
+            raw_recovered = len(found)
+            for index, (_box, roi, kwargs) in enumerate(jobs, start=1):
+                # The report before each expensive read is the cooperative
+                # cancellation point for an in-process scan.
+                notify_progress(
+                    index - 1,
+                    candidate_count=raw_recovered,
+                    operation_label=(
+                        f"Reading slanted neighbourhood {index} of {len(jobs)}"
+                    ),
+                )
+                result = self._angled_in_roi(roi, **kwargs)
+                per_roi.append(result)
+                raw_recovered += len(result or [])
+                notify_progress(
+                    index,
+                    candidate_count=raw_recovered,
+                    operation_label=(
+                        f"Completed slanted neighbourhood {index} of {len(jobs)}"
+                    ),
+                )
         for ((x0, y0, _x1, _y1), _roi, _kwargs), regions_here in zip(jobs, per_roi):
             for region in regions_here or []:
                 for box in (region["bbox"], region.get("oriented_box")):
@@ -4454,9 +4589,19 @@ class OcrPipeline:
                 found.append(region)
 
         superseded = self._supersede_fused_base(found, base_regions)
-        return self._dedupe_angled(
+        recovered = self._dedupe_angled(
             found, [b for b in base_regions if id(b) not in superseded]
         )
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "completed_job_count": len(jobs),
+                    "raw_recovered_count": len(found),
+                    "recovered_count": len(recovered),
+                    "status": "complete",
+                }
+            )
+        return recovered
 
     @staticmethod
     def _bbox_rot_to_source(
@@ -5953,6 +6098,7 @@ class OcrPipeline:
         from page_scan import (
             PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
             PAGE_SCAN_MAX_DETECTOR_CALLS,
+            PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
             PAGE_SCAN_MAX_TILES,
             PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             PAGE_SCAN_ROTATIONS_CW,
@@ -8440,21 +8586,70 @@ class OcrPipeline:
         ]
         report(
             stage="angled",
-            message="Reading slanted callouts along their leader lines",
+            message="Planning bounded slanted-callout recovery",
             percent=99,
-            completed=detected_count,
-            total=detected_count,
+            completed=0,
+            total=0,
             candidate_count=len(regions),
             operation_label="Slanted callouts",
         )
+        slant_recovery_stats: dict[str, Any] = {}
+        slant_progress_error: Exception | None = None
+
+        def report_slant_progress(
+            *,
+            completed: int,
+            total: int,
+            candidate_count: int,
+            operation_label: str,
+        ) -> None:
+            nonlocal slant_progress_error
+            try:
+                report(
+                    stage="angled",
+                    message=(
+                        f"Reading slanted callouts: {completed} of {total} "
+                        "neighbourhoods complete"
+                        if total
+                        else "No slanted callout neighbourhoods found"
+                    ),
+                    percent=99,
+                    completed=completed,
+                    total=total,
+                    object_current=completed,
+                    object_total=total,
+                    candidate_count=len(regions) + candidate_count,
+                    operation_label=operation_label,
+                )
+            except Exception as exc:
+                slant_progress_error = exc
+                raise
+
         try:
             angled_regions = self._detect_angled_regions(
-                image, regions, det_boxes=angled_seed_boxes
+                image,
+                regions,
+                det_boxes=angled_seed_boxes,
+                max_neighbourhoods=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
+                progress_callback=report_slant_progress,
+                diagnostics=slant_recovery_stats,
             )
-        except Exception:
+        except Exception as exc:
+            # Progress reporting is also the scan job's cooperative
+            # cancellation signal. Never turn cancellation into a successful
+            # scan merely because angled recovery is optional.
+            if slant_progress_error is not None:
+                raise slant_progress_error
             # The upright balloons are the point of the scan; a failed angled
             # recovery must never discard them.
             angled_regions = []
+            slant_recovery_stats.update(
+                {
+                    "status": "failed",
+                    "error_type": exc.__class__.__name__,
+                    "recovered_count": 0,
+                }
+            )
         if angled_regions:
             regions.extend(angled_regions)
             detected_count += len(angled_regions)
@@ -8728,6 +8923,7 @@ class OcrPipeline:
             "duplicates_removed": duplicates_removed,
             "skipped_existing_count": skipped_existing_count,
             "detection_stats": detection_stats,
+            "slant_recovery_stats": slant_recovery_stats,
             "filter_rule_counts": dict(sorted(filter_rule_counts.items())),
             "source_profile": source_profile,
             "recognition_source_counts": dict(

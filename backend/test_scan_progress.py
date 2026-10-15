@@ -1134,3 +1134,121 @@ def test_worker_pool_runs_primary_and_gap_detection_as_separate_stages() -> None
 
     assert map_sizes == [2, 2]
     assert result["detection_stats"]["gap_recovered_count"] == 1
+
+
+def test_page_scan_uses_full_slant_budget_and_publishes_diagnostics() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    pipeline._worker_pool = lambda: None
+    pipeline._detector_only_boxes = lambda *_args, **_kwargs: []
+    pipeline._recognize_page_batch = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("an empty primary scan has no batch OCR work")
+    )
+    pipeline._notes_region = lambda *_args, **_kwargs: None
+    layout = PageLayout(
+        width=2100,
+        height=1200,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2100, 1200)),),
+        overlaps=(),
+    )
+    received = {}
+
+    def angled(_image, _regions, **kwargs):
+        received.update(kwargs)
+        diagnostics = kwargs["diagnostics"]
+        diagnostics.update(
+            {
+                "max_neighbourhoods": kwargs["max_neighbourhoods"],
+                "job_count": 1,
+                "completed_job_count": 1,
+                "raw_recovered_count": 1,
+                "recovered_count": 1,
+                "status": "complete",
+            }
+        )
+        kwargs["progress_callback"](
+            completed=0,
+            total=1,
+            candidate_count=0,
+            operation_label="Reading slanted neighbourhood 1 of 1",
+        )
+        kwargs["progress_callback"](
+            completed=1,
+            total=1,
+            candidate_count=1,
+            operation_label="Completed slanted neighbourhood 1 of 1",
+        )
+        return [
+            {
+                "text": "R4.5",
+                "bbox": {"x": 800.0, "y": 500.0, "width": 70.0, "height": 24.0},
+                "confidence": 0.98,
+                "type": "Radius",
+                "orientation": "horizontal",
+                "rotation": -35.0,
+                "needs_review": False,
+                "engine": "paddleocr",
+                "symbols_detected": {},
+            }
+        ]
+
+    pipeline._detect_angled_regions = angled
+    events = []
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (2100, 1200), "white"),
+        layout=layout,
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    assert received["max_neighbourhoods"] == 24
+    assert result["regions"][0]["text"] == "R4.5"
+    assert result["slant_recovery_stats"]["status"] == "complete"
+    assert result["slant_recovery_stats"]["recovered_count"] == 1
+    angled_events = [event for event in events if event["stage"] == "angled"]
+    assert angled_events[-1]["completed"] == angled_events[-1]["total"] == 1
+
+
+def test_page_slant_progress_cancellation_is_not_swallowed() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    pipeline._worker_pool = lambda: None
+    pipeline._detector_only_boxes = lambda *_args, **_kwargs: []
+    pipeline._recognize_page_batch = lambda *_args, **_kwargs: []
+    pipeline._notes_region = lambda *_args, **_kwargs: None
+    layout = PageLayout(
+        width=2100,
+        height=1200,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2100, 1200)),),
+        overlaps=(),
+    )
+
+    def angled(_image, _regions, **kwargs):
+        kwargs["progress_callback"](
+            completed=0,
+            total=2,
+            candidate_count=0,
+            operation_label="Reading slanted neighbourhood 1 of 2",
+        )
+        return []
+
+    def cancel(**event):
+        if event["stage"] == "angled" and event["total"] == 2:
+            raise RuntimeError("cancelled")
+
+    pipeline._detect_angled_regions = angled
+
+    try:
+        pipeline.segment_page(
+            Image.new("RGB", (2100, 1200), "white"),
+            layout=layout,
+            progress_callback=cancel,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "cancelled"
+    else:
+        raise AssertionError("slant-stage cancellation must propagate")

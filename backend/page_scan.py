@@ -29,6 +29,10 @@ GAP_CANDIDATE_MIN_LONG_EDGE = 20.0
 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
 PAGE_SCAN_RECOGNITION_BATCH_SIZE = 16
 EXISTING_VALUE_OVERLAP_THRESHOLD = 0.55
+# A full drawing can distribute diagonal callouts across many views. Keep the
+# per-callout recovery bounded while allowing substantially more coverage than
+# the selection-sized default used by the manual Draw Value flow.
+PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS = 24
 
 
 def bbox_overlap_fraction(

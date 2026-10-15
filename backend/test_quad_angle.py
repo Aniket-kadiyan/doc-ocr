@@ -157,3 +157,168 @@ def test_no_quads_means_no_groups():
     """Boxes from the morphology proposer carry no corners, so they cannot vote."""
     plain = [{"x": 0, "y": 0, "w": 100, "h": 20, "text": "12.5", "conf": 0.9}]
     assert OcrPipeline._slant_angle_groups(plain) == []
+
+
+def test_full_page_slant_jobs_share_one_bounded_budget(monkeypatch):
+    pipeline = object.__new__(OcrPipeline)
+    requested_max_lines = []
+    leaders = [
+        {
+            "angle": -35.0,
+            "x1": float(index * 120),
+            "y1": 200.0,
+            "x2": float(index * 120 + 100),
+            "y2": 130.0,
+            "length": 122.0,
+        }
+        for index in range(10)
+    ]
+
+    def detect_leaders(_image, *, max_lines=6, **_kwargs):
+        requested_max_lines.append(max_lines)
+        return leaders[:max_lines]
+
+    monkeypatch.setattr("region_detect.detect_leader_lines", detect_leaders)
+    pipeline._leader_text_side = lambda *_args, **_kwargs: 1.0
+
+    def corridor(_image, line, _line_h, **_kwargs):
+        x0 = int(line["x1"])
+        box = (x0, 100, x0 + 110, 230)
+        return box, Image.new("RGB", (110, 130), "white"), [
+            (x0, 100),
+            (x0 + 110, 100),
+            (x0 + 110, 230),
+            (x0, 230),
+        ]
+
+    pipeline._leader_corridor = corridor
+    pipeline._callout_neighbourhoods = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("four leader jobs exhaust the shared budget")
+    )
+    pipeline._worker_pool = lambda: None
+    pipeline._angled_in_roi = lambda _image, **_kwargs: [
+        {
+            "text": "R4.5",
+            "bbox": {"x": 1.0, "y": 2.0, "width": 30.0, "height": 14.0},
+        }
+    ]
+    pipeline._supersede_fused_base = lambda *_args: set()
+    pipeline._dedupe_angled = lambda angled, _base: angled
+    events = []
+    diagnostics = {}
+
+    recovered = pipeline._detect_angled_regions(
+        Image.new("RGB", (2400, 1600), "white"),
+        [],
+        det_boxes=[],
+        max_neighbourhoods=4,
+        progress_callback=lambda **event: events.append(event),
+        diagnostics=diagnostics,
+    )
+
+    assert requested_max_lines == [4]
+    assert len(recovered) == 4
+    assert diagnostics["leader_job_count"] == 4
+    assert diagnostics["quad_job_count"] == 0
+    assert diagnostics["job_count"] == 4
+    assert diagnostics["completed_job_count"] == 4
+    assert diagnostics["recovered_count"] == 4
+    assert events[-1]["completed"] == events[-1]["total"] == 4
+
+
+def test_remaining_slant_budget_is_offered_to_quad_neighbourhoods(monkeypatch):
+    pipeline = object.__new__(OcrPipeline)
+    requested_quad_budget = []
+
+    monkeypatch.setattr(
+        "region_detect.detect_leader_lines",
+        lambda _image, **_kwargs: [],
+    )
+
+    def callouts(_image, _boxes, *, max_rois, with_quads):
+        requested_quad_budget.append((max_rois, with_quads))
+        return []
+
+    pipeline._callout_neighbourhoods = callouts
+    pipeline._worker_pool = lambda: None
+    pipeline._supersede_fused_base = lambda *_args: set()
+    pipeline._dedupe_angled = lambda angled, _base: angled
+
+    recovered = pipeline._detect_angled_regions(
+        Image.new("RGB", (2400, 1600), "white"),
+        [],
+        det_boxes=[],
+        max_neighbourhoods=24,
+    )
+
+    assert recovered == []
+    assert requested_quad_budget == [(24, True)]
+
+
+def test_slant_worker_pool_reports_each_completed_neighbourhood(monkeypatch):
+    pipeline = object.__new__(OcrPipeline)
+    leaders = [
+        {
+            "angle": -35.0,
+            "x1": float(index * 200),
+            "y1": 300.0,
+            "x2": float(index * 200 + 120),
+            "y2": 220.0,
+            "length": 144.0,
+        }
+        for index in range(2)
+    ]
+    monkeypatch.setattr(
+        "region_detect.detect_leader_lines",
+        lambda _image, **_kwargs: leaders,
+    )
+    pipeline._leader_text_side = lambda *_args, **_kwargs: 1.0
+    pipeline._leader_corridor = lambda _image, line, _line_h, **_kwargs: (
+        (int(line["x1"]), 180, int(line["x1"]) + 150, 340),
+        Image.new("RGB", (150, 160), "white"),
+        [
+            (line["x1"], 180.0),
+            (line["x1"] + 150.0, 180.0),
+            (line["x1"] + 150.0, 340.0),
+            (line["x1"], 340.0),
+        ],
+    )
+    pipeline._callout_neighbourhoods = lambda *_args, **_kwargs: []
+    pipeline._angled_in_roi = lambda _image, **_kwargs: [
+        {
+            "text": "17",
+            "bbox": {"x": 1.0, "y": 2.0, "width": 20.0, "height": 12.0},
+        }
+    ]
+    pipeline._supersede_fused_base = lambda *_args: set()
+    pipeline._dedupe_angled = lambda angled, _base: angled
+    map_calls = []
+
+    class Pool:
+        def map(self, task, payloads, *, local, on_item_done):
+            map_calls.append((task, len(payloads)))
+            results = []
+            for index, payload in enumerate(payloads):
+                result = local(payload)
+                results.append(result)
+                on_item_done(index, result)
+            return results
+
+    pipeline._worker_pool = lambda: Pool()
+    events = []
+    diagnostics = {}
+
+    recovered = pipeline._detect_angled_regions(
+        Image.new("RGB", (2400, 1600), "white"),
+        [],
+        det_boxes=[],
+        max_neighbourhoods=2,
+        progress_callback=lambda **event: events.append(event),
+        diagnostics=diagnostics,
+    )
+
+    assert map_calls == [("angled_roi", 2)]
+    assert len(recovered) == 2
+    assert diagnostics["worker_pool_used"] is True
+    assert diagnostics["completed_job_count"] == 2
+    assert events[-1]["completed"] == events[-1]["total"] == 2
