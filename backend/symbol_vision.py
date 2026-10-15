@@ -153,7 +153,7 @@ def detect_symbols(image: Image.Image) -> tuple[DetectedSymbols, dict]:
 def detect_prefix_from_ocr_text(prefix_ocr: str) -> DetectedSymbols:
     t = (prefix_ocr or "").strip()
     out = DetectedSymbols()
-    if re.match(r"^[ØøφΦ⌀]", t):
+    if re.match(r"^[ØøφΦ⌀∅]", t):
         out.diameter = True
         out.diameter_score = 1.0
     elif re.match(r"^[Rr](?=\d)", t):

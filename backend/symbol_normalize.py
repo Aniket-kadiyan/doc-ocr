@@ -27,8 +27,9 @@ def fix_engineering_symbols_light(text: str) -> str:
 
     t = normalize_primes(text.strip())
     t = t.replace("+/−", "±").replace("+/-", "±").replace("＋", "+")
-    # Leading diameter / radius markers only (not φ inside numbers)
-    t = re.sub(r"^[\s]*(?:⊕|∅|⌀|[φΦø])", "Ø", t)
+    # Leading diameter / radius markers only (not φ inside numbers). ``⊕`` is
+    # the GD&T position symbol, not a diameter glyph, and must stay distinct.
+    t = re.sub(r"^[\s]*(?:∅|⌀|[φΦø])", "Ø", t)
     t = re.sub(r"^[\s]*([Rr])(?=\d)", r"R", t)
     t = re.sub(r"\s*([±°Ø'\"])\s*", r"\1", t)
     t = re.sub(r"\s+", " ", t).strip()

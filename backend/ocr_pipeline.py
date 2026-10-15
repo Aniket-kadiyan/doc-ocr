@@ -52,6 +52,11 @@ from symbol_vision import (
     symbols_to_dict,
 )
 
+# Identifies the OCR package loaded by the running backend. The backend imports
+# this module once at startup, so a changed value also makes a stale process
+# visible through /health instead of making new scan behaviour look inactive.
+OCR_CHANGESET_ID = "mvp1-m0-runtime-baseline"
+
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
 # spot a fused read whose text collapsed to one value and hid the second.
@@ -500,6 +505,7 @@ class OcrPipeline:
     @property
     def status(self) -> dict[str, Any]:
         return {
+            "ocr_changeset": OCR_CHANGESET_ID,
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,

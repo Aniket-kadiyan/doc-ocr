@@ -126,7 +126,14 @@ def _has_phi_evidence(
         # plain "5.50[139.70]" whose leader read as a dash was published as
         # "Ø5.50[139.70]".
         return symbols.diameter and symbols.diameter_score >= _PHI_SCORE_MIN
-    return symbols.diameter_score >= _PHI_SCORE_VISION_ONLY
+    # A score records supporting strength, not a diameter decision. The
+    # topology detector is responsible for setting ``diameter``; accepting a
+    # high legacy template/circle score here would turn ordinary 0/8-shaped
+    # values and nearby leader-line geometry into a fabricated Ø.
+    return (
+        symbols.diameter
+        and symbols.diameter_score >= _PHI_SCORE_VISION_ONLY
+    )
 
 
 
@@ -219,6 +226,7 @@ def compose_engineering_dimension(
     if (
         not t.startswith("Ø")
         and not t.startswith("R")
+        and symbols.diameter
         and symbols.diameter_score >= _PHI_TOPOLOGY_MIN
     ):
         m_junk = _LEADING_JUNK_PHI_RE.match(t)
