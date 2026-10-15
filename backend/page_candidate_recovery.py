@@ -968,6 +968,31 @@ def _merge_equivalent_symbol_evidence(
     )
 
 
+def reads_are_a_half_turn_apart(left: str, right: str) -> bool:
+    """Return whether two reads contain the same characters in reverse order.
+
+    A short numeric crop can be confidently classified 180 degrees the wrong
+    way by the authoritative pass (for example ``10`` becoming ``01``). Such
+    a pair is direction disagreement, not independent evidence of a new value.
+    Punctuation is ignored because it is not stable under OCR after a flip.
+    """
+
+    def letters_and_digits(text: str) -> str:
+        return "".join(
+            character
+            for character in str(text or "")
+            if character.isalnum()
+        )
+
+    left_compact = letters_and_digits(left)
+    right_compact = letters_and_digits(right)
+    return bool(
+        len(left_compact) > 1
+        and left_compact != right_compact
+        and left_compact == right_compact[::-1]
+    )
+
+
 def resolve_authoritative_hypotheses(
     preliminary: Mapping[str, Any],
     attempts: Sequence[Mapping[str, Any]],
@@ -1006,11 +1031,28 @@ def resolve_authoritative_hypotheses(
             and authoritative_signature is not None
             and preliminary_signature != authoritative_signature
         )
-        # Both reads are evidence about the same detector target. A numeric
-        # disagreement must remain visible to the inspector even when the
-        # authoritative string is structurally valid (for example 96.4° vs
-        # 105); validity alone cannot decide which number is correct.
-        if numeric_conflict:
+        # A reversal is the authoritative orientation classifier reading the
+        # same crop in the opposite direction. Preserve the detector-informed
+        # preliminary value, but keep the disagreement visible for review.
+        from page_value_filters import is_complete_engineering_value
+
+        half_turn_conflict = (
+            numeric_conflict
+            and reads_are_a_half_turn_apart(
+                preliminary_text,
+                authoritative_text,
+            )
+            and is_complete_engineering_value(preliminary_text)
+        )
+        if half_turn_conflict:
+            final_text = preliminary_text
+            review_reason = (
+                "Preliminary and authoritative OCR read the same characters "
+                "in opposite order; the crop's reading direction is ambiguous"
+            )
+        # All other numeric disagreements retain MVP1's conservative policy:
+        # use the target-locked read and require review even when it is valid.
+        elif numeric_conflict:
             final_text = authoritative_text
             review_reason = (
                 "Preliminary and target-locked authoritative OCR disagree on "

@@ -77,8 +77,15 @@ class PageCandidate:
     detection_confidence: float = 0.0
     pass_index: int = 0
     rotation_cw: int = 0
+    rotations_cw: tuple[int, ...] = ()
     polygon: tuple[tuple[float, float], ...] = ()
     candidate_id: str = ""
+
+    @property
+    def quarter_turn_only(self) -> bool:
+        """Return whether only the 90-degree detector pass saw the object."""
+
+        return bool(self.rotations_cw) and set(self.rotations_cw) == {90}
 
 
 def _candidate_boundary_clearance(
@@ -185,6 +192,7 @@ def map_tile_candidate(
         detection_confidence=float(detection_confidence),
         pass_index=pass_index,
         rotation_cw=rotation_cw,
+        rotations_cw=(rotation_cw,),
         polygon=tuple(page_polygon),
     )
 
@@ -276,12 +284,26 @@ def deduplicate_page_candidates(
     )
     accepted: list[PageCandidate] = []
     for candidate in preferred_first:
-        duplicate = any(
-            strict_same_object(existing.bbox, candidate.bbox)
-            for existing in accepted
+        duplicate = next(
+            (
+                index
+                for index, existing in enumerate(accepted)
+                if strict_same_object(existing.bbox, candidate.bbox)
+            ),
+            None,
         )
-        if not duplicate:
+        if duplicate is None:
             accepted.append(candidate)
+            continue
+
+        # Geometry deduplication may discard a box, but the detector rotations
+        # that found the object remain useful reading-direction evidence.
+        kept = accepted[duplicate]
+        merged = tuple(
+            sorted(set(kept.rotations_cw) | set(candidate.rotations_cw))
+        )
+        if merged != kept.rotations_cw:
+            accepted[duplicate] = replace(kept, rotations_cw=merged)
 
     return sorted(
         accepted,

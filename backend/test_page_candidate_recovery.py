@@ -13,6 +13,7 @@ from page_candidate_recovery import (
     engineering_values_agree,
     is_usable_engineering_value,
     reconstruct_line_context,
+    reads_are_a_half_turn_apart,
     resolve_recovery_consensus,
     resolve_authoritative_hypotheses,
     result_needs_recovery,
@@ -316,6 +317,50 @@ def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> N
     assert conflict["authoritative_review_required"]
     assert untargeted["text"] == ""
     assert untargeted["needs_review"]
+
+
+def test_half_turn_comparison_ignores_unstable_punctuation() -> None:
+    assert reads_are_a_half_turn_apart("10", "01")
+    assert reads_are_a_half_turn_apart("12", "21")
+    assert reads_are_a_half_turn_apart(".10", "01")
+    assert reads_are_a_half_turn_apart("0.5", "5.0")
+    assert not reads_are_a_half_turn_apart("5", "5")
+    assert not reads_are_a_half_turn_apart("10", "10")
+    assert not reads_are_a_half_turn_apart("96.4", "105")
+
+
+def test_half_turn_conflict_keeps_preliminary_value_for_review() -> None:
+    resolved = resolve_authoritative_hypotheses(
+        _result("10", confidence=0.99),
+        [
+            {
+                **_result("01", confidence=0.99),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+
+    assert resolved["text"] == "10"
+    assert resolved["numeric_conflict"]
+    assert resolved["needs_review"]
+    assert resolved["authoritative_review_required"]
+    assert "opposite order" in resolved["review_reason"]
+
+
+def test_non_value_reversal_does_not_override_authoritative_read() -> None:
+    resolved = resolve_authoritative_hypotheses(
+        _result("}o", confidence=0.99),
+        [
+            {
+                **_result("o{", confidence=0.99),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+
+    assert resolved["text"] == "o{"
 
 
 def test_same_line_context_rejoins_split_scale_label() -> None:

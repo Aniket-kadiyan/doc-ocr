@@ -124,6 +124,7 @@ def run_task(pipeline: Any, task: str, payload: dict[str, Any]) -> Any:
                 images,
                 batch_size=int(payload.get("batch_size") or 16),
                 profile=str(payload.get("profile") or "batch_recognition"),
+                reading_hints=payload.get("reading_hints"),
             )
         )
     if task == "angled_roi":

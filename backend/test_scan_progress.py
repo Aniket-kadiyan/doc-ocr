@@ -323,7 +323,13 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
             }
         ]
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(
+        crops,
+        *,
+        batch_size,
+        profile="batch_recognition",
+        reading_hints=None,
+    ):
         assert batch_size == 16
         recognition_batches.append((profile, len(crops)))
         if profile == "batch_recognition":
@@ -522,6 +528,65 @@ def test_page_scan_skips_existing_balloon_before_primary_ocr() -> None:
     assert result["candidate_outcomes"] == []
 
 
+def test_authoritative_native_pdf_value_bypasses_all_raster_ocr() -> None:
+    from pdf_evidence import NativePdfSpan, PdfPageEvidence
+
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    detector_calls = 0
+    layout = PageLayout(
+        width=200,
+        height=100,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 200, 100)),),
+        overlaps=(),
+    )
+
+    def fake_detector(_image, **_kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return (
+            [{"x": 40, "y": 30, "w": 45, "h": 16, "conf": 0.95}]
+            if detector_calls == 1
+            else []
+        )
+
+    def fail_raster_ocr(*_args, **_kwargs):
+        raise AssertionError(
+            "an authoritative native PDF value must not enter raster OCR"
+        )
+
+    pipeline._detector_only_boxes = fake_detector
+    pipeline._recognize_page_batch = fail_raster_ocr
+    pipeline.recognize = fail_raster_ocr
+    native = PdfPageEvidence(
+        page_number=1,
+        page_count=1,
+        target_width=200,
+        target_height=100,
+        profile="vector",
+        spans=(
+            NativePdfSpan(
+                span_id="P1:S00001",
+                text="25",
+                bbox={"x": 40, "y": 30, "width": 45, "height": 16},
+            ),
+        ),
+        native_character_count=2,
+    )
+
+    result = pipeline.segment_page(
+        Image.new("RGB", (200, 100), "white"),
+        layout=layout,
+        native_evidence=native,
+    )
+
+    assert result["eligible_count"] == 1
+    assert result["regions"][0]["text"] == "25"
+    assert result["regions"][0]["recognition_source"] == "native_pdf"
+
+
 def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
@@ -547,7 +612,13 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(
+        crops,
+        *,
+        batch_size,
+        profile="batch_recognition",
+        reading_hints=None,
+    ):
         assert batch_size == 16
         assert profile == "batch_recognition"
         return [
@@ -623,7 +694,13 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(
+        crops,
+        *,
+        batch_size,
+        profile="batch_recognition",
+        reading_hints=None,
+    ):
         assert batch_size == 16
         recognition_profiles.append(profile)
         return [
@@ -712,7 +789,13 @@ def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(
+        crops,
+        *,
+        batch_size,
+        profile="batch_recognition",
+        reading_hints=None,
+    ):
         assert batch_size == 16
         recognition_profiles.append(profile)
         text = "8" if profile == "batch_recognition" else "B"

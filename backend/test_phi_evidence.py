@@ -21,7 +21,7 @@ from symbol_vision import (
 
 class PhiEvidenceRulesTests(unittest.TestCase):
     def test_runtime_changeset_identifies_this_package(self) -> None:
-        self.assertEqual(OCR_CHANGESET_ID, "mvp1-m0-runtime-baseline")
+        self.assertEqual(OCR_CHANGESET_ID, "mvp1-m1-reading-direction")
         self.assertEqual(OcrPipeline().status["ocr_changeset"], OCR_CHANGESET_ID)
 
     def test_explicit_diameter_glyphs_are_decisive(self) -> None:

@@ -55,7 +55,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m0-runtime-baseline"
+OCR_CHANGESET_ID = "mvp1-m1-reading-direction"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -75,6 +75,13 @@ _ANGLED_ROI_MIN_EDGE = 450
 # Voting-recogniser passes per crop in the page route's authoritative reread:
 # the three upright variants. See OcrPipeline._authoritative_attempts.
 _PAGE_REREAD_MAX_PREDICTIONS = 3
+# Compact crops whose height is close to or greater than their width may be
+# short text written up the side of a view. Read both directions because a
+# two-glyph value can be too square for the normal vertical-text heuristic.
+ROTATED_READING_RATIO = 0.8
+# Very long vertical strips are prose/marginalia, not single callouts. A second
+# crosswise read can manufacture a short, confident false number from them.
+ROTATED_READING_MAX_ASPECT = 6.0
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
@@ -663,8 +670,14 @@ class OcrPipeline:
         *,
         batch_size: int,
         profile: str = "batch_recognition",
+        reading_hints: Sequence[int | None] | None = None,
     ) -> list[dict[str, Any]]:
-        """Orient and recognize a crop batch without running text detection."""
+        """Orient and recognize a crop batch without running text detection.
+
+        A hint records the detector rotation that alone found a candidate. It
+        breaks ties such as ``10`` versus ``01`` when both directions produce
+        otherwise valid engineering values.
+        """
 
         if not getattr(self, "_page_batch_recognition_available", False):
             raise RuntimeError(
@@ -676,16 +689,46 @@ class OcrPipeline:
             return []
 
         from dimension_digits import correct_numeric_confusables
+        from page_value_filters import (
+            is_complete_engineering_value,
+            normalize_page_value_text,
+        )
 
-        if profile == "recovery_expanded_sharp":
-            prepared = [
-                sharpen_rgb(
-                    primary_oriented(upscale_min_edge(pad_image(crop)))
+        def prepare(crop: Image.Image, *, orient: bool) -> Image.Image:
+            if profile == "recovery_expanded_sharp":
+                base = upscale_min_edge(pad_image(crop))
+                return sharpen_rgb(
+                    primary_oriented(base, aspect_source=crop)
+                    if orient
+                    else base
                 )
-                for crop in crops
-            ]
-        else:
-            prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
+            return prepare_primary_ocr_variant(crop, orient=orient)[1]
+
+        def direction_is_open(crop: Image.Image) -> bool:
+            long_edge = max(crop.width, crop.height)
+            short_edge = max(min(crop.width, crop.height), 1)
+            return (
+                crop.height > crop.width * ROTATED_READING_RATIO
+                and long_edge / short_edge <= ROTATED_READING_MAX_ASPECT
+            )
+
+        hypotheses: list[tuple[int, int, Image.Image]] = []
+        for index, crop in enumerate(crops):
+            open_direction = direction_is_open(crop)
+            hypotheses.append(
+                (index, 0, prepare(crop, orient=not open_direction))
+            )
+            if open_direction:
+                turned = crop.rotate(
+                    -90,
+                    expand=True,
+                    fillcolor=(255, 255, 255),
+                )
+                hypotheses.append(
+                    (index, 90, prepare(turned, orient=False))
+                )
+
+        prepared = [image for _index, _rotation, image in hypotheses]
         orientations = self._predict_text_orientations(
             prepared,
             batch_size=batch_size,
@@ -701,12 +744,13 @@ class OcrPipeline:
             batch_size=batch_size,
         )
 
-        results: list[dict[str, Any]] = []
-        for crop, (raw_text, confidence), (degrees, orientation_score) in zip(
-            crops,
-            recognized,
-            orientations,
-        ):
+        by_crop: list[list[dict[str, Any]]] = [[] for _ in crops]
+        for (
+            (index, reading_rotation, _prepared),
+            (raw_text, confidence),
+            (degrees, orientation_score),
+        ) in zip(hypotheses, recognized, orientations):
+            crop = crops[index]
             fixed, corrected = correct_numeric_confusables(raw_text)
             text_hints = detect_prefix_from_ocr_text(fixed)
             composed = compose_engineering_dimension(
@@ -715,7 +759,7 @@ class OcrPipeline:
                 text_hints,
             )
             text = fix_engineering_symbols_light(composed.text).strip()
-            results.append(
+            by_crop[index].append(
                 {
                     "text": text,
                     "raw_ocr": raw_text,
@@ -733,12 +777,45 @@ class OcrPipeline:
                         "vertical" if is_vertical_dimension(crop) else "horizontal"
                     ),
                     "rotation": 0,
+                    "reading_rotation_cw": reading_rotation,
                     "symbols_detected": symbols_to_dict(text_hints),
                     "orientation_correction": degrees,
                     "orientation_confidence": float(orientation_score),
                     "ocr_profile": profile,
                 }
             )
+
+        def reading_rank(
+            result: dict[str, Any],
+            hint: int | None,
+        ) -> tuple[float, float, float, float]:
+            text = str(result.get("text") or "")
+            complete = is_complete_engineering_value(
+                normalize_page_value_text(text)
+            )
+            favoured = (
+                hint is not None
+                and int(result.get("reading_rotation_cw") or 0) == hint
+            )
+            return (
+                1.0 if complete else 0.0,
+                1.0 if text else 0.0,
+                1.0 if favoured else 0.0,
+                float(result.get("confidence") or 0.0),
+            )
+
+        results: list[dict[str, Any]] = []
+        for index, reads in enumerate(by_crop):
+            if not reads:
+                raise RuntimeError(
+                    "Page recognition produced no reading for a crop"
+                )
+            hint = (
+                reading_hints[index]
+                if reading_hints is not None and index < len(reading_hints)
+                else None
+            )
+            results.append(max(reads, key=lambda read: reading_rank(read, hint)))
         return results
 
     def _run_paddle(
@@ -6474,6 +6551,13 @@ class OcrPipeline:
                 if x1 > x0 and y1 > y0
                 else Image.new("RGB", (1, 1), (255, 255, 255))
             )
+        # Only raster-recognition candidates receive detector-derived reading
+        # hints. Native PDF text remains authoritative and never enters this
+        # OCR direction-selection path.
+        candidate_reading_hints = {
+            index: 90 if final_candidates[index].quarter_turn_only else None
+            for index in recognition_indexes
+        }
 
         primary_batch_total = (
             (recognition_total + PAGE_SCAN_RECOGNITION_BATCH_SIZE - 1)
@@ -6521,6 +6605,7 @@ class OcrPipeline:
             percent_span: int,
             overlay: dict[str, object] | None,
             on_batch: Callable[[int, list[dict[str, Any]]], None],
+            reading_hint_batches: list[list[int | None]] | None = None,
         ) -> None:
             """Run recognition batches across the worker pool, reporting as each lands."""
             from ocr_workers import image_to_png, png_to_image
@@ -6538,14 +6623,20 @@ class OcrPipeline:
                 candidate_count=sum(len(b) for b in batches),
                 overlay=overlay,
             )
-            payloads = [
-                {
+            if reading_hint_batches is not None and len(reading_hint_batches) != total:
+                raise ValueError(
+                    "Reading-hint batches must match recognition batches"
+                )
+            payloads = []
+            for index, batch in enumerate(batches):
+                payload: dict[str, Any] = {
                     "pngs": [image_to_png(crop) for crop in batch],
                     "batch_size": PAGE_SCAN_RECOGNITION_BATCH_SIZE,
                     "profile": profile,
                 }
-                for batch in batches
-            ]
+                if reading_hint_batches is not None:
+                    payload["reading_hints"] = reading_hint_batches[index]
+                payloads.append(payload)
             finished = 0
 
             def on_done(index: int, results: Any) -> None:
@@ -6571,6 +6662,7 @@ class OcrPipeline:
                     [png_to_image(data) for data in payload["pngs"]],
                     batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
                     profile=profile,
+                    reading_hints=payload.get("reading_hints"),
                 ),
                 on_item_done=on_done,
             )
@@ -6595,6 +6687,10 @@ class OcrPipeline:
                 on_batch=lambda index, results: apply_primary_batch(
                     primary_batches[index], results
                 ),
+                reading_hint_batches=[
+                    [candidate_reading_hints[i] for i in batch]
+                    for batch in primary_batches
+                ],
             )
             primary_batches = []
         for batch_index, batch_record_indexes in enumerate(primary_batches, start=1):
@@ -6636,6 +6732,10 @@ class OcrPipeline:
             batch_results = self._recognize_page_batch(
                 [candidate_crops[index] for index in batch_record_indexes],
                 batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                reading_hints=[
+                    candidate_reading_hints[index]
+                    for index in batch_record_indexes
+                ],
             )
             apply_primary_batch(batch_record_indexes, batch_results)
             report(
@@ -8495,7 +8595,7 @@ class OcrPipeline:
 
         padded = pad_image(image)
         prep = upscale_min_edge(padded)
-        oriented = primary_oriented(prep)
+        oriented = primary_oriented(prep, aspect_source=image)
         vertical = is_vertical_dimension(image)
 
         dumper.stage(

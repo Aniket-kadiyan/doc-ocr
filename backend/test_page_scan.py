@@ -93,7 +93,26 @@ def test_same_tile_orientation_duplicates_are_removed() -> None:
     )
 
     assert zero_degree is not None and ninety_degree is not None
-    assert len(deduplicate_page_candidates([zero_degree, ninety_degree])) == 1
+    deduplicated = deduplicate_page_candidates([zero_degree, ninety_degree])
+    assert len(deduplicated) == 1
+    assert deduplicated[0].rotations_cw == (0, 90)
+    assert not deduplicated[0].quarter_turn_only
+
+
+def test_candidate_found_only_by_quarter_turn_pass_keeps_that_provenance() -> None:
+    tile = DetectionTile(x=0, y=0, width=1263, height=893)
+    candidate = map_tile_candidate(
+        {"x": 100, "y": 200, "width": 33, "height": 48},
+        tile,
+        tile_index=1,
+        page_size=(1263, 893),
+        pass_index=2,
+        rotation_cw=90,
+    )
+
+    assert candidate is not None
+    assert candidate.rotations_cw == (90,)
+    assert candidate.quarter_turn_only
 
 
 def test_page_candidate_keeps_polygon_and_receives_stable_id() -> None:

@@ -27,8 +27,17 @@ class _FakePipeline:
         self.calls.append(("recognize", image.size))
         return {"text": "R1", "confidence": np.float32(0.9), "kwargs": sorted(kwargs)}
 
-    def _recognize_page_batch(self, images, *, batch_size, profile):
-        self.calls.append(("batch", (len(images), batch_size, profile)))
+    def _recognize_page_batch(
+        self,
+        images,
+        *,
+        batch_size,
+        profile,
+        reading_hints=None,
+    ):
+        self.calls.append(
+            ("batch", (len(images), batch_size, profile, reading_hints))
+        )
         return [{"text": f"v{i}"} for i in range(len(images))]
 
     def _angled_in_roi(self, image, **kwargs):
@@ -48,9 +57,18 @@ def test_run_task_dispatches_each_task_kind_and_returns_plain_data() -> None:
     assert result["text"] == "R1" and result["kwargs"] == ["compute_text_bbox"]
     assert isinstance(result["confidence"], float) and abs(result["confidence"] - 0.9) < 1e-6
 
-    batch = run_task(pipeline, "batch", {"pngs": [png, png], "batch_size": 4, "profile": "p"})
+    batch = run_task(
+        pipeline,
+        "batch",
+        {
+            "pngs": [png, png],
+            "batch_size": 4,
+            "profile": "p",
+            "reading_hints": [90, None],
+        },
+    )
     assert [item["text"] for item in batch] == ["v0", "v1"]
-    assert ("batch", (2, 4, "p")) in pipeline.calls
+    assert ("batch", (2, 4, "p", [90, None])) in pipeline.calls
 
     angled = run_task(pipeline, "angled_roi", {"png": png, "kwargs": {"sign": -1.0}})
     assert angled[0]["text"] == "0.5×45°"
