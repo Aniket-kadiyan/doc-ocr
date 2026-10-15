@@ -55,7 +55,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m3-full-page-slanted-callouts"
+OCR_CHANGESET_ID = "mvp1-m4-margin-tables-short-chamfers"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to

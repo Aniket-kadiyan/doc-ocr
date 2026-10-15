@@ -84,6 +84,12 @@ _CHAMFER_RE = re.compile(
     rf"(?P<qualifiers>(?:\s*{_QUALIFIER})*)$",
     re.IGNORECASE,
 )
+_SHORT_CHAMFER_RE = re.compile(
+    rf"^(?P<prefix>CHF|C)\s*(?P<size>{_NUMBER})"
+    r"\s*(?P<unit>MM)?"
+    r"(?P<qualifiers>(?:\s*(?:MAX|MIN|TYP|REF))*)\.?$",
+    re.IGNORECASE,
+)
 _STANDALONE_TOLERANCE_RE = re.compile(
     rf"^(?P<sign>±|\+|-)\s*(?P<value>{_NUMBER})\s*(?P<degree>°)?$"
 )
@@ -548,6 +554,27 @@ def parse_engineering_value(
                 "tolerance": tolerance,
                 "qualifiers": _qualifiers(chamfer.group("qualifiers")),
             },
+            normalization_steps=normalization_steps,
+        )
+
+    short_chamfer = _SHORT_CHAMFER_RE.fullmatch(value)
+    if short_chamfer:
+        return _result(
+            raw_text=raw,
+            normalized_text=normalized,
+            status="complete",
+            kind="chamfer",
+            components={
+                **base_components,
+                "prefix": short_chamfer.group("prefix").upper(),
+                "size": short_chamfer.group("size"),
+                "angle_degrees": "45",
+                "implied_angle": True,
+                "unit": (short_chamfer.group("unit") or "").upper() or None,
+                "tolerance": None,
+                "qualifiers": _qualifiers(short_chamfer.group("qualifiers")),
+            },
+            warnings=("implied_45_degree_chamfer",),
             normalization_steps=normalization_steps,
         )
 

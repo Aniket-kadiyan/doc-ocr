@@ -147,3 +147,43 @@ def test_a_title_block_grid_is_still_a_table() -> None:
     _grid(draw, (1568, 1631, 1694, 1774, 2742), (88, 129, 170, 211, 252))
 
     assert any(_contains(mask, 1660, 190) for mask in detect_table_masks(image))
+
+
+def _sheet_with_a_margin_legend() -> Image.Image:
+    image = Image.new("RGB", (2400, 1700), "white")
+    draw = ImageDraw.Draw(image)
+
+    # This 78px-wide legend is only 3.25% of the sheet width, so its rows are
+    # intentionally below the page-wide line threshold.  It is nevertheless
+    # a confirmed repeated-cell grid when inspected at margin-strip scale.
+    left, middle, right = 40, 79, 118
+    top, row_height, rows = 500, 60, 11
+    for index in range(rows + 1):
+        y = top + index * row_height
+        draw.line((left, y, right, y), fill="black", width=2)
+    for x in (left, middle, right):
+        draw.line((x, top, x, top + rows * row_height), fill="black", width=2)
+
+    # Ordinary drawing geometry in the centre must remain available to OCR.
+    draw.rectangle((700, 300, 1500, 900), outline="black", width=2)
+    return image
+
+
+def test_a_narrow_ruled_margin_legend_is_masked() -> None:
+    masks = detect_table_masks(_sheet_with_a_margin_legend())
+
+    assert any(
+        mask.x < 130 and mask.y <= 510 and mask.y1 >= 1140
+        for mask in masks
+    )
+    assert not any(_contains(mask, 1000, 600) for mask in masks)
+
+
+def test_margin_scale_does_not_turn_a_feature_control_frame_into_a_table() -> None:
+    image = Image.new("RGB", (2400, 1700), "white")
+    draw = ImageDraw.Draw(image)
+    # Two text-height rows and three narrow cells: this is the same geometry
+    # as stacked feature-control frames, placed inside the new margin band.
+    _grid(draw, (40, 75, 110, 150), (500, 545, 590))
+
+    assert not any(_contains(mask, 90, 545) for mask in detect_table_masks(image))

@@ -21,6 +21,9 @@ from feature_classifier import classify_feature
         # Chamfer (before angle)
         ("2X45°", fd.CAT_CHAMFER),
         ("0.5×45°", fd.CAT_CHAMFER),
+        ("C3", fd.CAT_CHAMFER),
+        ("C0.5", fd.CAT_CHAMFER),
+        ("CHF2", fd.CAT_CHAMFER),
         # Angle
         ("45°", fd.CAT_ANGLE),
         ("30°±3°", fd.CAT_ANGLE),

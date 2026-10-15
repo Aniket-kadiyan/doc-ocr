@@ -304,7 +304,11 @@ def classify_feature(
 
     # ── Priority 7: Geometric dimensions ────────────────────────────────────
     # Chamfer before Angle (a chamfer is an angle with the NxAngle pattern).
-    if fd.RE_CHAMFER.search(raw) or _found_keywords(upper, fd.CHAMFER_KEYWORDS):
+    if (
+        fd.RE_CHAMFER.search(raw)
+        or fd.RE_SHORT_CHAMFER.fullmatch(raw.strip())
+        or _found_keywords(upper, fd.CHAMFER_KEYWORDS)
+    ):
         feat.category = fd.CAT_CHAMFER
         feat.symbols = detected_symbols
         feat.label = _label_for(feat)

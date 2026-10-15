@@ -42,6 +42,23 @@ def test_common_value_families_are_structured_without_disposition() -> None:
     assert parse_engineering_value("(25)").components["reference"] is True
 
 
+def test_short_chamfer_keeps_its_explicit_size_and_implied_angle() -> None:
+    for text, size, qualifiers in (
+        ("C3", "3", []),
+        ("C0.5", "0.5", []),
+        ("CHF2", "2", []),
+        ("C2.5 REF", "2.5", ["REF"]),
+    ):
+        parsed = parse_engineering_value(text)
+        assert parsed.complete, text
+        assert parsed.kind == "chamfer", text
+        assert parsed.components["size"] == size, text
+        assert parsed.components["angle_degrees"] == "45", text
+        assert parsed.components["implied_angle"] is True, text
+        assert parsed.components["qualifiers"] == qualifiers, text
+        assert "implied_45_degree_chamfer" in parsed.warnings, text
+
+
 def test_angle_minutes_tolerance_keeps_angular_magnitude() -> None:
     parsed = parse_engineering_value("60°±0°30'")
 

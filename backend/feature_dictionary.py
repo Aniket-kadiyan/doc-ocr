@@ -170,6 +170,10 @@ RE_THREAD = re.compile(
 )
 RE_QUANTITY = re.compile(r"^\s*(\d+)\s*[×xX]\s*")     # 4X , 2 x
 RE_CHAMFER = re.compile(r"\d+(?:\.\d+)?\s*[×xX]\s*(?:45|30|60)\s*°?")
+RE_SHORT_CHAMFER = re.compile(
+    r"^(?:CHF|C)\s*\d+(?:\.\d+)?(?:\s*(?:MM|MAX|MIN|TYP|REF)\.?)?$",
+    re.IGNORECASE,
+)
 RE_REFERENCE = re.compile(r"^\(.*\)$|(?<![A-Z])REF(?:\.|ERENCE)?\b", re.IGNORECASE)
 RE_BASIC = re.compile(r"^\s*[\[□▭].+[\]□▭]\s*$")      # boxed dimension
 RE_SURFACE_VALUE = re.compile(r"\b(?:Ra|Rz|Rmax|Rq)\s*\d", re.IGNORECASE)

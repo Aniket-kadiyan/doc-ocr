@@ -145,6 +145,12 @@ _CHAMFER_VALUE = _compile(
     rf"{_NUMBER}\s*[X×]\s*{_NUMBER}\s*°?"
     r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
 )
+# JIS/ISO short chamfer notation implies the standard angle and prints only
+# the leg size: ``C3``, ``C0.5`` or ``CHF2``.  Requiring the prefix plus a
+# number keeps bare datum/zone letters outside this rule.
+_SHORT_CHAMFER_VALUE = _compile(
+    rf"^(?:CHF|C)\s*{_NUMBER}(?:\s*(?:MM|MAX|MIN|TYP|REF)\.?)?$"
+)
 _STANDALONE_TOLERANCE = _compile(
     rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
 )
@@ -219,6 +225,7 @@ def _is_single_value(value: str) -> bool:
         or _LINEAR_VALUE.fullmatch(value)
         or _THREAD_VALUE.fullmatch(value)
         or _CHAMFER_VALUE.fullmatch(value)
+        or _SHORT_CHAMFER_VALUE.fullmatch(value)
         or _STANDALONE_TOLERANCE.fullmatch(value)
     )
 
@@ -256,6 +263,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _THREAD_VALUE.fullmatch(value):
         return True
     if _CHAMFER_VALUE.fullmatch(value):
+        return True
+    if _SHORT_CHAMFER_VALUE.fullmatch(value):
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
         return True

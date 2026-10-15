@@ -29,6 +29,11 @@ LAYOUT_PANEL_OVERLAP_MIN = 24
 LAYOUT_PANEL_OVERLAP_MAX = 80
 
 TABLE_MASK_PADDING_RATIO = 0.002
+# Narrow boilerplate/tolerance legends are commonly ruled down the left or
+# right sheet margin.  Their horizontal rules are too short to pass the
+# page-wide line-length threshold, so inspect the edge strips at their own
+# scale instead of lowering that threshold for the entire drawing.
+TABLE_MASK_MARGIN_BAND_RATIO = 0.08
 
 
 @dataclass(frozen=True)
@@ -679,6 +684,78 @@ def _discard_mostly_contained_boxes(
     return accepted
 
 
+def _grid_masks(
+    ink: np.ndarray,
+    *,
+    classification_page_size: tuple[int, int],
+) -> list[LayoutBox]:
+    """Return confirmed repeated-cell grids in one local ink map.
+
+    Line extraction and cell construction use the local map dimensions.  The
+    final table-vs-drawing decision deliberately uses the full sheet size so a
+    feature-control frame or drawing geometry does not become a table merely
+    because it happens to sit inside a narrow margin crop.
+    """
+
+    height, width = ink.shape
+    if width < 32 or height < 32:
+        return []
+    tolerance = max(2, int(round(min(width, height) / 500)))
+    cells = _detect_grid_cells(
+        _extract_axis_lines(ink, horizontal=True),
+        _extract_axis_lines(ink, horizontal=False),
+        page_width=width,
+        page_height=height,
+        tolerance=tolerance,
+    )
+    full_width, full_height = classification_page_size
+    repeated_cells = _retain_repeated_cell_groups(
+        cells,
+        tolerance=tolerance * 2,
+        page_size=classification_page_size,
+        content=_ink_without_axis_lines(
+            ink,
+            max(20, int(round(min(full_width, full_height) * 0.02))),
+        ),
+    )
+    return _discard_mostly_contained_boxes(
+        _merge_rectangular_cells(
+            repeated_cells,
+            tolerance=tolerance * 2,
+        )
+    )
+
+
+def _margin_band_masks(
+    ink: np.ndarray,
+    *,
+    width: int,
+    height: int,
+) -> list[LayoutBox]:
+    """Detect confirmed grids in narrow left/right sheet-margin strips."""
+
+    band_width = int(round(width * TABLE_MASK_MARGIN_BAND_RATIO))
+    if band_width < 64:
+        return []
+
+    masks: list[LayoutBox] = []
+    for x0 in (0, max(0, width - band_width)):
+        x1 = min(width, x0 + band_width)
+        for box in _grid_masks(
+            ink[:, x0:x1],
+            classification_page_size=(width, height),
+        ):
+            masks.append(
+                LayoutBox(
+                    x=box.x + x0,
+                    y=box.y,
+                    width=box.width,
+                    height=box.height,
+                )
+            )
+    return masks
+
+
 def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
     """Detect every repeated-cell grid that should be masked in page scans."""
 
@@ -687,34 +764,17 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
         return ()
 
     ink = _ink_map(image)
-    horizontal = _extract_axis_lines(ink, horizontal=True)
-    vertical = _extract_axis_lines(ink, horizontal=False)
-    intersection_tolerance = max(2, int(round(min(width, height) / 500)))
     padding = max(
         2,
         int(round(min(width, height) * TABLE_MASK_PADDING_RATIO)),
     )
 
-    cells = _detect_grid_cells(
-        horizontal,
-        vertical,
-        page_width=width,
-        page_height=height,
-        tolerance=intersection_tolerance,
-    )
-    repeated_cells = _retain_repeated_cell_groups(
-        cells,
-        tolerance=intersection_tolerance * 2,
-        page_size=(width, height),
-        content=_ink_without_axis_lines(
-            ink, max(20, int(round(min(width, height) * 0.02)))
-        ),
-    )
     boxes = _discard_mostly_contained_boxes(
-        _merge_rectangular_cells(
-            repeated_cells,
-            tolerance=intersection_tolerance * 2,
+        _grid_masks(
+            ink,
+            classification_page_size=(width, height),
         )
+        + _margin_band_masks(ink, width=width, height=height)
     )
     padded: list[LayoutBox] = []
     for box in boxes:

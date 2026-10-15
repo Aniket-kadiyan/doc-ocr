@@ -264,3 +264,25 @@ def test_mixed_section_rejects_only_candidate_inside_the_table() -> None:
     )
     assert decision.accepted
     assert decision.rule_name == "section_engineering_value"
+
+
+def test_short_chamfer_forms_are_complete_values() -> None:
+    for text in (
+        "C3",
+        "C0.5",
+        "C 3",
+        "CHF2",
+        "C3MAX",
+        "C2.5 REF",
+        "CHF1 MIN.",
+        "C4 TYP",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, text
+        assert decision.rule_name == "engineering_value", text
+
+
+def test_short_chamfer_rule_does_not_accept_bare_or_zone_letters() -> None:
+    for text in ("C", "CHF", "A3", "B2"):
+        decision = evaluate_page_value(candidate(text))
+        assert not decision.accepted, text
