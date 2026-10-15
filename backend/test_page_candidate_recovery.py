@@ -12,6 +12,7 @@ from page_candidate_recovery import (
     build_recovery_crops,
     engineering_values_agree,
     is_usable_engineering_value,
+    reads_are_a_half_turn_apart,
     reconstruct_line_context,
     resolve_recovery_consensus,
     resolve_authoritative_hypotheses,
@@ -326,3 +327,85 @@ def test_same_line_context_rejoins_split_scale_label() -> None:
     ]
 
     assert reconstruct_line_context(records[1], records) == "SCALE 2:1"
+
+
+def test_a_reversed_read_is_a_direction_disagreement_not_a_second_opinion() -> None:
+    # The authoritative pass runs the complete PaddleOCR pipeline, whose own
+    # text-line orientation step re-decides which way up a crop is. A short
+    # numeric callout gives it nothing to decide with -- a turned "10" upside
+    # down is "01" -- and it commits at 0.99, overwriting a preliminary read
+    # that had resolved the direction from the detector's evidence. One sheet
+    # published "01" twice, "21" twice, "11" and "02" that way.
+    assert reads_are_a_half_turn_apart("10", "01")
+    assert reads_are_a_half_turn_apart("12", "21")
+    assert reads_are_a_half_turn_apart("R4", "4R")
+    # Punctuation does not survive a flip in any predictable place: the leader
+    # line touching the real "10" crop read as a leading dot, so the pair that
+    # reached this test was ".10" against "01".
+    assert reads_are_a_half_turn_apart(".10", "01")
+    assert reads_are_a_half_turn_apart("0.5", "5.0")
+    # A single character is its own reverse, and an agreeing read is no
+    # disagreement at all.
+    assert not reads_are_a_half_turn_apart("5", "5")
+    assert not reads_are_a_half_turn_apart("10", "10")
+    # Genuinely different values are not reversals of each other.
+    assert not reads_are_a_half_turn_apart("96.4", "105")
+    assert not reads_are_a_half_turn_apart("13.8±0.3", "13.8")
+    assert not reads_are_a_half_turn_apart("518", "R1.4")
+
+
+def test_a_reversal_only_counts_when_the_preliminary_read_is_itself_a_value() -> None:
+    # The fast pass returns plenty of text that merely happens to reverse into
+    # something; it only outranks the authoritative read when it is a complete
+    # value on its own.
+    resolved = resolve_authoritative_hypotheses(
+        _result("}o", confidence=0.99),
+        [
+            {
+                **_result("o{", confidence=0.99),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+
+    assert resolved["text"] == "o{"
+
+
+def test_a_reversal_keeps_the_preliminary_value_and_asks_for_confirmation() -> None:
+    resolved = resolve_authoritative_hypotheses(
+        _result("10", confidence=0.99),
+        [
+            {
+                **_result("01", confidence=0.99),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+
+    assert resolved["text"] == "10"
+    assert resolved["numeric_conflict"]
+    # The value comes through either way; only an inspector can see which way
+    # up the drawing has it.
+    assert resolved["needs_review"]
+    assert resolved["authoritative_review_required"]
+    assert "opposite order" in resolved["review_reason"]
+
+
+def test_an_ordinary_disagreement_still_trusts_the_authoritative_read() -> None:
+    # Unchanged: the preliminary pass is a fast cost gate, not a second
+    # opinion, so a plain disagreement does not demote a complete value.
+    resolved = resolve_authoritative_hypotheses(
+        _result("518", confidence=0.30),
+        [
+            {
+                **_result("R1.4", confidence=0.95),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
+
+    assert resolved["text"] == "R1.4"
+    assert not resolved["needs_review"]

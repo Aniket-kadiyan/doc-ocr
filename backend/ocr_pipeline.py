@@ -52,12 +52,32 @@ from symbol_vision import (
     symbols_to_dict,
 )
 
+# Identifies the OCR package the running backend actually loaded, surfaced on
+# /health. The backend imports these modules once at startup, so editing them
+# changes nothing until `npm run ocr-api` is restarted -- and a scan from a
+# stale process is indistinguishable from a scan that found nothing, which has
+# cost real debugging time. Bump this whenever scan behaviour changes.
+OCR_CHANGESET_ID = "m2-p05-quarter-turn-gap-slant-margin-tables"
+
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
 # spot a fused read whose text collapsed to one value and hid the second.
 _PAGE_SPLIT_LINE_RATIO = 0.35
 # Long edge a slanted-callout neighbourhood is enlarged to before it is read.
 _ANGLED_MIN_EDGE = 700
+# A crop at least this much taller than it is wide might be upright text seen
+# sideways, so the page route reads it both ways and keeps the better answer.
+# Well below the 1.35 ratio ``is_vertical_dimension`` needs, because a one or
+# two glyph quarter-turn callout is close to square and that test calls it
+# horizontal.
+ROTATED_READING_RATIO = 0.8
+# ...but only for a crop compact enough to be one callout. A sheet's margin
+# boilerplate is a 38x566 strip of vertical prose: read along its own
+# direction it returns nothing, and read across it returns a short confident
+# number like "207" -- which, being a complete value, then outranks the empty
+# read. Eighteen of those reached one sheet's review queue. A strip that long
+# is a line of text, and the single oriented read it had before is right.
+ROTATED_READING_MAX_ASPECT = 6.0
 # Paddle confidence is expressed from 0.0 to 1.0.
 # This comparison is intentionally strict: exactly 0.95 continues.
 EARLY_ACCEPT_CONFIDENCE = 0.95
@@ -403,6 +423,7 @@ class OcrPipeline:
     @property
     def status(self) -> dict[str, Any]:
         return {
+            "ocr_changeset": OCR_CHANGESET_ID,
             "paddleocr": self._paddle_available,
             "paddleocr_version": self._paddle_version,
             "paddleocr_api": self._paddle_api,
@@ -560,8 +581,15 @@ class OcrPipeline:
         *,
         batch_size: int,
         profile: str = "batch_recognition",
+        reading_hints: Sequence[int | None] | None = None,
     ) -> list[dict[str, Any]]:
-        """Orient and recognize a crop batch without running text detection."""
+        """Orient and recognize a crop batch without running text detection.
+
+        ``reading_hints`` is the rotation the detector's own evidence favours
+        for each crop, where it has an opinion. It settles the case merit
+        cannot: both readings of a turned "10" are real numbers, so neither
+        the grammar nor the confidence can tell "10" from "01".
+        """
 
         if not getattr(self, "_page_batch_recognition_available", False):
             raise RuntimeError(
@@ -573,16 +601,51 @@ class OcrPipeline:
             return []
 
         from dimension_digits import correct_numeric_confusables
+        from page_value_filters import (
+            is_complete_engineering_value,
+            normalize_page_value_text,
+        )
 
-        if profile == "recovery_expanded_sharp":
-            prepared = [
-                sharpen_rgb(
-                    primary_oriented(upscale_min_edge(pad_image(crop)))
+        def prepare(crop: Image.Image, *, orient: bool) -> Image.Image:
+            """Prepare one crop, turning it only when asked to."""
+
+            if profile == "recovery_expanded_sharp":
+                base = upscale_min_edge(pad_image(crop))
+                return sharpen_rgb(
+                    primary_oriented(base, aspect_source=crop)
+                    if orient
+                    else base
                 )
-                for crop in crops
-            ]
-        else:
-            prepared = [prepare_primary_ocr_variant(crop)[1] for crop in crops]
+            return prepare_primary_ocr_variant(crop, orient=orient)[1]
+
+        # Read a crop both ways whenever its shape cannot say which way the
+        # text runs. The ratio test alone cannot: a quarter-turn "10" beside a
+        # dimension line is 54x62, taller than it is wide but nowhere near the
+        # 1.35 that test wants, so it was handed to the recogniser lying on its
+        # side and came back as "o" at 0.29 against "10" at 0.99 the right way
+        # up. A plainly horizontal line, and a strip of prose too long to be
+        # one callout, each keep the single oriented read they had before.
+        def direction_is_open(crop: Image.Image) -> bool:
+            long_edge = max(crop.width, crop.height)
+            short_edge = max(min(crop.width, crop.height), 1)
+            return (
+                crop.height > crop.width * ROTATED_READING_RATIO
+                and long_edge / short_edge <= ROTATED_READING_MAX_ASPECT
+            )
+
+        hypotheses: list[tuple[int, int, Image.Image]] = []
+        for index, crop in enumerate(crops):
+            open_direction = direction_is_open(crop)
+            hypotheses.append((index, 0, prepare(crop, orient=not open_direction)))
+            if open_direction:
+                turned = crop.rotate(
+                    -90,
+                    expand=True,
+                    fillcolor=(255, 255, 255),
+                )
+                hypotheses.append((index, 90, prepare(turned, orient=False)))
+
+        prepared = [image for _index, _rotation, image in hypotheses]
         orientations = self._predict_text_orientations(
             prepared,
             batch_size=batch_size,
@@ -598,12 +661,13 @@ class OcrPipeline:
             batch_size=batch_size,
         )
 
-        results: list[dict[str, Any]] = []
-        for crop, (raw_text, confidence), (degrees, orientation_score) in zip(
-            crops,
-            recognized,
-            orientations,
-        ):
+        by_crop: list[list[dict[str, Any]]] = [[] for _ in crops]
+        for (
+            (index, reading_rotation, _prepared),
+            (raw_text, confidence),
+            (degrees, orientation_score),
+        ) in zip(hypotheses, recognized, orientations):
+            crop = crops[index]
             fixed, corrected = correct_numeric_confusables(raw_text)
             text_hints = detect_prefix_from_ocr_text(fixed)
             composed = compose_engineering_dimension(
@@ -612,7 +676,7 @@ class OcrPipeline:
                 text_hints,
             )
             text = fix_engineering_symbols_light(composed.text).strip()
-            results.append(
+            by_crop[index].append(
                 {
                     "text": text,
                     "raw_ocr": raw_text,
@@ -629,13 +693,53 @@ class OcrPipeline:
                     "orientation": (
                         "vertical" if is_vertical_dimension(crop) else "horizontal"
                     ),
+                    # The box stays axis-aligned in page pixels; only the text
+                    # inside it was turned, so the geometry this feeds is
+                    # unaffected. The direction that won is reported beside it.
                     "rotation": 0,
+                    "reading_rotation_cw": reading_rotation,
                     "symbols_detected": symbols_to_dict(text_hints),
                     "orientation_correction": degrees,
                     "orientation_confidence": float(orientation_score),
                     "ocr_profile": profile,
                 }
             )
+
+        def reading_rank(
+            result: dict[str, Any],
+            hint: int | None,
+        ) -> tuple[float, float, float, float]:
+            """Rank one direction's read: a real value, the detector, then confidence."""
+
+            text = str(result.get("text") or "")
+            complete = is_complete_engineering_value(
+                normalize_page_value_text(text)
+            )
+            favoured = (
+                hint is not None
+                and int(result.get("reading_rotation_cw") or 0) == hint
+            )
+            return (
+                1.0 if complete else 0.0,
+                1.0 if text else 0.0,
+                1.0 if favoured else 0.0,
+                float(result.get("confidence") or 0.0),
+            )
+
+        results: list[dict[str, Any]] = []
+        for index, reads in enumerate(by_crop):
+            if not reads:
+                raise RuntimeError(
+                    "Page recognition produced no reading for a crop"
+                )
+            hint = (
+                reading_hints[index]
+                if reading_hints is not None and index < len(reading_hints)
+                else None
+            )
+            # Stable: an unturned read keeps a remaining tie, because it is
+            # listed first and ``max`` returns the earliest of equal keys.
+            results.append(max(reads, key=lambda read: reading_rank(read, hint)))
         return results
 
     def _run_paddle(
@@ -3413,6 +3517,10 @@ class OcrPipeline:
         image: Image.Image,
         base_regions: list[dict[str, Any]],
         det_boxes: list[dict[str, Any]] | None = None,
+        *,
+        max_rois: int = 3,
+        margin_frac: float = 1.0,
+        expand_frac: float = 0.2,
     ) -> list[dict[str, Any]]:
         """
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
@@ -3437,7 +3545,13 @@ class OcrPipeline:
         from region_detect import detect_leader_lines
 
         leaders = detect_leader_lines(image)
-        for x0, y0, x1, y1 in self._slant_neighbourhoods(image, det_boxes or []):
+        for x0, y0, x1, y1 in self._slant_neighbourhoods(
+            image,
+            det_boxes or [],
+            margin_frac=margin_frac,
+            expand_frac=expand_frac,
+            max_rois=max_rois,
+        ):
             sign = self._neighbourhood_sign(det_boxes or [], (x0, y0, x1, y1))
             roi = image.crop((x0, y0, x1, y1))
             leader_angles = self._leader_angles_for_roi(leaders, (x0, y0, x1, y1))
@@ -4326,6 +4440,7 @@ class OcrPipeline:
         from collections import Counter
 
         from detection_passes import (
+            DETECTION_TILE_MAX_INPUT_EDGE,
             DetectionTile,
             build_primary_detection_image,
             detection_primary_target_edge,
@@ -4341,13 +4456,17 @@ class OcrPipeline:
         from page_scan import (
             PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
             PAGE_SCAN_MAX_DETECTOR_CALLS,
+            PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
             PAGE_SCAN_MAX_TILES,
             PAGE_SCAN_RECOGNITION_BATCH_SIZE,
             PAGE_SCAN_ROTATIONS_CW,
+            PAGE_SCAN_SLANT_CONTEXT_MARGIN,
+            PAGE_SCAN_SLANT_MERGE_MARGIN,
             assign_candidate_ids,
             deduplicate_page_candidates,
             map_tile_candidate,
             overlaps_existing_value,
+            uncovered_gap_candidates,
         )
         from page_candidate_recovery import (
             CONTEXT_MAX_CANDIDATES,
@@ -4452,9 +4571,14 @@ class OcrPipeline:
         tile_total = len(tiles)
         if tile_total < 1 or tile_total > PAGE_SCAN_MAX_TILES:
             raise AssertionError("Whole-page layout exceeded eight panels")
-        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW)
+        # Two passes per panel at the render's own resolution, then two more
+        # over an enlarged panel to recover the text too small for the first.
+        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW) * 2
         if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
-            raise AssertionError("Whole-page scan exceeded sixteen detector calls")
+            raise AssertionError(
+                "Whole-page scan exceeded "
+                f"{PAGE_SCAN_MAX_DETECTOR_CALLS} detector calls"
+            )
         page_candidates = []
         panel_states = {
             panel.panel_id: "pending" for panel in layout.panels
@@ -4609,6 +4733,117 @@ class OcrPipeline:
                 ),
             )
 
+        # The primary passes above read whole callouts, because a panel at the
+        # render's own resolution gives the detector one box per value. They
+        # also walk past the smallest text on the sheet entirely. Enlarging
+        # the panel finds it, but the same enlargement splits the values the
+        # primary passes read correctly into their separate glyphs, and this
+        # route does no grouping -- scanning the whole page that way turned
+        # "0.5" into "5", lost "13.8±0.3" and published a dozen bare digits.
+        # So the enlarged passes run second and are only allowed to add an
+        # object where the primary passes found nothing at all.
+        primary_candidates = deduplicate_page_candidates(page_candidates)
+        gap_candidates: list[Any] = []
+        for tile_index, tile in enumerate(tiles, start=1):
+            panel_id = layout.panels[tile_index - 1].panel_id
+            tile_image = masked_page.crop(tile.box)
+            primary_image = build_primary_detection_image(tile_image)
+            native_edge = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+            )
+            gap_target_edge = detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+                max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+            )
+            if gap_target_edge <= native_edge:
+                detector_pass_index += len(PAGE_SCAN_ROTATIONS_CW)
+                continue
+            for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
+                detector_pass_index += 1
+                report(
+                    stage="detecting",
+                    message=(
+                        f"Running enlarged gap pass {detector_pass_index} of "
+                        f"{detector_pass_total}: panel {tile_index} of "
+                        f"{tile_total}, {rotation_cw} deg"
+                    ),
+                    percent=(
+                        12
+                        + int(
+                            40
+                            * (detector_pass_index - 1)
+                            / max(detector_pass_total, 1)
+                        )
+                    ),
+                    completed=detector_pass_index - 1,
+                    total=detector_pass_total,
+                    pass_current=detector_pass_index,
+                    pass_total=detector_pass_total,
+                    tile_current=tile_index,
+                    tile_total=tile_total,
+                    operation_label=(
+                        f"Panel {panel_id} · gap · {rotation_cw} deg · "
+                        f"{gap_target_edge}px"
+                    ),
+                    candidate_count=len(page_candidates),
+                )
+                rotated = rotate_for_detection(primary_image, rotation_cw)
+                for detected in self._detector_only_boxes(
+                    rotated,
+                    target_long_edge=gap_target_edge,
+                ):
+                    restored = map_quarter_turn_box_to_source(
+                        detected,
+                        rotation_cw,
+                        tile_image.size,
+                    )
+                    if restored is None:
+                        continue
+                    mapped = map_tile_candidate(
+                        {
+                            "x": restored["x"],
+                            "y": restored["y"],
+                            "width": restored["w"],
+                            "height": restored["h"],
+                        },
+                        tile,
+                        tile_index=tile_index,
+                        page_size=page_size,
+                        detection_confidence=float(restored.get("conf", 0.0)),
+                        pass_index=detector_pass_index,
+                        rotation_cw=rotation_cw,
+                        polygon=restored.get("polygon"),
+                    )
+                    if mapped is not None:
+                        gap_candidates.append(mapped)
+
+        recovered_gap_candidates = uncovered_gap_candidates(
+            gap_candidates,
+            primary_candidates,
+        )
+        page_candidates.extend(recovered_gap_candidates)
+        report(
+            stage="detecting",
+            message=(
+                f"Enlarged gap passes recovered "
+                f"{len(recovered_gap_candidates)} objects the primary passes "
+                f"did not see, from {len(gap_candidates)} detections"
+            ),
+            percent=53,
+            completed=detector_pass_total,
+            total=detector_pass_total,
+            pass_current=detector_pass_total,
+            pass_total=detector_pass_total,
+            tile_current=tile_total,
+            tile_total=tile_total,
+            operation_label="Enlarged gap passes complete",
+            candidate_count=len(page_candidates),
+        )
+
         report(
             stage="grouping",
             message=(
@@ -4676,6 +4911,7 @@ class OcrPipeline:
         primary_recognized_count = 0
         ocr_records: list[dict[str, Any]] = []
         candidate_crops: list[Image.Image] = []
+        candidate_reading_hints: list[int | None] = []
         for candidate in final_candidates:
             bbox = candidate.bbox
             x0 = max(0, int(bbox["x"] - margin))
@@ -4692,6 +4928,14 @@ class OcrPipeline:
                 image.crop((x0, y0, x1, y1))
                 if x1 > x0 and y1 > y0
                 else Image.new("RGB", (1, 1), (255, 255, 255))
+            )
+            # An object no upright pass ever saw is text written up the side
+            # of a view. Recognition reads every ambiguous crop both ways and
+            # keeps the better answer, but a short numeric callout reads as a
+            # real value either way -- the drawing's "10" came back as "01" --
+            # and this is the evidence that settles it.
+            candidate_reading_hints.append(
+                90 if candidate.quarter_turn_only else None
             )
 
         primary_batch_total = (
@@ -4738,6 +4982,7 @@ class OcrPipeline:
             batch_results = self._recognize_page_batch(
                 candidate_crops[batch_start:batch_end],
                 batch_size=PAGE_SCAN_RECOGNITION_BATCH_SIZE,
+                reading_hints=candidate_reading_hints[batch_start:batch_end],
             )
             if len(batch_results) != batch_end - batch_start:
                 raise RuntimeError(
@@ -5541,8 +5786,27 @@ class OcrPipeline:
         # only ADDS a value the upright passes missed; detected_count moves with
         # it so the state invariant below still balances.
         try:
+            # The defaults are tuned for a zoomed-in selection, where every
+            # diagonal callout belongs to one neighbourhood and a generous
+            # merge margin is what keeps a value with its deviation stack. A
+            # sheet is the opposite problem: inflating each diagonal box by
+            # its own size merges the whole centre of this drawing into one
+            # 2326x2211 region, 21% of the page. That region is then levelled
+            # by a SINGLE angle, while the callouts inside it sit at four --
+            # the bore stack near -60, "3.8±0.3" and "17" near -20, the R4.5
+            # leaders near -30, the chamfer near -55. So none of them is read.
+            #
+            # Merging tightly and expanding afterwards keeps each callout's
+            # context without pooling it with its neighbours: the same page
+            # goes from 8 neighbourhoods, one of them 21% of the sheet, to 16
+            # that are each under 0.2% of it.
             angled_regions = self._detect_angled_regions(
-                image, regions, det_boxes=self.detect_regions(image)
+                image,
+                regions,
+                det_boxes=self.detect_regions(image),
+                max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
+                margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
+                expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
             )
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
@@ -5747,7 +6011,13 @@ class OcrPipeline:
 
         padded = pad_image(image)
         prep = upscale_min_edge(padded)
-        oriented = primary_oriented(prep)
+        # The crop decides which way it reads, not the crop plus its 36px
+        # border: padding a 33x50 quarter-turn "10" gives 105x122, which the
+        # ratio test calls horizontal, so the authoritative read was taken
+        # with the text on its side and published "01" over a preliminary
+        # "10". ``vertical`` below has always asked the crop, so the two
+        # answers openly disagreed.
+        oriented = primary_oriented(prep, aspect_source=image)
         vertical = is_vertical_dimension(image)
 
         dumper.stage(

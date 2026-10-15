@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from PIL import Image
 
 from ocr_pipeline import OcrPipeline
@@ -314,7 +316,8 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
             }
         ]
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(crops, *, batch_size, profile="batch_recognition",
+                   reading_hints=None):
         assert batch_size == 16
         recognition_batches.append((profile, len(crops)))
         if profile == "batch_recognition":
@@ -518,7 +521,8 @@ def test_page_boundary_is_diagnostic_and_does_not_block_auto_acceptance() -> Non
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(crops, *, batch_size, profile="batch_recognition",
+                   reading_hints=None):
         assert batch_size == 16
         assert profile == "batch_recognition"
         return [
@@ -594,7 +598,8 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(crops, *, batch_size, profile="batch_recognition",
+                   reading_hints=None):
         assert batch_size == 16
         recognition_profiles.append(profile)
         return [
@@ -680,7 +685,8 @@ def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
             else []
         )
 
-    def fake_batch(crops, *, batch_size, profile="batch_recognition"):
+    def fake_batch(crops, *, batch_size, profile="batch_recognition",
+                   reading_hints=None):
         assert batch_size == 16
         recognition_profiles.append(profile)
         text = "8" if profile == "batch_recognition" else "B"
@@ -825,3 +831,116 @@ def test_paddle_prediction_limit_stops_after_one_call(monkeypatch) -> None:
 
     assert len(calls) == 1
     assert result[0] == "25.00"
+
+
+def _batch_pipeline(reads: dict[int, tuple[str, float]]) -> Any:
+    """A page pipeline whose recogniser answers per hypothesis index."""
+
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._page_batch_recognition_available = True
+    pipeline._text_orientation_available = True
+    pipeline._text_recognizer_available = True
+    pipeline.sizes: list[int] = []
+
+    class OrientationModule:
+        def predict(self, *, input, batch_size):
+            return [
+                {"res": {"label_names": ["0_degree"], "scores": [0.99]}}
+                for _item in input
+            ]
+
+    class RecognitionModule:
+        def predict(self, *, input, batch_size):
+            pipeline.sizes.append(len(input))
+            return [
+                {
+                    "res": {
+                        "rec_text": reads.get(index, ("", 0.0))[0],
+                        "rec_score": reads.get(index, ("", 0.0))[1],
+                    }
+                }
+                for index in range(len(input))
+            ]
+
+    pipeline._text_orientation = OrientationModule()
+    pipeline._text_recognizer = RecognitionModule()
+    return pipeline
+
+
+def test_a_quarter_turn_callout_is_read_both_ways_and_the_value_wins() -> None:
+    # The crop behind a quarter-turn "10" is 54x62 -- the ratio test calls it
+    # horizontal, so it reached the recogniser lying on its side and came back
+    # as "o" at 0.29 against "10" at 0.99 the right way up. Nothing about its
+    # shape can settle that, so both directions are read and the one that
+    # forms a value is kept.
+    pipeline = _batch_pipeline({0: ("o", 0.29), 1: ("10", 0.99)})
+
+    results = pipeline._recognize_page_batch(
+        [Image.new("RGB", (54, 62), "white")],
+        batch_size=16,
+    )
+
+    assert len(results) == 1
+    assert results[0]["text"] == "10"
+    assert results[0]["reading_rotation_cw"] == 90
+    # One recognition call, two hypotheses inside it.
+    assert pipeline.sizes == [2]
+
+
+def test_confidence_decides_when_neither_direction_reads_as_a_value() -> None:
+    # The real pair for a clipped vertical "0.5": neither read is a value, so
+    # the better one is still surfaced for an inspector to correct rather than
+    # the crop being dropped on the direction it happened to arrive in.
+    pipeline = _batch_pipeline({0: ("5\u3089.", 0.54), 1: (").5", 0.81)})
+
+    results = pipeline._recognize_page_batch(
+        [Image.new("RGB", (45, 82), "white")],
+        batch_size=16,
+    )
+
+    assert results[0]["text"] == ").5"
+    assert results[0]["reading_rotation_cw"] == 90
+
+
+def test_a_plainly_horizontal_crop_costs_one_read() -> None:
+    # A wide dimension line is not an open question, so it is not paid for
+    # twice -- and a turned read can never outvote it.
+    pipeline = _batch_pipeline({0: ("24", 0.99)})
+
+    results = pipeline._recognize_page_batch(
+        [Image.new("RGB", (120, 40), "white")],
+        batch_size=16,
+    )
+
+    assert results[0]["text"] == "24"
+    assert results[0]["reading_rotation_cw"] == 0
+    assert pipeline.sizes == [1]
+
+
+def test_an_unturned_read_keeps_a_tie() -> None:
+    pipeline = _batch_pipeline({0: ("12", 0.90), 1: ("21", 0.90)})
+
+    results = pipeline._recognize_page_batch(
+        [Image.new("RGB", (60, 62), "white")],
+        batch_size=16,
+    )
+
+    assert results[0]["text"] == "12"
+    assert results[0]["reading_rotation_cw"] == 0
+
+
+def test_a_prose_strip_keeps_its_single_oriented_read() -> None:
+    # A sheet's margin boilerplate is a tall strip of vertical prose. Read
+    # along its own direction it returns nothing; read across it returns a
+    # short confident number, which -- being a complete value -- would then
+    # outrank the empty read. Eighteen of those reached one sheet's review
+    # queue, so a strip too long to be one callout is not an open question.
+    pipeline = _batch_pipeline({0: ("207", 0.44)})
+
+    results = pipeline._recognize_page_batch(
+        [Image.new("RGB", (38, 566), "white")],
+        batch_size=16,
+    )
+
+    assert pipeline.sizes == [1]
+    assert results[0]["reading_rotation_cw"] == 0

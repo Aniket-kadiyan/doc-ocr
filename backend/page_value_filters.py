@@ -158,6 +158,15 @@ _CHAMFER_VALUE = _compile(
     rf"|{_ANGLE_MAGNITUDE}\s*[X×]\s*{_NUMBER}"
     rf")$"
 )
+# The same chamfer in the short form JIS and ISO drawings use, where the 45
+# degrees is implied and only the leg is printed: "C3", "C0.5", "CHF2". The
+# pattern above needs both the multiplication sign and the degree mark, so a
+# perfectly read "C3" matched no grammar at all and was dropped from a page
+# scan as "not one complete engineering value". The letter must carry a
+# number, which is what keeps a "C" zone label or a datum letter out.
+_SHORT_CHAMFER_VALUE = _compile(
+    rf"^(?:CHF|C)\s*{_NUMBER}(?:\s*(?:MM|MAX|MIN|TYP|REF)\.?)?$"
+)
 _THREAD_VALUE = _compile(
     rf"^M\s*\d+(?:\.\d+)?"
     rf"(?:\s*[X×]\s*{_NUMBER})?"
@@ -238,6 +247,7 @@ def _is_single_value(value: str) -> bool:
         or _LINEAR_VALUE.fullmatch(value)
         or _THREAD_VALUE.fullmatch(value)
         or _STANDALONE_TOLERANCE.fullmatch(value)
+        or _SHORT_CHAMFER_VALUE.fullmatch(value)
     )
 
 
@@ -272,6 +282,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _LINEAR_VALUE.fullmatch(value):
         return True
     if _CHAMFER_VALUE.fullmatch(value):
+        return True
+    if _SHORT_CHAMFER_VALUE.fullmatch(value):
         return True
     if _THREAD_VALUE.fullmatch(value):
         return True

@@ -162,9 +162,22 @@ def is_vertical_dimension(img: Image.Image) -> bool:
     return h > w * 1.35
 
 
-def orientations_for_ocr(img: Image.Image) -> list[tuple[str, Image.Image]]:
-    """Try both rotations for vertical CAD text (primary: -90° / CW)."""
-    if not is_vertical_dimension(img):
+def orientations_for_ocr(
+    img: Image.Image,
+    *,
+    aspect_source: Image.Image | None = None,
+) -> list[tuple[str, Image.Image]]:
+    """Try both rotations for vertical CAD text (primary: -90° / CW).
+
+    ``aspect_source`` is the image whose shape decides the question, for
+    callers that have already padded ``img``. The pad is a fixed 36px on every
+    side, which is large next to a CAD callout: it turns a 45x82 crop -- a
+    vertical "0.5", comfortably past the ratio below -- into 212x280, which is
+    not, so the text was never turned upright and read back as "5,0". The
+    decision belongs to the crop, not to the crop plus its margin.
+    """
+    probe = img if aspect_source is None else aspect_source
+    if not is_vertical_dimension(probe):
         return [("h", img)]
 
     fill = (255, 255, 255)
@@ -174,9 +187,14 @@ def orientations_for_ocr(img: Image.Image) -> list[tuple[str, Image.Image]]:
     ]
 
 
-def primary_oriented(img: Image.Image) -> Image.Image:
+def primary_oriented(
+    img: Image.Image,
+    *,
+    aspect_source: Image.Image | None = None,
+) -> Image.Image:
     """Vertical CAD text → rotate -90° (CW) for left-to-right OCR."""
-    if not is_vertical_dimension(img):
+    probe = img if aspect_source is None else aspect_source
+    if not is_vertical_dimension(probe):
         return img
     return img.rotate(-90, expand=True, fillcolor=(255, 255, 255))
 
@@ -216,7 +234,7 @@ def prepare_ocr_variants(img: Image.Image) -> list[tuple[str, Image.Image]]:
     base = upscale_min_edge(pad_image(img))
     variants: list[tuple[str, Image.Image]] = []
 
-    for oname, oriented in orientations_for_ocr(base):
+    for oname, oriented in orientations_for_ocr(base, aspect_source=img):
         variants.extend(
             [
                 (f"{oname}_clahe", clahe_rgb(oriented)),
@@ -237,9 +255,22 @@ def prepare_ocr_variants(img: Image.Image) -> list[tuple[str, Image.Image]]:
     return variants
 
 
-def prepare_primary_ocr_variant(img: Image.Image) -> tuple[str, Image.Image]:
-    """Build only the first variant used by the fast single-pass profile."""
+def prepare_primary_ocr_variant(
+    img: Image.Image,
+    *,
+    orient: bool = True,
+) -> tuple[str, Image.Image]:
+    """Build only the first variant used by the fast single-pass profile.
+
+    ``orient=False`` keeps the crop exactly as given. Callers that resolve a
+    crop's reading direction themselves -- by reading it both ways and keeping
+    the better answer -- need the preparation without this guess, because the
+    ratio test cannot speak for a one or two glyph callout: a quarter-turn "10"
+    is 54x62, no taller than it is wide.
+    """
 
     base = upscale_min_edge(pad_image(img))
-    orientation_name, oriented = orientations_for_ocr(base)[0]
+    if not orient:
+        return "h_clahe", clahe_rgb(base)
+    orientation_name, oriented = orientations_for_ocr(base, aspect_source=img)[0]
     return f"{orientation_name}_clahe", clahe_rgb(oriented)

@@ -153,3 +153,64 @@ def test_a_framed_sheet_does_not_grow_cells_out_to_the_paper() -> None:
     # Nothing between the frame and the paper is a table cell.
     assert not any(_contains(mask, 10, 180) for mask in masks)
     assert not any(_contains(mask, width - 10, 180) for mask in masks)
+
+
+def _sheet_with_a_margin_legend() -> Image.Image:
+    """A sheet-proportioned page: a wide title block and a narrow margin table."""
+
+    image = Image.new("RGB", (2400, 1700), "white")
+    draw = ImageDraw.Draw(image)
+
+    # The boilerplate legend down the left margin: rules only 78px long on a
+    # 2400px page, well under the page-wide "a rule is long" threshold.
+    left, right = 40, 118
+    for index in range(12):
+        y = 500 + index * 60
+        draw.line((left, y, right, y), fill="black", width=2)
+    draw.line((left, 500, left, 500 + 11 * 60), fill="black", width=2)
+    draw.line((right, 500, right, 500 + 11 * 60), fill="black", width=2)
+    draw.line((79, 500, 79, 500 + 11 * 60), fill="black", width=2)
+
+    # A title block across the bottom, which the page-wide pass already finds.
+    for index in range(4):
+        y = 1500 + index * 50
+        draw.line((900, y, 2300, y), fill="black", width=2)
+    for x in (900, 1600, 2300):
+        draw.line((x, 1500, x, 1650), fill="black", width=2)
+
+    # An ordinary drawing rectangle in the middle must stay unmasked.
+    draw.rectangle((700, 300, 1500, 900), outline="black", width=2)
+    return image
+
+
+def test_a_narrow_margin_legend_is_masked_like_any_other_table() -> None:
+    # A rule counts as a rule by being long relative to the page, which is
+    # right for a title block spanning the sheet and wrong for the boilerplate
+    # column down a margin. This drawing's tolerance legend ruled its rows
+    # over 190px of a 5875px page, so not one row was found and every garbled
+    # label in it was ballooned as a value.
+    masks = detect_table_masks(_sheet_with_a_margin_legend())
+
+    legend = [
+        mask
+        for mask in masks
+        if mask.x < 200 and mask.y < 1200 and mask.y1 > 700
+    ]
+    assert legend, [ (m.x, m.y, m.width, m.height) for m in masks ]
+    covered = legend[0]
+    assert covered.y <= 520 and covered.y1 >= 1040
+
+    # The drawing rectangle in the middle is not a table.
+    assert not [
+        mask
+        for mask in masks
+        if mask.x > 600 and mask.x1 < 1600 and mask.y > 250 and mask.y1 < 1000
+    ]
+
+
+def test_the_margin_pass_does_not_run_on_a_small_section() -> None:
+    # The band would be a few pixels wide, so there is nothing to measure
+    # against and the page-wide pass stands alone.
+    masks = detect_table_masks(synthetic_drawing())
+
+    assert all(mask.width >= 2 and mask.height >= 2 for mask in masks)

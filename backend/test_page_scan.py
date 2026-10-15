@@ -10,6 +10,8 @@ from page_scan import (
     map_tile_candidate,
     overlaps_existing_value,
     strict_same_object,
+    looks_like_a_small_callout,
+    uncovered_gap_candidates,
 )
 
 
@@ -125,3 +127,103 @@ def test_existing_balloon_overlap_uses_the_smaller_box() -> None:
     assert bbox_overlap_fraction(detector_box, saved_box) > 0.55
     assert overlaps_existing_value(detector_box, (saved_box,))
     assert not overlaps_existing_value(detector_box, (neighbour,))
+
+
+def _candidate(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    *,
+    rotation_cw: int = 0,
+):
+    tile = DetectionTile(x=0, y=0, width=2600, height=1500)
+    mapped = map_tile_candidate(
+        {"x": x, "y": y, "width": width, "height": height},
+        tile,
+        tile_index=1,
+        page_size=(2600, 1500),
+        rotation_cw=rotation_cw,
+    )
+    assert mapped is not None
+    return mapped
+
+
+def test_an_enlarged_pass_only_speaks_where_the_primary_passes_were_silent() -> None:
+    # An enlarged panel resolves "0.5" into "0" and "5" as well as finding the
+    # quarter-turn "10" the primary passes missed entirely. This route does no
+    # grouping, so the glyphs have to be dropped and only the new object kept.
+    primary = [_candidate(500, 400, 120, 44)]
+    glyph_of_a_value = _candidate(500, 400, 40, 44)
+    second_glyph = _candidate(580, 400, 40, 44)
+    new_object = _candidate(1200, 900, 33, 48, rotation_cw=90)
+
+    kept = uncovered_gap_candidates(
+        [glyph_of_a_value, second_glyph, new_object],
+        primary,
+    )
+
+    assert [candidate.bbox for candidate in kept] == [new_object.bbox]
+
+
+def test_a_gap_object_records_the_only_rotation_that_saw_it() -> None:
+    # Which pass found an object is the one reliable signal for a short
+    # callout: "10" turned on its side is no taller than it is wide, and both
+    # readings of it are real numbers.
+    quarter_turn = _candidate(1200, 900, 33, 48, rotation_cw=90)
+
+    assert quarter_turn.rotations_cw == (90,)
+    assert quarter_turn.quarter_turn_only
+
+
+def test_duplicate_views_pool_the_rotations_that_saw_the_object() -> None:
+    # The surviving box loses its duplicates, but which passes saw the object
+    # is evidence about the object, so it has to outlive the box that carried
+    # it -- otherwise every candidate looks quarter-turn-only or none does.
+    upright = _candidate(500, 400, 120, 44, rotation_cw=0)
+    turned = _candidate(502, 401, 118, 45, rotation_cw=90)
+
+    accepted = deduplicate_page_candidates([upright, turned])
+
+    assert len(accepted) == 1
+    assert accepted[0].rotations_cw == (0, 90)
+    assert not accepted[0].quarter_turn_only
+
+
+def test_a_gap_object_has_to_look_like_the_text_a_gap_pass_is_for() -> None:
+    # Every box below is one the enlarged passes really offered on
+    # 129E01-13300-ID, with what the recogniser made of it.
+    recovered_quarter_turn_ten = {"x": 2201, "y": 3157, "width": 34, "height": 50}
+    assert looks_like_a_small_callout(recovered_quarter_turn_ten)
+    for small_callout in (
+        {"x": 97, "y": 3480, "width": 18, "height": 50},
+        {"x": 226, "y": 3391, "width": 38, "height": 38},
+        {"x": 2034, "y": 686, "width": 25, "height": 24},
+    ):
+        assert looks_like_a_small_callout(small_callout), small_callout
+
+    # The sheet margin's boilerplate, set in a vertical strip. No primary pass
+    # could have missed text this size, so it is not a gap.
+    for margin_strip in (
+        {"x": 100, "y": 1988, "width": 39, "height": 622},
+        {"x": 102, "y": 1582, "width": 38, "height": 566},
+        {"x": 191, "y": 1602, "width": 35, "height": 537},
+        {"x": 212, "y": 2729, "width": 39, "height": 370},
+    ):
+        assert not looks_like_a_small_callout(margin_strip), margin_strip
+
+    # Ink that is not writing: an arrowhead or a centre mark, each of which
+    # read back as a confident "1".
+    for speck in (
+        {"x": 2501, "y": 1197, "width": 11, "height": 7},
+        {"x": 3355, "y": 1614, "width": 17, "height": 11},
+        {"x": 3448, "y": 1641, "width": 19, "height": 16},
+    ):
+        assert not looks_like_a_small_callout(speck), speck
+
+
+def test_shape_and_size_are_checked_before_clearance() -> None:
+    # A margin strip standing in empty space is still not a value.
+    strip = _candidate(100, 500, 39, 622)
+
+    assert uncovered_gap_candidates([strip], []) == []

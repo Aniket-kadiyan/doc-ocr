@@ -968,6 +968,44 @@ def _merge_equivalent_symbol_evidence(
     )
 
 
+def reads_are_a_half_turn_apart(left: str, right: str) -> bool:
+    """Whether two reads are the same characters in the opposite order.
+
+    The authoritative pass runs the complete PaddleOCR pipeline, whose own
+    text-line orientation step re-decides 0 against 180 degrees on a crop
+    whose direction the caller has already resolved. On a short numeric
+    callout there is nothing in the ink to decide it with -- "10" upside down
+    is "01", "12" is "21" -- and the classifier commits at 0.99. One sheet
+    published "01" twice, "21" twice, "11" and "02" that way, each over a
+    preliminary read that had it right.
+
+    A reversal is therefore not a second opinion about the value; it is the
+    same read with its direction flipped, and it is not evidence that the
+    preliminary read was wrong. Two or more characters, because a single
+    character is its own reverse.
+
+    Only letters and digits are compared. Punctuation does not survive a
+    flip in any predictable place -- the leader line touching the real "10"
+    crop read as a leading dot, so the pair was ".10" against "01" and an
+    exact comparison did not see the reversal it plainly is.
+    """
+
+    def letters_and_digits(text: str) -> str:
+        return "".join(
+            character
+            for character in str(text or "")
+            if character.isalnum()
+        )
+
+    left_compact = letters_and_digits(left)
+    right_compact = letters_and_digits(right)
+    return bool(
+        len(left_compact) > 1
+        and left_compact != right_compact
+        and left_compact == right_compact[::-1]
+    )
+
+
 def resolve_authoritative_hypotheses(
     preliminary: Mapping[str, Any],
     attempts: Sequence[Mapping[str, Any]],
@@ -1019,7 +1057,29 @@ def resolve_authoritative_hypotheses(
         authoritative_doubtful = not is_complete_engineering_value(
             authoritative_text
         )
-        if numeric_conflict and authoritative_doubtful:
+        # A reversal is the authoritative pipeline's orientation step
+        # disagreeing about which way the crop reads, not about what it says.
+        # The preliminary read resolved that direction from the detector's own
+        # evidence, so it is kept -- and the pair still goes to an inspector,
+        # who is the only one who can see which way up the drawing has it.
+        # It is only worth keeping if it is a complete value in its own right,
+        # because the fast pass returns plenty of text that merely happens to
+        # reverse into one.
+        half_turn_conflict = (
+            numeric_conflict
+            and reads_are_a_half_turn_apart(
+                preliminary_text,
+                authoritative_text,
+            )
+            and is_complete_engineering_value(preliminary_text)
+        )
+        if half_turn_conflict:
+            final_text = preliminary_text
+            review_reason = (
+                "Preliminary and authoritative OCR read the same characters "
+                "in opposite order; the crop's reading direction is ambiguous"
+            )
+        elif numeric_conflict and authoritative_doubtful:
             final_text = authoritative_text
             review_reason = (
                 "Preliminary and target-locked authoritative OCR disagree on "
@@ -1031,16 +1091,18 @@ def resolve_authoritative_hypotheses(
                 preliminary_text,
             )
             review_reason = ""
+        needs_confirmation = bool(
+            half_turn_conflict
+            or (numeric_conflict and authoritative_doubtful)
+        )
         resolved.update(
             text=final_text,
-            needs_review=bool(numeric_conflict and authoritative_doubtful),
+            needs_review=needs_confirmation,
             numeric_conflict=numeric_conflict,
             # Must track needs_review: a bare disagreement with the fast
             # preliminary pass is not grounds to stop the inspector, so it
             # cannot force confirmation through this flag either.
-            authoritative_review_required=bool(
-                numeric_conflict and authoritative_doubtful
-            ),
+            authoritative_review_required=needs_confirmation,
             review_reason=review_reason,
             authoritative_reread=True,
             preliminary_text=preliminary_text,

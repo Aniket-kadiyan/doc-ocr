@@ -19,12 +19,50 @@ from detection_passes import DetectionTile
 
 PAGE_SCAN_ROTATIONS_CW = (0, 90)
 PAGE_SCAN_MAX_TILES = 8
-PAGE_SCAN_MAX_DETECTOR_CALLS = 16
+# Two detector calls per panel at the render's own resolution, and two more
+# over an enlarged panel to recover the text too small for the first pair.
+PAGE_SCAN_MAX_DETECTOR_CALLS = 32
+# A gap object has to stand clear of everything the primary passes found. The
+# threshold is deliberately low: an enlarged panel resolves a callout into its
+# separate glyphs, and this route does no grouping, so a box that merely
+# touches a value already read is a fragment of it and not a new object.
+GAP_CANDIDATE_CLEARANCE = 0.2
+# A gap object also has to look like the thing the primary passes miss, which
+# is a small compact callout. Both bounds are in the pixels of the 250dpi
+# render this route scans, where a CAD character stands about 30 to 40 high.
+#
+# The shape bound is what the sheet margin runs into: a drawing's boilerplate
+# is set in a vertical strip, and the enlarged pass offered nine of those as
+# values -- 39x622, 38x566, 35x537 -- none of which a primary pass could have
+# missed. The size bound is for the ink that is not writing at all: an
+# arrowhead or a centre mark at 11x7 reads as a confident "1".
+GAP_CANDIDATE_MAX_ASPECT = 6.0
+GAP_CANDIDATE_MIN_SHORT_EDGE = 12.0
+GAP_CANDIDATE_MIN_LONG_EDGE = 20.0
 # Preserve approximately the text scale that worked in selection scans without
 # restoring the selection cascade. The shared detector still caps at 2400px.
 PAGE_SCAN_DETECTOR_MIN_LONG_EDGE = 2000
 PAGE_SCAN_RECOGNITION_BATCH_SIZE = 16
 EXISTING_VALUE_OVERLAP_THRESHOLD = 0.55
+# Diagonal neighbourhoods the slanted-callout pass may work through on a whole
+# sheet, and how tightly it groups them. A selection holds its angled callouts
+# in one or two places; a sheet spreads them over every view, at a different
+# angle in each, and each neighbourhood is levelled by one angle only. See the
+# call site for what the selection-sized defaults do to a full sheet.
+PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS = 24
+# Measured on 129E01-13300-ID, whose middle view packs four angles together.
+# The merge margin is what decides how much lands in one neighbourhood, and a
+# neighbourhood is levelled by one angle only, so it is the whole story:
+#   1.00 (the selection default): 8 groups, one of them 21% of the sheet,
+#         and "3.8±0.3", "(28°)", "17" and "R2" all inside it, none read.
+#   0.35: 16 groups, "R4.5" and "R25" come back, the other three still fuse
+#         into one read, "3.8±0.37(28°)R2".
+#   0.15: 23 groups, "(28°)" separates, "17" still fuses onto "3.8±0.3".
+#   0.08: 23 groups, and "3.8±0.3" and "(28°)" both read on their own.
+# Context is added back AFTER grouping, which is what keeps a value with its
+# deviation stack at a margin this tight.
+PAGE_SCAN_SLANT_MERGE_MARGIN = 0.08
+PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
 
 
 def bbox_overlap_fraction(
@@ -77,8 +115,20 @@ class PageCandidate:
     detection_confidence: float = 0.0
     pass_index: int = 0
     rotation_cw: int = 0
+    #: Every rotation whose detector pass produced this object. A box seen
+    #: only by the quarter-turn pass is text written up the side of a view,
+    #: and that is the one reliable signal for a one or two glyph callout:
+    #: "10" turned on its side is no taller than it is wide, so its shape
+    #: cannot say which way it reads and both readings are real numbers.
+    rotations_cw: tuple[int, ...] = ()
     polygon: tuple[tuple[float, float], ...] = ()
     candidate_id: str = ""
+
+    @property
+    def quarter_turn_only(self) -> bool:
+        """Whether no upright pass ever saw this object."""
+
+        return bool(self.rotations_cw) and set(self.rotations_cw) == {90}
 
 
 def _candidate_boundary_clearance(
@@ -185,6 +235,7 @@ def map_tile_candidate(
         detection_confidence=float(detection_confidence),
         pass_index=pass_index,
         rotation_cw=rotation_cw,
+        rotations_cw=(rotation_cw,),
         polygon=tuple(page_polygon),
     )
 
@@ -276,12 +327,27 @@ def deduplicate_page_candidates(
     )
     accepted: list[PageCandidate] = []
     for candidate in preferred_first:
-        duplicate = any(
-            strict_same_object(existing.bbox, candidate.bbox)
-            for existing in accepted
+        duplicate = next(
+            (
+                index
+                for index, existing in enumerate(accepted)
+                if strict_same_object(existing.bbox, candidate.bbox)
+            ),
+            None,
         )
-        if not duplicate:
+        if duplicate is None:
             accepted.append(candidate)
+            continue
+        # The box is dropped, but which passes saw this object is evidence
+        # about the object and not about the box that won, so it is carried
+        # over. Without this every candidate looks like it was found by one
+        # rotation and "only the quarter turn saw it" means nothing.
+        kept = accepted[duplicate]
+        merged = tuple(
+            sorted(set(kept.rotations_cw) | set(candidate.rotations_cw))
+        )
+        if merged != kept.rotations_cw:
+            accepted[duplicate] = replace(kept, rotations_cw=merged)
 
     return sorted(
         accepted,
@@ -291,6 +357,50 @@ def deduplicate_page_candidates(
             candidate.tile_index,
         ),
     )
+
+
+def looks_like_a_small_callout(bbox: Mapping[str, float]) -> bool:
+    """Whether a box has the shape and size of the text a gap pass is for."""
+
+    width = float(bbox["width"])
+    height = float(bbox["height"])
+    long_edge = max(width, height)
+    short_edge = max(min(width, height), 1.0)
+    if short_edge < GAP_CANDIDATE_MIN_SHORT_EDGE:
+        return False
+    if long_edge < GAP_CANDIDATE_MIN_LONG_EDGE:
+        return False
+    return long_edge / short_edge <= GAP_CANDIDATE_MAX_ASPECT
+
+
+def uncovered_gap_candidates(
+    gap_candidates: list[PageCandidate],
+    covered: list[PageCandidate],
+    *,
+    clearance: float = GAP_CANDIDATE_CLEARANCE,
+) -> list[PageCandidate]:
+    """Keep only the enlarged-pass objects that sit where nothing was found.
+
+    The primary passes see a panel at the render's own resolution, where they
+    read whole callouts but walk past the smallest text on the sheet: a "10"
+    turned up the side of a view is two ~35px glyphs and is detected at
+    neither rotation. Enlarging the panel finds it -- and also splits "0.5"
+    into "0" and "5", and "13.8±0.3" into pieces, because a detector given
+    more pixels resolves more boxes. So the enlarged pass is not allowed to
+    replace anything: it may only speak where the primary passes were silent,
+    which is the one place a fragment is better than nothing -- and only
+    about something shaped like the small callout it is there to recover.
+    """
+
+    return [
+        candidate
+        for candidate in gap_candidates
+        if looks_like_a_small_callout(candidate.bbox)
+        and not any(
+            bbox_overlap_fraction(candidate.bbox, existing.bbox) >= clearance
+            for existing in covered
+        )
+    ]
 
 
 def assign_candidate_ids(

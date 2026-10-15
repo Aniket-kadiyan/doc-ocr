@@ -9,7 +9,10 @@ from PIL import Image
 from detection_passes import (
     DETECTION_PRIMARY_MAX_EDGE,
     DETECTION_ROTATIONS_CW,
+    DETECTION_TILE_MAX_INPUT_EDGE,
+    DETECTION_TILE_MAX_ZOOM,
     DETECTION_VARIANTS,
+    DetectionTile,
     build_detection_pass_plan,
     build_refinement_regions,
     build_detection_tiles,
@@ -441,3 +444,51 @@ def test_morphology_is_used_even_when_the_pass_plan_runs(monkeypatch) -> None:
     assert len(boxes) == 1
     assert boxes[0]["_detection_pass"] == "morphology"
     assert boxes[0]["conf"] == 0.0
+
+
+def test_a_page_panel_fills_the_detector_input_budget() -> None:
+    # Without a budget every panel of a real sheet reaches the detector at the
+    # render's own resolution: the page is always longer than the primary pass
+    # target, so the scale-preserving rule clamps to 1.0. At 250dpi panel
+    # pixels a quarter-turn "10" is two ~35px glyphs and is not detected at
+    # either rotation, and a "C3" chamfer is covered less than half.
+    page = (5875, 4156)
+    panel = DetectionTile(x=1616, y=1988, width=2576, height=1434)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=page,
+        pass_target_edge=2400,
+    ) == 2576
+    assert detection_tile_target_edge(
+        panel,
+        full_size=page,
+        pass_target_edge=2400,
+        max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+    ) == DETECTION_TILE_MAX_INPUT_EDGE
+
+
+def test_a_small_panel_is_enlarged_by_the_zoom_cap_not_the_edge() -> None:
+    # The budget is a ceiling, not a target: a panel small enough to reach it
+    # would otherwise be blown up far past any useful glyph size.
+    panel = DetectionTile(x=0, y=0, width=600, height=900)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=(1800, 900),
+        pass_target_edge=2400,
+        max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+    ) == int(900 * DETECTION_TILE_MAX_ZOOM)
+
+
+def test_the_budget_never_lowers_a_preserved_pass_scale() -> None:
+    # A section small enough that the full pass would have enlarged it keeps
+    # that enlargement; the budget only spends what is left over.
+    panel = DetectionTile(x=0, y=0, width=300, height=500)
+
+    assert detection_tile_target_edge(
+        panel,
+        full_size=(500, 300),
+        pass_target_edge=5000,
+        max_input_edge=1200,
+    ) == 5000

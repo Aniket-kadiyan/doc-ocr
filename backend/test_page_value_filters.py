@@ -314,6 +314,24 @@ def test_a_chamfer_is_a_complete_value() -> None:
         assert decision.rule_name == "engineering_value", text
 
 
+def test_the_short_chamfer_form_is_a_complete_value() -> None:
+    # JIS and ISO drawings print a 45 degree chamfer as its leg alone, so the
+    # pattern above -- which needs both the multiplication sign and the degree
+    # mark -- matched nothing and a perfectly read "C3" was dropped from the
+    # page scan as "not one complete engineering value".
+    for text in ("C3", "C0.5", "C 3", "CHF2", "C3MAX", "C2.5 REF"):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, text
+        assert decision.rule_name == "engineering_value", text
+
+
+def test_a_bare_letter_is_not_a_chamfer() -> None:
+    # The letter has to carry a number, which is what keeps a datum letter and
+    # a zone label out of the short form above.
+    for text in ("C", "CC", "CHF", "A3", "B2"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
 def test_a_qualifier_needs_no_space_in_front_of_it() -> None:
     # OCR returns "Ø52.5REF" for "Ø52.5 REF". The space-less form used to pass
     # only by falling through to the compact-identifier rule, whose character

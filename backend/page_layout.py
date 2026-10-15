@@ -29,6 +29,17 @@ LAYOUT_PANEL_OVERLAP_MIN = 24
 LAYOUT_PANEL_OVERLAP_MAX = 80
 
 TABLE_MASK_PADDING_RATIO = 0.002
+# Width of the left and right margin strips that get a table pass of their own,
+# as a fraction of the sheet. A rule only counts as a rule if it is long
+# relative to the page, which is the right test for a title block spanning the
+# sheet and the wrong one for the boilerplate column down a margin: this
+# drawing's geometric-tolerance legend rules its rows over 190px of a 5875px
+# page, just under the threshold, so not one row was found and every garbled
+# label in it -- "3D-CAD", "A3", "CONCENTRICITY TOLERANCE" -- was ballooned.
+# Measuring against the strip instead finds them. Lowering the page-wide
+# threshold to reach them does not work: at 0.025 it starts calling the pipe
+# outlines and their centre lines a grid, and masks real dimensions.
+TABLE_MASK_MARGIN_BAND_RATIO = 0.08
 
 
 @dataclass(frozen=True)
@@ -594,6 +605,64 @@ def _discard_mostly_contained_boxes(
     return accepted
 
 
+def _grid_masks(
+    ink: np.ndarray,
+    *,
+    page_width: int,
+    page_height: int,
+) -> list[LayoutBox]:
+    """Repeated-cell grids in one ink map, in that map's own coordinates."""
+
+    tolerance = max(2, int(round(min(page_width, page_height) / 500)))
+    cells = _detect_grid_cells(
+        _extract_axis_lines(ink, horizontal=True),
+        _extract_axis_lines(ink, horizontal=False),
+        page_width=page_width,
+        page_height=page_height,
+        tolerance=tolerance,
+    )
+    repeated_cells = _retain_repeated_cell_groups(
+        cells,
+        tolerance=tolerance * 2,
+    )
+    return _discard_mostly_contained_boxes(
+        _merge_rectangular_cells(repeated_cells, tolerance=tolerance * 2)
+    )
+
+
+def _margin_band_masks(
+    ink: np.ndarray,
+    *,
+    width: int,
+    height: int,
+) -> list[LayoutBox]:
+    """Grids in the sheet's margin strips, measured against the strip.
+
+    A drawing keeps its boilerplate down the margins, and a narrow table's
+    rules are short in page terms however obviously they rule a table. Running
+    the same detection over the strip alone restores the proportion the
+    page-wide pass assumes. Spurious grids here cost nothing: the strips hold
+    the border and the boilerplate, not dimensions.
+    """
+
+    band = int(round(width * TABLE_MASK_MARGIN_BAND_RATIO))
+    if band < 64:
+        return []
+
+    masks: list[LayoutBox] = []
+    for x0 in (0, max(0, width - band)):
+        x1 = min(width, x0 + band)
+        if x1 - x0 < 64:
+            continue
+        for box in _grid_masks(
+            ink[:, x0:x1],
+            page_width=x1 - x0,
+            page_height=height,
+        ):
+            masks.append(LayoutBox(box.x + x0, box.y, box.width, box.height))
+    return masks
+
+
 def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
     """Detect every repeated-cell grid that should be masked in page scans."""
 
@@ -602,30 +671,15 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
         return ()
 
     ink = _ink_map(image)
-    horizontal = _extract_axis_lines(ink, horizontal=True)
-    vertical = _extract_axis_lines(ink, horizontal=False)
     intersection_tolerance = max(2, int(round(min(width, height) / 500)))
     padding = max(
         2,
         int(round(min(width, height) * TABLE_MASK_PADDING_RATIO)),
     )
 
-    cells = _detect_grid_cells(
-        horizontal,
-        vertical,
-        page_width=width,
-        page_height=height,
-        tolerance=intersection_tolerance,
-    )
-    repeated_cells = _retain_repeated_cell_groups(
-        cells,
-        tolerance=intersection_tolerance * 2,
-    )
     boxes = _discard_mostly_contained_boxes(
-        _merge_rectangular_cells(
-            repeated_cells,
-            tolerance=intersection_tolerance * 2,
-        )
+        _grid_masks(ink, page_width=width, page_height=height)
+        + _margin_band_masks(ink, width=width, height=height)
     )
     padded: list[LayoutBox] = []
     for box in boxes:

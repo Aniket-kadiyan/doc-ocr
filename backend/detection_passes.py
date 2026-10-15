@@ -48,6 +48,14 @@ DETECTION_COVERAGE_RATIO = 0.55
 DETECTION_TILE_MAX_EDGE = 2000
 DETECTION_TILE_OVERLAP = 160
 
+# How far a single tile may be enlarged before the detector sees it, and the
+# input edge that enlargement is allowed to reach. The detector-only path
+# raises PaddleOCR's own side limit per call, so this bound is ours: 4000 is
+# where that limit sits by default and where memory stays reasonable for a
+# panel of a sheet.
+DETECTION_TILE_MAX_INPUT_EDGE = 4000
+DETECTION_TILE_MAX_ZOOM = 2.0
+
 
 @dataclass(frozen=True)
 class DetectionPassSpec:
@@ -140,13 +148,31 @@ def detection_tile_target_edge(
     *,
     full_size: tuple[int, int],
     pass_target_edge: int,
+    max_input_edge: int | None = None,
 ) -> int:
-    """Preserve a full-pass scale when PaddleOCR receives only one tile."""
+    """Preserve a full-pass scale when PaddleOCR receives only one tile.
+
+    ``max_input_edge`` instead spends whatever detector input budget the
+    preserved scale leaves unused, which is what the whole-page route's gap
+    passes ask for. A sheet-sized page always clamps ``scale`` to 1.0, so a
+    panel otherwise reaches the detector at its own render resolution: good
+    for reading whole callouts, but a "10" written up the side of a view is
+    two ~35px glyphs there and is detected at neither rotation. The enlarged
+    edge finds it -- and splits callouts the native edge read whole, which is
+    why only the gap passes use it.
+    """
 
     full_long_edge = max(full_size)
     tile_long_edge = max(tile.width, tile.height)
     scale = max(1.0, pass_target_edge / max(full_long_edge, 1))
-    return max(tile_long_edge, int(round(tile_long_edge * scale)))
+    preserved = max(tile_long_edge, int(round(tile_long_edge * scale)))
+    if max_input_edge is None:
+        return preserved
+    budget = min(
+        int(max_input_edge),
+        int(round(tile_long_edge * DETECTION_TILE_MAX_ZOOM)),
+    )
+    return max(preserved, budget)
 
 
 def offset_tile_box(
