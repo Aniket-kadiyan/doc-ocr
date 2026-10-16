@@ -12,15 +12,18 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import type { PageReferenceTable } from "@/types/referencePoint";
+import { normalizePageReferenceTables } from "@/lib/referenceValues";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
  * the file is portable), accepted annotations, unresolved scan candidates, and
- * metadata. Saving produces one `.docbox.json` file; loading restores the full
- * review state without putting unresolved objects into exports.
+ * metadata, and page-aware reference tables. Saving produces one
+ * `.docbox.json` file; loading restores the full review state without putting
+ * unresolved objects into exports.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 3;
 
 export interface ProjectSource {
   fileName: string;
@@ -303,6 +306,8 @@ export interface ProjectBundle {
   /** Unaccepted detector outcomes; never included in inspection exports. */
   scanCandidates: ScanCandidate[];
   metadata: DocumentMetadata;
+  /** Page-aware coordinate-reference results. */
+  referenceTables: PageReferenceTable[];
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -356,6 +361,7 @@ export function buildProjectBundle(args: {
   annotations: Annotation[];
   scanCandidates?: ScanCandidate[];
   metadata?: Partial<DocumentMetadata> | null;
+  referenceTables?: PageReferenceTable[];
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -367,6 +373,7 @@ export function buildProjectBundle(args: {
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
     scanCandidates: args.scanCandidates ?? [],
     metadata: normalizeDocumentMetadata(args.metadata),
+    referenceTables: normalizePageReferenceTables(args.referenceTables ?? []),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -394,6 +401,9 @@ export function parseProjectBundle(text: string): ProjectBundle {
     version: Number(b.version) || 1,
     scanCandidates: Array.isArray(b.scanCandidates) ? b.scanCandidates : [],
     metadata: normalizeDocumentMetadata(b.metadata),
+    referenceTables: normalizePageReferenceTables(
+      Array.isArray(b.referenceTables) ? b.referenceTables : []
+    ),
   };
 }
 

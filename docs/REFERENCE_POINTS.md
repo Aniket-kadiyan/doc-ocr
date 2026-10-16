@@ -1,19 +1,21 @@
-# Reference-point backend
+# Reference-point detection and review
 
-This milestone adds a backend-only reference-point pass. It reads a ruled
-coordinate table, rebuilds its named rows, and locates matching point-name
-glyphs elsewhere on the drawing.
+The reference-point pass reads a ruled coordinate table, rebuilds its named
+rows, and locates matching point-name glyphs elsewhere on the drawing. The UI
+shows the reconstructed table and places selectable markers on the drawing.
 
 Reference points remain separate from the dimension pipeline:
 
 - they do not become balloons or scan candidates;
 - they do not receive tolerances, methods, tools, or balloon numbers;
-- they are not saved in projects or included in exports;
+- one result per page is saved in the local project and portable project file;
+- they are not yet included in inspection exports;
 - a point read from the table but not located in a view is returned in
   `unmatchedSymbols` instead of being discarded.
 
-The UI command, reference table/sidebar, drawing markers, and row/marker
-highlighting belong to the next milestone.
+Each saved point has a shared export-neutral representation with exactly three
+rows in X, Y, Z order. Missing axes remain explicit blank values rather than
+being discarded. Export integration is handled by a later milestone.
 
 ## Endpoint
 

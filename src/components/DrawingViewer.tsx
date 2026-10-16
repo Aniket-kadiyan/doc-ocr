@@ -61,6 +61,7 @@ import {
   loadScanCandidates,
   saveProject,
   saveProjectMetadata,
+  saveProjectReferenceTables,
   getMostRecentProject,
   deleteProject,
 } from "@/lib/db";
@@ -80,6 +81,7 @@ import {
 } from "@/components/ReferenceMarker";
 import { layoutReferenceTags } from "@/lib/referenceTagLayout";
 import { referenceColor } from "@/lib/referenceColors";
+import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
@@ -193,8 +195,10 @@ export function DrawingViewer() {
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
-  const [referenceTable, setReferenceTable] =
-    useState<PageReferenceTable | null>(null);
+  const [referenceTables, setReferenceTables] = useState<
+    PageReferenceTable[]
+  >([]);
+  const referenceTablesRef = useRef<PageReferenceTable[]>([]);
   const [selectedReferenceSymbol, setSelectedReferenceSymbol] = useState<
     string | null
   >(null);
@@ -262,10 +266,10 @@ export function DrawingViewer() {
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
+  const referenceTable =
+    referenceTables.find((table) => table.page === currentPage) ?? null;
   const pageReferencePoints =
-    referenceTable && referenceTable.page === currentPage
-      ? referenceTable.points.map((point, index) => ({ point, index }))
-      : [];
+    referenceTable?.points.map((point, index) => ({ point, index })) ?? [];
   const selectedReferenceRow = pageReferencePoints.find(
     ({ point }) => point.symbol === selectedReferenceSymbol
   );
@@ -317,6 +321,24 @@ export function DrawingViewer() {
         );
     },
     [replaceScanCandidates]
+  );
+
+  const replaceReferenceTables = useCallback(
+    (next: readonly PageReferenceTable[]) => {
+      const normalized = normalizePageReferenceTables(next);
+      referenceTablesRef.current = normalized;
+      setReferenceTables(normalized);
+      return normalized;
+    },
+    []
+  );
+
+  const persistReferenceTables = useCallback(
+    async (next: readonly PageReferenceTable[], targetProjectId: string) => {
+      const normalized = replaceReferenceTables(next);
+      await saveProjectReferenceTables(targetProjectId, normalized);
+    },
+    [replaceReferenceTables]
   );
 
   const canvasToKonvaImage = useCallback((canvas: HTMLCanvasElement) => {
@@ -377,11 +399,9 @@ export function DrawingViewer() {
   }, [currentPage, projectId]);
 
   useEffect(() => {
-    // Reference results are temporary evidence from one drawing. They are not
-    // saved with the project and must never remain over a different source.
-    setReferenceTable(null);
+    // A selected symbol belongs to one exact page/project.
     setSelectedReferenceSymbol(null);
-  }, [projectId]);
+  }, [currentPage, projectId]);
 
   useEffect(() => {
     void preloadOcr();
@@ -489,6 +509,7 @@ export function DrawingViewer() {
     setDocumentMetadata(migration.metadata);
     setAnnotations(migration.annotations);
     restoreScanCandidates(storedCandidates);
+    replaceReferenceTables(recent.referenceTables ?? []);
     await Promise.all([
       saveAnnotations(recent.id, migration.annotations),
       saveProjectMetadata(recent.id, migration.metadata),
@@ -497,6 +518,7 @@ export function DrawingViewer() {
     if (warning) setSelectionError(warning);
   }, [
     loadSource,
+    replaceReferenceTables,
     restoreScanCandidates,
     setAnnotations,
     setDocumentMetadata,
@@ -520,6 +542,7 @@ export function DrawingViewer() {
     candidateOrderRef.current = 0;
     setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -545,6 +568,7 @@ export function DrawingViewer() {
       mimeType: file.type,
       fileBlob: file,
       metadata: normalizeDocumentMetadata(),
+      referenceTables: [],
       updatedAt: Date.now(),
     });
     await loadSource(file);
@@ -567,6 +591,7 @@ export function DrawingViewer() {
       annotations,
       scanCandidates,
       metadata,
+      referenceTables,
       savedAt: Date.now(),
     });
     downloadFile(json, `${base}.docbox.json`, "application/json");
@@ -588,6 +613,7 @@ export function DrawingViewer() {
     candidateOrderRef.current = 0;
     setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -612,6 +638,7 @@ export function DrawingViewer() {
     replaceScanCandidates([]);
     candidateOrderRef.current = 0;
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setActiveMetadataField(null);
@@ -644,6 +671,7 @@ export function DrawingViewer() {
       setDocumentMetadata(migration.metadata);
       setAnnotations(migration.annotations);
       restoreScanCandidates(importedCandidates);
+      replaceReferenceTables(bundle.referenceTables);
       const warning = legacyMigrationWarning(legacyMigration.orphanLabelCount);
       if (warning) setSelectionError(warning);
       // Persist so the loaded project reopens on the next visit too.
@@ -655,6 +683,7 @@ export function DrawingViewer() {
         mimeType: bundle.source.mimeType,
         fileBlob: srcFile,
         metadata: migration.metadata,
+        referenceTables: bundle.referenceTables,
         updatedAt: Date.now(),
       });
       await Promise.all([
@@ -1359,9 +1388,16 @@ export function DrawingViewer() {
   );
 
   const clearReferencePoints = useCallback(() => {
-    setReferenceTable(null);
+    const next = referenceTablesRef.current.filter(
+      (table) => table.page !== currentPage
+    );
+    void persistReferenceTables(next, projectIdRef.current).catch(() => {
+      setSelectionError((current) =>
+        current ?? "Reference points could not be saved locally."
+      );
+    });
     setSelectedReferenceSymbol(null);
-  }, []);
+  }, [currentPage, persistReferenceTables]);
 
   /** Read the current sheet's coordinate table and locate its point names. */
   const findReferencePoints = useCallback(async () => {
@@ -1378,7 +1414,6 @@ export function DrawingViewer() {
     setSelectedScanCandidateId(null);
     setEditingValueId(null);
     setSelectedReferenceSymbol(null);
-    setReferenceTable(null);
     setPending(null);
     setFindingReferencePoints(true);
     setIsProcessing(true);
@@ -1416,6 +1451,10 @@ export function DrawingViewer() {
       if (projectIdRef.current !== projectAtStart) return;
 
       if (!result.found || !result.table) {
+        await persistReferenceTables(
+          referenceTablesRef.current.filter((table) => table.page !== page),
+          projectAtStart
+        );
         setSelectionError(
           result.tableCount === 0
             ? "No ruled table was found on this sheet."
@@ -1424,7 +1463,13 @@ export function DrawingViewer() {
         return;
       }
 
-      setReferenceTable({ ...result.table, page });
+      await persistReferenceTables(
+        [
+          ...referenceTablesRef.current.filter((table) => table.page !== page),
+          { ...result.table, page },
+        ],
+        projectAtStart
+      );
       const located =
         result.table.points.length - result.unmatchedSymbols.length;
       if (located === 0) {
@@ -1450,6 +1495,7 @@ export function DrawingViewer() {
   }, [
     currentPage,
     pdfDoc,
+    persistReferenceTables,
     setEditingValueId,
     setIsDrawingValue,
     setIsProcessing,
@@ -2129,9 +2175,7 @@ export function DrawingViewer() {
           scanCandidates={scanCandidates}
           metadata={metadata}
           activeMetadataField={activeMetadataField}
-          referenceTable={
-            referenceTable?.page === currentPage ? referenceTable : null
-          }
+          referenceTable={referenceTable}
           selectedReferenceSymbol={selectedReferenceSymbol}
           drawingAvailable={konvaImage !== null}
           disabled={isSegmenting || isProcessing || konvaImage === null}
