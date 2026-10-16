@@ -15,6 +15,7 @@ import { fixEngineeringSymbols } from "@/lib/engineeringSymbols";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { isOcrDebugDumpEnabled, isOcrDebugDumpForce } from "@/lib/ocrDebugDump";
 import { mergeSymbolHints } from "@/lib/visualSymbols";
+import type { ReferencePointsResult } from "@/types/referencePoint";
 
 export type OcrEngine = "paddleocr" | "paddleocr+vision" | "paddleocr+compose";
 
@@ -826,6 +827,36 @@ export async function runTitleFields(
 
   const data = (await res.json()) as { fields?: TitleField[] };
   return data.fields ?? [];
+}
+
+/**
+ * Read a whole page's coordinate reference table and locate its point names.
+ * The backend divides returned geometry by `displayScale`, placing it directly
+ * in the viewer's annotation coordinate space.
+ */
+export async function runReferencePoints(
+  pageCanvas: HTMLCanvasElement,
+  displayScale = 1
+): Promise<ReferencePointsResult> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    pageCanvas.toBlob((value) => {
+      if (value) resolve(value);
+      else reject(new Error("Failed to encode page"));
+    }, "image/png");
+  });
+
+  const form = new FormData();
+  form.append("file", blob, "page.png");
+  form.append("display_scale", String(displayScale));
+
+  const res = await fetch(`${getOcrApiUrl()}/ocr/reference-points`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`Reference points API error: ${res.status}`);
+  }
+  return (await res.json()) as ReferencePointsResult;
 }
 
 export async function runPaddleOcr(

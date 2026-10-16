@@ -23,6 +23,7 @@ import {
   isScanJobCancelledError,
   preloadOcr,
   runAutoBalloonScan,
+  runPageReferencePoints,
   runPageTitleFields,
   runOCR,
   stopAutoBalloonScan,
@@ -73,6 +74,12 @@ import {
 } from "@/lib/project";
 import { downloadFile } from "@/lib/export";
 import { Balloon } from "@/components/Balloon";
+import {
+  ReferenceMarker,
+  referenceTagSize,
+} from "@/components/ReferenceMarker";
+import { layoutReferenceTags } from "@/lib/referenceTagLayout";
+import { referenceColor } from "@/lib/referenceColors";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
@@ -93,6 +100,7 @@ import {
   type DocumentMetadataField,
 } from "@/types/documentMetadata";
 import type { SegmentCandidateOutcome } from "@/lib/paddleOcrClient";
+import type { PageReferenceTable } from "@/types/referencePoint";
 import type {
   ScanCompletionSummary,
   ScanDebugOverlay as ScanDebugOverlayModel,
@@ -115,6 +123,14 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
  * drawings, worse on 56103-0182B (14/24 -> 12/24).
  */
 const OCR_RENDER_SCALE = 250 / 72;
+
+/**
+ * Point names are much smaller than dimension text. PDFs are therefore
+ * re-rendered at up to 720 dpi for this explicit pass, with a pixel budget to
+ * prevent oversized drawings from exhausting browser memory.
+ */
+const REFERENCE_RENDER_SCALE = 10;
+const REFERENCE_MAX_PIXELS = 48_000_000;
 
 const MIN_BOX = 8;
 const DRAWING_BACKGROUND_NAME = "drawing-background";
@@ -174,6 +190,12 @@ export function DrawingViewer() {
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
+  const [referenceTable, setReferenceTable] =
+    useState<PageReferenceTable | null>(null);
+  const [selectedReferenceSymbol, setSelectedReferenceSymbol] = useState<
+    string | null
+  >(null);
+  const [findingReferencePoints, setFindingReferencePoints] = useState(false);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -237,6 +259,39 @@ export function DrawingViewer() {
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
+  const pageReferencePoints =
+    referenceTable && referenceTable.page === currentPage
+      ? referenceTable.points.map((point, index) => ({ point, index }))
+      : [];
+  const selectedReferenceRow = pageReferencePoints.find(
+    ({ point }) => point.symbol === selectedReferenceSymbol
+  );
+  const referenceTagPlacements = (() => {
+    const anchors = pageReferencePoints.flatMap(({ point, index }) =>
+      point.markers.map((marker, markerIndex) => ({
+        id: `${index}:${point.symbol}:${markerIndex}`,
+        glyph: marker.bbox,
+      }))
+    );
+    if (anchors.length === 0) return new Map<string, { x: number; y: number }>();
+
+    const screenSize = pageReferencePoints.reduce(
+      (largest, { point }) => {
+        const size = referenceTagSize(point.coordinates);
+        return {
+          width: Math.max(largest.width, size.width),
+          height: Math.max(largest.height, size.height),
+        };
+      },
+      { width: 0, height: 0 }
+    );
+    return layoutReferenceTags(anchors, {
+      width: screenSize.width / scale,
+      height: screenSize.height / scale,
+      gap: 7 / scale,
+      bounds: stageSize,
+    });
+  })();
   const activeMetadataLabel = DOCUMENT_METADATA_FIELDS.find(
     ({ key }) => key === activeMetadataField
   )?.label;
@@ -316,6 +371,13 @@ export function DrawingViewer() {
     // Overlay geometry belongs to one exact page/project and is never persisted.
     setScanOverlay(null);
   }, [currentPage, projectId]);
+
+  useEffect(() => {
+    // Reference results are temporary evidence from one drawing. They are not
+    // saved with the project and must never remain over a different source.
+    setReferenceTable(null);
+    setSelectedReferenceSymbol(null);
+  }, [projectId]);
 
   useEffect(() => {
     void preloadOcr();
@@ -605,6 +667,7 @@ export function DrawingViewer() {
   const handleSelect = useCallback(
     (id: string | null) => {
       setSelectedScanCandidateId(null);
+      setSelectedReferenceSymbol(null);
       if (!id) {
         setSelectedId(null);
         return;
@@ -687,6 +750,7 @@ export function DrawingViewer() {
       setSelectedScanSections([]);
       setSelectedId(null);
       setSelectedScanCandidateId(null);
+      setSelectedReferenceSymbol(null);
       setPending(null);
       setIsDrawingValue(false);
       setIsSegmenting(false);
@@ -1264,6 +1328,7 @@ export function DrawingViewer() {
     const source = sourceCanvasRef.current;
     if (!source) return;
     setSelectedScanSections([]);
+    setSelectedReferenceSymbol(null);
     setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -1272,13 +1337,123 @@ export function DrawingViewer() {
       "page",
       currentPage
     );
-  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
+  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]);
+
+  const selectReferenceSymbol = useCallback(
+    (symbol: string | null) => {
+      setSelectedId(null);
+      setSelectedScanCandidateId(null);
+      setEditingValueId(null);
+      setPending(null);
+      setSelectedReferenceSymbol(symbol);
+    },
+    [setEditingValueId, setPending]
   );
+
+  const clearReferencePoints = useCallback(() => {
+    setReferenceTable(null);
+    setSelectedReferenceSymbol(null);
+  }, []);
+
+  /** Read the current sheet's coordinate table and locate its point names. */
+  const findReferencePoints = useCallback(async () => {
+    const source = sourceCanvasRef.current;
+    if (!source) return;
+
+    setSelectionError(null);
+    setScanSummary(null);
+    setSelectedScanSections([]);
+    setActiveMetadataField(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setSelectedId(null);
+    setSelectedScanCandidateId(null);
+    setEditingValueId(null);
+    setSelectedReferenceSymbol(null);
+    setReferenceTable(null);
+    setPending(null);
+    setFindingReferencePoints(true);
+    setIsProcessing(true);
+
+    const projectAtStart = projectIdRef.current;
+    const page = currentPage;
+    try {
+      let readCanvas = source;
+      let displayScale = 1;
+
+      if (pdfDoc) {
+        const pdfPage = await pdfDoc.getPage(page);
+        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const pixelBudgetScale = Math.sqrt(
+          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
+        );
+        const renderScale = Math.min(
+          REFERENCE_RENDER_SCALE,
+          pixelBudgetScale
+        );
+        if (renderScale > PDF_RENDER_SCALE) {
+          try {
+            const rendered = await renderPdfPage(pdfDoc, page, renderScale);
+            readCanvas = rendered.canvas;
+            displayScale = renderScale / PDF_RENDER_SCALE;
+          } catch {
+            // The displayed page is a safe lower-resolution fallback.
+            readCanvas = source;
+            displayScale = 1;
+          }
+        }
+      }
+
+      const result = await runPageReferencePoints(readCanvas, displayScale);
+      if (projectIdRef.current !== projectAtStart) return;
+
+      if (!result.found || !result.table) {
+        setSelectionError(
+          result.tableCount === 0
+            ? "No ruled table was found on this sheet."
+            : "None of this sheet's tables has a point column with at least two X/Y/Z coordinate columns."
+        );
+        return;
+      }
+
+      setReferenceTable({ ...result.table, page });
+      const located =
+        result.table.points.length - result.unmatchedSymbols.length;
+      if (located === 0) {
+        setSelectionError(
+          "The coordinate table was read, but none of its point names could be located in the drawing views."
+        );
+      } else if (result.unmatchedSymbols.length > 0) {
+        setSelectionError(
+          `Not located in the drawing views: ${result.unmatchedSymbols.join(", ")}.`
+        );
+      }
+    } catch (error) {
+      if (projectIdRef.current !== projectAtStart) return;
+      setSelectionError(
+        error instanceof Error
+          ? error.message
+          : "Reading the coordinate reference table failed."
+      );
+    } finally {
+      setFindingReferencePoints(false);
+      setIsProcessing(false);
+    }
+  }, [
+    currentPage,
+    pdfDoc,
+    setEditingValueId,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+    setPending,
+  ]);
 
   const openScanCandidate = useCallback(
     (candidate: ScanCandidate) => {
       setSelectionError(null);
       setSelectedId(null);
+      setSelectedReferenceSymbol(null);
       setSelectedScanCandidateId(candidate.id);
       if (candidate.page !== currentPage) setCurrentPage(candidate.page);
       setPending({
@@ -1668,15 +1843,19 @@ export function DrawingViewer() {
           setSelectionError(null);
           setScanSummary(null);
           setSelectedScanSections([]);
+          setSelectedReferenceSymbol(null);
           setActiveMetadataField(null);
           setIsDrawingValue(false);
           setIsSegmenting(true);
         }}
         onScanWholePage={() => void scanWholePage()}
+        onFindReferencePoints={() => void findReferencePoints()}
+        findingReferencePoints={findingReferencePoints}
         onToggleDrawValue={() => {
           setSelectionError(null);
           setScanSummary(null);
           setSelectedScanSections([]);
+          setSelectedReferenceSymbol(null);
           setActiveMetadataField(null);
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
@@ -1765,6 +1944,24 @@ export function DrawingViewer() {
 
                     {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
                       <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
+                    )}
+
+                    {selectedReferenceRow && (
+                      <Rect
+                        x={selectedReferenceRow.point.rowBox.x}
+                        y={selectedReferenceRow.point.rowBox.y}
+                        width={selectedReferenceRow.point.rowBox.width}
+                        height={selectedReferenceRow.point.rowBox.height}
+                        fill={
+                          referenceColor(selectedReferenceRow.index).fill
+                        }
+                        opacity={0.2}
+                        stroke={
+                          referenceColor(selectedReferenceRow.index).fill
+                        }
+                        strokeWidth={2 / scale}
+                        listening={false}
+                      />
                     )}
 
                     {visiblePageAnnotations.map((ann) => {
@@ -1865,6 +2062,45 @@ export function DrawingViewer() {
                         onSelect={handleSelect}
                       />
                     ))}
+
+                    {pageReferencePoints.flatMap(({ point, index }) =>
+                      point.markers.map((marker, markerIndex) => {
+                        const placementId =
+                          `${index}:${point.symbol}:${markerIndex}`;
+                        const placement = referenceTagPlacements.get(
+                          placementId
+                        ) ?? {
+                          x: marker.bbox.x + marker.bbox.width + 7 / scale,
+                          y: marker.bbox.y,
+                        };
+                        return (
+                          <ReferenceMarker
+                            key={placementId}
+                            symbol={point.symbol}
+                            coordinates={point.coordinates}
+                            marker={marker}
+                            placement={placement}
+                            color={referenceColor(index)}
+                            scale={scale}
+                            selected={
+                              selectedReferenceSymbol === point.symbol
+                            }
+                            dimmed={
+                              selectedReferenceSymbol !== null &&
+                              selectedReferenceSymbol !== point.symbol
+                            }
+                            listening={!drawingActive && !isProcessing}
+                            onSelect={(symbol) =>
+                              selectReferenceSymbol(
+                                selectedReferenceSymbol === symbol
+                                  ? null
+                                  : symbol
+                              )
+                            }
+                          />
+                        );
+                      })
+                    )}
                   </Layer>
                 </Stage>
               </div>
@@ -1877,6 +2113,10 @@ export function DrawingViewer() {
           scanCandidates={scanCandidates}
           metadata={metadata}
           activeMetadataField={activeMetadataField}
+          referenceTable={
+            referenceTable?.page === currentPage ? referenceTable : null
+          }
+          selectedReferenceSymbol={selectedReferenceSymbol}
           drawingAvailable={konvaImage !== null}
           disabled={isSegmenting || isProcessing || konvaImage === null}
           selectedId={selectedId}
@@ -1890,6 +2130,8 @@ export function DrawingViewer() {
           onMetadataChange={handleMetadataChange}
           onMetadataSelect={handleMetadataSelect}
           onMetadataClear={handleMetadataClear}
+          onSelectReference={selectReferenceSymbol}
+          onClearReferences={clearReferencePoints}
           onEdit={(id) => {
             handleSelect(id);
             setEditingValueId(id);

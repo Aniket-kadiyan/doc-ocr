@@ -1,20 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Annotation } from "@/types/annotation";
 import { BalloonThumbnail } from "@/components/BalloonThumbnail";
 import { MetadataPanel } from "@/components/MetadataPanel";
+import { ReferencePanel } from "@/components/ReferencePanel";
 import type {
   DocumentMetadata,
   DocumentMetadataField,
 } from "@/types/documentMetadata";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface SidebarProps {
   annotations: Annotation[];
   scanCandidates: ScanCandidate[];
   metadata: DocumentMetadata;
   activeMetadataField: DocumentMetadataField | null;
+  referenceTable: PageReferenceTable | null;
+  selectedReferenceSymbol: string | null;
   drawingAvailable: boolean;
   disabled?: boolean;
   selectedId: string | null;
@@ -29,6 +33,8 @@ interface SidebarProps {
   onMetadataChange: (field: DocumentMetadataField, value: string) => void;
   onMetadataSelect: (field: DocumentMetadataField) => void;
   onMetadataClear: (field: DocumentMetadataField) => void;
+  onSelectReference: (symbol: string | null) => void;
+  onClearReferences: () => void;
 }
 
 /** One sidebar record per ballooned value. Label, method, and tool are optional
@@ -38,6 +44,8 @@ export function Sidebar({
   scanCandidates,
   metadata,
   activeMetadataField,
+  referenceTable,
+  selectedReferenceSymbol,
   drawingAvailable,
   disabled = false,
   selectedId,
@@ -52,10 +60,12 @@ export function Sidebar({
   onMetadataChange,
   onMetadataSelect,
   onMetadataClear,
+  onSelectReference,
+  onClearReferences,
 }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<"balloons" | "metadata">(
-    "balloons"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "balloons" | "metadata" | "references"
+  >("balloons");
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
   const [ignoredOpen, setIgnoredOpen] = useState(false);
@@ -79,12 +89,24 @@ export function Sidebar({
   ).length;
   const balloonControlsDisabled = disabled || activeMetadataField !== null;
 
+  useEffect(() => {
+    if (referenceTable) {
+      setActiveTab("references");
+      return;
+    }
+    setActiveTab((current) =>
+      current === "references" ? "balloons" : current
+    );
+  }, [referenceTable]);
+
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
       <div
         role="tablist"
         aria-label="Drawing details"
-        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pt-2"
+        className={`grid ${
+          referenceTable ? "grid-cols-3" : "grid-cols-2"
+        } border-b border-slate-200 bg-white px-2 pt-2`}
       >
         <button
           type="button"
@@ -121,10 +143,37 @@ export function Sidebar({
             {metadataValueCount}/3 filled
           </span>
         </button>
+        {referenceTable && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "references"}
+            onClick={() => setActiveTab("references")}
+            className={`border-b-2 px-2 py-2 text-left text-xs font-semibold transition ${
+              activeTab === "references"
+                ? "border-teal-600 text-teal-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <span className="block">References</span>
+            <span className="mt-0.5 block text-[10px] font-normal">
+              {referenceTable.points.length} point
+              {referenceTable.points.length === 1 ? "" : "s"}
+            </span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
-        {activeTab === "metadata" ? (
+        {activeTab === "references" && referenceTable ? (
+          <ReferencePanel
+            table={referenceTable}
+            selectedSymbol={selectedReferenceSymbol}
+            disabled={disabled}
+            onSelect={onSelectReference}
+            onClear={onClearReferences}
+          />
+        ) : activeTab === "metadata" ? (
           <MetadataPanel
             metadata={metadata}
             activeField={activeMetadataField}

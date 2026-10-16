@@ -17,6 +17,7 @@ import type { ScanProgress } from "@/types/scanJob";
 import {
   checkOcrApiHealth,
   runPaddleOcr,
+  runReferencePoints,
   runSegmentOcr,
   runTitleFields,
   type OcrApiHealth,
@@ -107,6 +108,20 @@ export async function runPageTitleFields(pageCanvas: HTMLCanvasElement) {
     );
   }
   return runTitleFields(pageCanvas);
+}
+
+/** Read the current page's coordinate table and point-name markers. */
+export async function runPageReferencePoints(
+  pageCanvas: HTMLCanvasElement,
+  displayScale = 1
+) {
+  apiHealth = await checkOcrApiHealth();
+  if (!apiHealth.available) {
+    throw new Error(
+      "PaddleOCR API is not running. Start it with: uvicorn main:app --reload --port 8000"
+    );
+  }
+  return runReferencePoints(pageCanvas, displayScale);
 }
 
 export async function runAutoBalloonScan(
