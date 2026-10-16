@@ -182,6 +182,9 @@ export function DrawingViewer() {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanOverlay, setScanOverlay] =
     useState<ScanDebugOverlayModel | null>(null);
+  // The only page area a diagnostic overlay may paint. Section scans keep
+  // their progress geometry inside the user's selection.
+  const [scanScope, setScanScope] = useState<BBox | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
   const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
@@ -370,6 +373,7 @@ export function DrawingViewer() {
   useEffect(() => {
     // Overlay geometry belongs to one exact page/project and is never persisted.
     setScanOverlay(null);
+    setScanScope(null);
   }, [currentPage, projectId]);
 
   useEffect(() => {
@@ -523,6 +527,7 @@ export function DrawingViewer() {
     resetDocumentMetadata();
     setScanProgress(null);
     setScanOverlay(null);
+    setScanScope(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
     const fileType = isPdfKind(sourceKind) ? "pdf" : "image";
@@ -911,6 +916,7 @@ export function DrawingViewer() {
       setSelectionError(null);
       setScanSummary(null);
       setScanOverlay(null);
+      setScanScope(bbox);
       setScanProgress({
         jobId: "",
         status: "queued",
@@ -1165,6 +1171,7 @@ export function DrawingViewer() {
         replaceScanCandidates(mergedCandidates.candidates);
         await saveScanCandidates(projectAtStart, mergedCandidates.candidates);
         setScanOverlay(null);
+        setScanScope(null);
         const summary: ScanCompletionSummary = {
           scopeKind,
           added: newAnnotations.length,
@@ -1194,6 +1201,7 @@ export function DrawingViewer() {
       } catch (err) {
         if (isScanJobCancelledError(err)) {
           setScanOverlay(null);
+          setScanScope(null);
           setSelectionError(
             options.sectionPosition
               ? sectionLabel +
@@ -1699,7 +1707,10 @@ export function DrawingViewer() {
           {scanOverlay && (
             <button
               type="button"
-              onClick={() => setScanOverlay(null)}
+              onClick={() => {
+                setScanOverlay(null);
+                setScanScope(null);
+              }}
               className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
             >
               Dismiss scan overlay
@@ -1943,7 +1954,12 @@ export function DrawingViewer() {
                       })}
 
                     {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
-                      <ScanDebugOverlay overlay={scanOverlay} scale={scale} />
+                      <ScanDebugOverlay
+                        overlay={scanOverlay}
+                        scale={scale}
+                        scope={scanScope ?? { x: 0, y: 0, ...stageSize }}
+                        pageSize={stageSize}
+                      />
                     )}
 
                     {selectedReferenceRow && (

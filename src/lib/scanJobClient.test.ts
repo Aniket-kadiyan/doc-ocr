@@ -5,6 +5,7 @@ import {
   runScanJob,
   ScanJobCancelledError,
 } from "@/lib/scanJobClient";
+import type { ScanProgress } from "@/types/scanJob";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,6 +48,92 @@ describe("scan job cancellation", () => {
   it("identifies the cancellation error used by the atomic UI path", () => {
     expect(isScanJobCancelledError(new ScanJobCancelledError())).toBe(true);
     expect(isScanJobCancelledError(new Error("ordinary failure"))).toBe(false);
+  });
+});
+
+describe("scan overlay coordinates", () => {
+  // The backend reads a 250dpi page while the viewer displays a 1.5x render.
+  const displayScale = 250 / 72 / 1.5;
+  const sourceCanvas = {
+    toBlob: (callback: BlobCallback) =>
+      callback(new Blob(["png"], { type: "image/png" })),
+  } as HTMLCanvasElement;
+
+  it("maps all processing geometry back to viewer pixels", async () => {
+    const overlay = {
+      enabled: true,
+      page_width: 2924,
+      page_height: 2068,
+      scope_kind: "page",
+      table_masks: [{ x: 100, y: 200, width: 300, height: 400 }],
+      panels: [
+        {
+          x: 0,
+          y: 0,
+          width: 954,
+          height: 1268,
+          id: "P1",
+          state: "active",
+        },
+      ],
+      overlaps: [{ x: 10, y: 20, width: 30, height: 40 }],
+      candidates: [
+        {
+          id: "C1",
+          bbox: { x: 1010, y: 136, width: 291, height: 61 },
+          state: "eligible",
+        },
+      ],
+    };
+    const progressEvents: ScanProgress[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          job_id: "job-overlay",
+          status: "succeeded",
+          stage: "finalizing",
+          message: "Complete",
+          percent: 100,
+          completed: 1,
+          total: 1,
+          liveness: "complete",
+          overlay,
+          result: {
+            coordinate_space: "page",
+            regions: [],
+            review_candidates: [],
+          },
+        }),
+      }))
+    );
+
+    await runScanJob({
+      sourceCanvas,
+      bbox: { x: 0, y: 0, width: 1263, height: 893 },
+      page: 1,
+      scopeKind: "page",
+      displayScale,
+      onProgress: (progress) => progressEvents.push(progress),
+    });
+
+    const mapped = progressEvents.at(-1)?.overlay;
+    expect(mapped?.pageWidth).toBeCloseTo(2924 / displayScale, 6);
+    expect(mapped?.pageHeight).toBeCloseTo(2068 / displayScale, 6);
+    expect(mapped?.candidates[0].bbox.x).toBeCloseTo(
+      1010 / displayScale,
+      6
+    );
+    expect(mapped?.candidates[0].bbox.width).toBeCloseTo(
+      291 / displayScale,
+      6
+    );
+    expect(mapped?.panels[0].width).toBeCloseTo(954 / displayScale, 6);
+    expect(mapped?.tableMasks[0].y).toBeCloseTo(200 / displayScale, 6);
+    expect(mapped?.overlaps[0].height).toBeCloseTo(40 / displayScale, 6);
+    expect(mapped?.panels[0]).toMatchObject({ id: "P1", state: "active" });
   });
 });
 
