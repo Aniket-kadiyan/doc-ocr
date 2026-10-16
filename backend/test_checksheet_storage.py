@@ -6,7 +6,7 @@ import sqlite3
 from io import BytesIO
 from pathlib import Path
 
-from checksheet_models import ChecksheetSnapshot
+from checksheet_models import ChecksheetSnapshot, ReadingPatch
 from checksheet_storage import ChecksheetStorage
 
 
@@ -18,6 +18,7 @@ def _snapshot(
     with_assembly: bool = False,
     with_engineering_parse: bool = False,
     with_engineering_disposition: bool = False,
+    with_reference: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -141,6 +142,47 @@ def _snapshot(
                     else {}
                 ),
             }
+        ]
+    if with_reference:
+        reference = {
+            "symbol": "A",
+            "point_index": 0,
+            "name_box": {"x": 10, "y": 40, "width": 30, "height": 20},
+            "row_box": {"x": 10, "y": 40, "width": 300, "height": 20},
+            "coordinates": [
+                {"axis": "X", "value": "10.25"},
+                {"axis": "Y", "value": "-4.50"},
+            ],
+            "markers": [
+                {
+                    "bbox": {"x": 400, "y": 200, "width": 12, "height": 14},
+                    "score": 0.94,
+                    "margin": 0.21,
+                }
+            ],
+        }
+        payload["items"] = [  # type: ignore[index]
+            *payload["items"],  # type: ignore[index]
+            *[
+                {
+                    "annotation_id": f"reference:p1:r0:{axis.lower()}",
+                    "balloon_number": index + 2,
+                    "item_kind": "reference",
+                    "reference": {**reference, "axis": axis},
+                    "page": 1,
+                    "bbox": reference["markers"][0]["bbox"],  # type: ignore[index]
+                    "rotation": 0,
+                    "label": f"A_{axis}",
+                    "specification": value,
+                    "tolerance": "",
+                    "method": "",
+                    "tool": "",
+                    "dimension_type": "Reference",
+                }
+                for index, (axis, value) in enumerate(
+                    (("X", "10.25"), ("Y", "-4.50"), ("Z", ""))
+                )
+            ],
         ]
     return ChecksheetSnapshot.model_validate(payload)
 
@@ -348,6 +390,78 @@ def test_engineering_disposition_survives_storage_and_duplicate(
 
     duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
     assert duplicate["rows"][0]["engineering_disposition"] == item_disposition
+
+
+def test_reference_rows_survive_storage_readings_and_duplicate(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(storage, _snapshot(with_reference=True))
+
+    assert [row["item_kind"] for row in created["rows"]] == [
+        "balloon",
+        "reference",
+        "reference",
+        "reference",
+    ]
+    assert [row["label"] for row in created["rows"][1:]] == [
+        "A_X",
+        "A_Y",
+        "A_Z",
+    ]
+    assert created["rows"][3]["specification"] == ""
+    assert created["rows"][1]["reference"] == {
+        "symbol": "A",
+        "axis": "X",
+        "point_index": 0,
+        "name_box": {"x": 10.0, "y": 40.0, "width": 30.0, "height": 20.0},
+        "row_box": {"x": 10.0, "y": 40.0, "width": 300.0, "height": 20.0},
+        "coordinates": [
+            {"axis": "X", "value": "10.25"},
+            {"axis": "Y", "value": "-4.50"},
+        ],
+        "markers": [
+            {
+                "bbox": {
+                    "x": 400.0,
+                    "y": 200.0,
+                    "width": 12.0,
+                    "height": 14.0,
+                },
+                "score": 0.94,
+                "margin": 0.21,
+            }
+        ],
+    }
+
+    storage.update_readings(
+        created["checksheet"]["id"],
+        created["run"]["id"],
+        [
+            ReadingPatch(
+                annotation_id="reference:p1:r0:x",
+                column_id=created["columns"][0]["id"],
+                value="10.24",
+            )
+        ],
+    )
+    updated = storage.get_run(
+        created["checksheet"]["id"],
+        created["run"]["id"],
+    )
+    assert updated["rows"][1]["readings"] == {
+        created["columns"][0]["id"]: "10.24"
+    }
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["rows"][1]["reference"] == created["rows"][1]["reference"]
+    assert duplicate["rows"][3]["specification"] == ""
+
+    with sqlite3.connect(storage.database_path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(checksheet_items)")
+        }
+    assert {"item_kind", "reference_json"} <= columns
 
 
 def test_existing_database_without_metadata_table_migrates_to_blanks(

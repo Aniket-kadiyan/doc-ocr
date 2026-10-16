@@ -87,8 +87,9 @@ correct virtual-environment Python path on Windows, macOS, and Linux.
 
 Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a
 checksheet name and one or more measured-part columns. The backend saves an
-immutable snapshot of the specifications, balloon geometry, and original
-PDF/image, then opens the first draft inspection run.
+immutable snapshot of the balloon specifications, reference-point X/Y/Z rows,
+review geometry, and original PDF/image, then opens the first draft inspection
+run. Missing reference axes are kept as blank rows for the operator to review.
 
 Use **Saved Checksheets** in the main toolbar to search definitions, reopen
 drafts, start another inspection, view completed history, rename, duplicate,

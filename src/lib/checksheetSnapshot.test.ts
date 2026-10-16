@@ -6,6 +6,7 @@ import type {
   EngineeringDisposition,
   EngineeringValueParse,
 } from "@/types/annotation";
+import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
 
 const project: ProjectRecord = {
@@ -82,6 +83,32 @@ const otherCandidate: ScanCandidate = {
   duplicateSourceIds: ["C0012", "C0013"],
   createdAt: 100,
   updatedAt: 200,
+};
+
+const referenceTable: PageReferenceTable = {
+  page: 1,
+  bbox: { x: 10, y: 20, width: 300, height: 120 },
+  headerBox: { x: 10, y: 20, width: 300, height: 20 },
+  axes: ["X", "Y"],
+  nameHeader: "POINT",
+  points: [
+    {
+      symbol: "A",
+      coordinates: [
+        { axis: "X", value: "10.25" },
+        { axis: "Y", value: "-4.50" },
+      ],
+      nameBox: { x: 10, y: 40, width: 30, height: 20 },
+      rowBox: { x: 10, y: 40, width: 300, height: 20 },
+      markers: [
+        {
+          bbox: { x: 400, y: 200, width: 12, height: 14 },
+          score: 0.94,
+          margin: 0.21,
+        },
+      ],
+    },
+  ],
 };
 
 describe("checksheet creation snapshot", () => {
@@ -225,5 +252,56 @@ describe("checksheet creation snapshot", () => {
       rotation: 32,
     });
     expect(creation.payload.items[0].tolerance).toBe("+0.1, -0");
+  });
+
+  it("appends X, Y, and Z reference rows with their review geometry", () => {
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "References",
+      readingColumns: ["Part 1"],
+      annotations: [makeAnnotation({ number: 1 })],
+      referenceTables: [referenceTable],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project,
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.items.map((item) => item.balloon_number)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(creation.payload.items.map((item) => item.item_kind)).toEqual([
+      "balloon",
+      "reference",
+      "reference",
+      "reference",
+    ]);
+    expect(
+      creation.payload.items.map(({ label, specification }) => [
+        label,
+        specification,
+      ])
+    ).toEqual([
+      [creation.payload.items[0].label, creation.payload.items[0].specification],
+      ["A_X", "10.25"],
+      ["A_Y", "-4.50"],
+      ["A_Z", ""],
+    ]);
+    expect(creation.payload.items[1]).toMatchObject({
+      annotation_id: "reference:p1:r0:x",
+      bbox: referenceTable.points[0].markers[0].bbox,
+      tolerance: "",
+      method: "",
+      tool: "",
+      dimension_type: "Reference",
+      reference: {
+        symbol: "A",
+        axis: "X",
+        point_index: 0,
+        name_box: referenceTable.points[0].nameBox,
+        row_box: referenceTable.points[0].rowBox,
+        coordinates: referenceTable.points[0].coordinates,
+        markers: referenceTable.points[0].markers,
+      },
+    });
   });
 });

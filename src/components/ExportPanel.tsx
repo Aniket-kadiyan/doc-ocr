@@ -205,6 +205,7 @@ export function ExportPanel({
         project,
         metadata,
         scanCandidates,
+        referenceTables,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(

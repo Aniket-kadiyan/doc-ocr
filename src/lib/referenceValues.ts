@@ -1,6 +1,7 @@
 import type { BBox } from "@/types/annotation";
 import type {
   PageReferenceTable,
+  ReferenceCoordinate,
   ReferenceMarker,
 } from "@/types/referencePoint";
 
@@ -22,6 +23,7 @@ export interface ReferenceValueRow {
   value: string;
   nameBox: BBox;
   rowBox: BBox;
+  coordinates: ReferenceCoordinate[];
   markers: ReferenceMarker[];
 }
 
@@ -75,6 +77,7 @@ export function buildReferenceValueRows(
           value: coordinate?.value.trim() ?? "",
           nameBox: point.nameBox,
           rowBox: point.rowBox,
+          coordinates: point.coordinates,
           markers: point.markers,
         };
       })
