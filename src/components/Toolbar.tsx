@@ -10,6 +10,7 @@ import { ExportPanel } from "@/components/ExportPanel";
 import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface ToolbarProps {
   isSelectingScanArea: boolean;
@@ -37,6 +38,7 @@ interface ToolbarProps {
   onRemoveDrawing: () => void;
   canSaveProject: boolean;
   scanCandidates: ScanCandidate[];
+  referenceTables: PageReferenceTable[];
 }
 
 export function Toolbar({
@@ -65,6 +67,7 @@ export function Toolbar({
   onRemoveDrawing,
   canSaveProject,
   scanCandidates,
+  referenceTables,
 }: ToolbarProps) {
   const [debugDump, setDebugDump] = useState(false);
 
@@ -132,6 +135,7 @@ export function Toolbar({
       <ExportPanel
         disabled={isProcessing}
         scanCandidates={scanCandidates}
+        referenceTables={referenceTables}
       />
 
       <KeywordSettings />

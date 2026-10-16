@@ -1930,6 +1930,7 @@ export function DrawingViewer() {
         onRemoveDrawing={() => void handleRemoveDrawing()}
         canSaveProject={konvaImage !== null}
         scanCandidates={scanCandidates}
+        referenceTables={referenceTables}
       />
 
       <div className="flex min-h-0 flex-1">

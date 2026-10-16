@@ -13,7 +13,10 @@ import {
   type DocumentMetadata,
 } from "@/types/documentMetadata";
 import type { PageReferenceTable } from "@/types/referencePoint";
-import { normalizePageReferenceTables } from "@/lib/referenceValues";
+import {
+  buildReferenceValueRows,
+  normalizePageReferenceTables,
+} from "@/lib/referenceValues";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -185,11 +188,13 @@ export function valueAnnotations(annotations: Annotation[]): Annotation[] {
 }
 
 /** Build the inspection table. Columns: S.no, Label, Value, Tolerance, then any
- * inspector-filled `extraColumns` (left blank), then Method and Tool. One row
- * per value (dimension). */
+ * inspector-filled `extraColumns` (left blank), then Method and Tool. When
+ * reference tables are supplied, their X/Y/Z values continue directly after
+ * the balloon rows. */
 export function buildInspectionSheet(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  referenceTables: readonly PageReferenceTable[] = []
 ): InspectionSheet {
   const headers = [
     "S.no",
@@ -212,11 +217,29 @@ export function buildInspectionSheet(
       a.method ?? "",
       a.tool ?? "",
     ]);
+  const nextNumber =
+    rows.reduce(
+      (largest, row) => Math.max(largest, Number(row[0]) || 0),
+      0
+    ) + 1;
+  const referenceRows = buildReferenceValueRows(referenceTables).map(
+    (reference, index) => [
+      String(nextNumber + index),
+      reference.label,
+      reference.value,
+      "",
+      ...extraColumns.map(() => ""),
+      "",
+      "",
+    ]
+  );
   return {
     extraColumns,
     headers,
     rows: [
       ...rows,
+      // Reference values continue the same table directly after balloons.
+      ...referenceRows,
       // Title-block fields first, then the notes paragraph below them.
       ...titleFieldRows(annotations, headers.length),
       ...notesRows(annotations, headers.length),

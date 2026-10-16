@@ -2,10 +2,12 @@ import type ExcelJS from "exceljs";
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet } from "@/lib/project";
 import type { BalloonedPageImage } from "@/lib/balloonedPageExport";
+import type { ReferencePageImage } from "@/lib/referencePageExport";
 import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 export const EXCEL_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -118,14 +120,15 @@ function setTableColumnWidths(
   });
 }
 
-function addBalloonedPageImages(
+function addDrawingPageImages(
   workbook: ExcelJS.Workbook,
   worksheet: ExcelJS.Worksheet,
-  pages: BalloonedPageImage[],
+  balloonedPages: BalloonedPageImage[],
+  referencePages: ReferencePageImage[],
   imageStartColumn: number
 ) {
   const headingCell = worksheet.getCell(1, imageStartColumn);
-  headingCell.value = "Ballooned Pages";
+  headingCell.value = "Drawing Pages";
   headingCell.font = {
     name: "Arial",
     size: 14,
@@ -141,8 +144,23 @@ function addBalloonedPageImages(
   headingCell.border = thinBorder;
   worksheet.getColumn(imageStartColumn).width = 18;
 
+  const pageNumbers = [
+    ...new Set([
+      ...balloonedPages.map((page) => page.page),
+      ...referencePages.map((page) => page.page),
+    ]),
+  ].sort((left, right) => left - right);
+  const images = pageNumbers.flatMap((pageNumber) => [
+    ...balloonedPages
+      .filter((page) => page.page === pageNumber)
+      .map((page) => ({ page, label: "Balloons" })),
+    ...referencePages
+      .filter((page) => page.page === pageNumber)
+      .map((page) => ({ page, label: "References" })),
+  ]);
+
   let captionRow = 2;
-  for (const page of pages) {
+  for (const { page, label } of images) {
     const scale = Math.min(
       1,
       MAX_IMAGE_WIDTH / Math.max(1, page.width),
@@ -152,7 +170,7 @@ function addBalloonedPageImages(
     const height = Math.max(1, Math.round(page.height * scale));
 
     const caption = worksheet.getCell(captionRow, imageStartColumn);
-    caption.value = `Page ${page.page}`;
+    caption.value = `Page ${page.page} — ${label}`;
     caption.font = { name: "Arial", bold: true, color: { argb: "FF334155" } };
     caption.alignment = { horizontal: "left", vertical: "middle" };
 
@@ -209,6 +227,8 @@ function addCompanyHeader(
 export async function buildInspectionWorkbook(args: {
   annotations: Annotation[];
   pages: BalloonedPageImage[];
+  referenceTables?: readonly PageReferenceTable[];
+  referencePages?: ReferencePageImage[];
   options: ExcelExportOptions;
 }): Promise<ExcelJS.Workbook> {
   const ExcelJSImport = await import("exceljs");
@@ -220,7 +240,11 @@ export async function buildInspectionWorkbook(args: {
 
   const title = workbookTitle(args.options.fileName);
   const partColumns = partColumnNames(args.options.partCount);
-  const inspection = buildInspectionSheet(args.annotations, partColumns);
+  const inspection = buildInspectionSheet(
+    args.annotations,
+    partColumns,
+    args.referenceTables
+  );
   const metadata = normalizeDocumentMetadata(args.options.metadata);
   const worksheet = workbook.addWorksheet("Checksheet", {
     views: [{ state: "frozen", ySplit: TABLE_HEADER_ROW }],
@@ -323,13 +347,21 @@ export async function buildInspectionWorkbook(args: {
   };
 
   const imageStartColumn = leftColumnCount + 2;
-  addBalloonedPageImages(workbook, worksheet, args.pages, imageStartColumn);
+  addDrawingPageImages(
+    workbook,
+    worksheet,
+    args.pages,
+    args.referencePages ?? [],
+    imageStartColumn
+  );
   return workbook;
 }
 
 export async function downloadInspectionWorkbook(args: {
   annotations: Annotation[];
   pages: BalloonedPageImage[];
+  referenceTables?: readonly PageReferenceTable[];
+  referencePages?: ReferencePageImage[];
   options: ExcelExportOptions;
 }): Promise<string> {
   const workbook = await buildInspectionWorkbook(args);

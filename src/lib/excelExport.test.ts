@@ -6,9 +6,36 @@ import {
   workbookTitle,
 } from "@/lib/excelExport";
 import { makeAnnotation } from "@/test/annotationFixture";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 const ONE_PIXEL_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6ZgAAAABJRU5ErkJggg==";
+
+const referenceTable: PageReferenceTable = {
+  page: 1,
+  bbox: { x: 10, y: 20, width: 300, height: 120 },
+  headerBox: { x: 10, y: 20, width: 300, height: 20 },
+  axes: ["X", "Y"],
+  nameHeader: "POINT",
+  points: [
+    {
+      symbol: "A",
+      coordinates: [
+        { axis: "X", value: "10.25" },
+        { axis: "Y", value: "-4.50" },
+      ],
+      nameBox: { x: 10, y: 40, width: 30, height: 20 },
+      rowBox: { x: 10, y: 40, width: 300, height: 20 },
+      markers: [
+        {
+          bbox: { x: 400, y: 200, width: 12, height: 14 },
+          score: 0.94,
+          margin: 0.21,
+        },
+      ],
+    },
+  ],
+};
 
 describe("Excel export options", () => {
   it("creates numbered part columns", () => {
@@ -118,5 +145,95 @@ describe("inspection workbook", () => {
     expect(worksheet.getCell("B4").value).toBe("Drive Bracket");
     expect(worksheet.getCell("F4").value).toBe("DB-1042");
     expect(worksheet.getCell("I4").value).toBe("C");
+  });
+
+  it("appends X/Y/Z reference values and a reference-only image", async () => {
+    const workbook = await buildInspectionWorkbook({
+      annotations: [
+        makeAnnotation({
+          id: "balloon-1",
+          number: 1,
+          label: "Diameter",
+          value: "25",
+        }),
+      ],
+      pages: [
+        { page: 1, dataUrl: ONE_PIXEL_PNG, width: 1000, height: 1400 },
+      ],
+      referenceTables: [referenceTable],
+      referencePages: [
+        { page: 1, dataUrl: ONE_PIXEL_PNG, width: 1000, height: 1400 },
+      ],
+      options: {
+        fileName: "Reference export",
+        partCount: 2,
+      },
+    });
+    const worksheet = workbook.getWorksheet("Checksheet");
+    expect(worksheet).toBeDefined();
+    if (!worksheet) throw new Error("Checksheet worksheet was not created.");
+
+    expect(workbook.worksheets).toHaveLength(1);
+    expect(worksheet.getRow(8).values).toEqual([
+      undefined,
+      "1",
+      "Diameter",
+      "25",
+      "0",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    expect(worksheet.getRow(9).values).toEqual([
+      undefined,
+      "2",
+      "A_X",
+      "10.25",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    expect(worksheet.getRow(10).values).toEqual([
+      undefined,
+      "3",
+      "A_Y",
+      "-4.50",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    expect(worksheet.getRow(11).values).toEqual([
+      undefined,
+      "4",
+      "A_Z",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    expect(worksheet.getImages()).toHaveLength(2);
+
+    const captions: string[] = [];
+    worksheet.eachRow((row) => {
+      row.eachCell((cell) => {
+        if (typeof cell.value === "string" && cell.value.startsWith("Page ")) {
+          captions.push(cell.value);
+        }
+      });
+    });
+    expect(captions).toEqual([
+      "Page 1 — Balloons",
+      "Page 1 — References",
+    ]);
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    expect(buffer.byteLength).toBeGreaterThan(1000);
   });
 });
