@@ -97,7 +97,10 @@ The fast suite verifies:
   or whole-page eligibility filters.
 - Benchmark fixtures validate profile/disposition ground truth, normalized
   location anchors, semantic-exact scoring, and the three-state candidate
-  accounting invariant without loading OCR models.
+  accounting invariant without loading OCR models. Benchmark execution tests
+  also pin the native-PDF-primary, raster-fallback, and hybrid-additive source
+  selection policy; combined-report tests pin aggregate accuracy and failure
+  accounting.
 
 The fast automated suite does not claim OCR accuracy on real manufacturing
 drawings or pixel-perfect browser rendering. Real-drawing OCR is an opt-in
@@ -118,6 +121,19 @@ On Windows use `backend\.venv\Scripts\python` and backslashes. To exercise every
 fixture through pytest, set `RUN_DOC_BENCHMARKS=1` before running
 `backend/test_benchmark_documents.py`. Use the validated OCR environment; saved
 schema-v2 snapshots can then be re-scored without reloading the models.
+
+To run the combined suite on the configured GPU and keep its snapshots and
+summary together, start in `doc-ocr/backend`:
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES="0"
+$env:OCR_DEVICE="gpu:0"
+$env:OCR_RELOAD="false"
+
+.\.venv-gpu\Scripts\python.exe scripts\run_benchmark.py `
+  --save-snapshot `
+  --output-dir benchmarks\results\m5
+```
 
 ## Windows manual acceptance checklist
 

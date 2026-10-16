@@ -5,6 +5,12 @@ evidence. It measures recognition, classification, final candidate disposition,
 and whether every detected object reaches one explicit final state. It does not
 change production OCR, filtering, review UI, persistence, or export behaviour.
 
+For PDFs, the `page` route follows the same source-selection policy as the
+application: trustworthy native PDF text is authoritative, raster OCR is the
+fallback for image-only or untrusted pages, and OCR is additive on hybrid
+pages. The report records the page profile, text-layer strategy, and recognition
+source counts so a run cannot silently regress to OCR-everywhere behaviour.
+
 ## Corpus
 
 | Fixture | Profile | Why it is included |
@@ -123,6 +129,23 @@ backend\.venv\Scripts\python backend\scripts\run_benchmark.py ^
   129E01-13300-ID --save-snapshot
 ```
 
+Run the complete M1-M4 regression and write a machine-readable report and a
+shareable Markdown summary (from `doc-ocr/backend` in PowerShell):
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES="0"
+$env:OCR_DEVICE="gpu:0"
+$env:OCR_RELOAD="false"
+
+.\.venv-gpu\Scripts\python.exe scripts\run_benchmark.py `
+  --save-snapshot `
+  --output-dir benchmarks\results\m5
+```
+
+This creates one `*.scan.json` per drawing plus `combined-report.json` and
+`combined-report.md` under the chosen directory. The console also prints the
+combined pass/fail summary after all per-drawing details.
+
 With no fixture name, the runner processes all drawings. This loads OCR models
 and may take several minutes per drawing. `route: page` is the production
 whole-page Auto-Balloon path and is the default. `legacy_segment` exists only
@@ -140,6 +163,7 @@ backend/.venv/bin/python backend/scripts/run_benchmark.py \
 Useful options:
 
 - `--json` emits a machine-readable report.
+- `--output-dir PATH` writes the combined JSON and Markdown reports.
 - `--dpi 400` or `--dpi 600` measures source-fidelity sensitivity without a
   production architecture change.
 - `--save-regions` writes a compatibility accepted/review/other flat list;

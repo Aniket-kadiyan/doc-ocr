@@ -22,6 +22,7 @@ from benchmarks.accounting import (
     candidates_from_snapshot,
     evaluate_snapshot_accounting,
 )
+from benchmarks.execution import segment_document
 from benchmarks.scoring import (
     load_document,
     requirement_failures,
@@ -51,19 +52,6 @@ def _resolve(relative: str) -> Path | None:
     return None
 
 
-def _render(path: Path, dpi: int):
-    if path.suffix.lower() != ".pdf":
-        from PIL import Image
-
-        yield Image.open(path).convert("RGB")
-        return
-    import pypdfium2 as pdfium
-
-    pdf = pdfium.PdfDocument(str(path))
-    for index in range(len(pdf)):
-        yield pdf[index].render(scale=dpi / 72).to_pil().convert("RGB")
-
-
 @pytest.mark.parametrize("fixture", FIXTURES, ids=lambda p: p.stem)
 def test_document_accuracy(fixture):
     spec = load_document(fixture)
@@ -71,34 +59,12 @@ def test_document_accuracy(fixture):
     if drawing is None:
         pytest.skip(f"drawing not available: {spec['document']}")
 
-    from ocr_pipeline import get_pipeline
-
-    pipeline = get_pipeline()
     route = spec.get("route", "page")
-    pages = []
-    for page_number, image in enumerate(
-        _render(drawing, spec.get("dpi", 250)), start=1
-    ):
-        result = (
-            pipeline.segment_page(image)
-            if route == "page"
-            else pipeline.segment(image)
-        )
-        pages.append(
-            {
-                "page": page_number,
-                "width": image.width,
-                "height": image.height,
-                "result": result,
-            }
-        )
-
-    snapshot = {
-        "schema_version": 2,
-        "route": route,
-        "dpi": spec.get("dpi", 250),
-        "pages": pages,
-    }
+    snapshot = segment_document(
+        drawing,
+        spec.get("dpi", 250),
+        route=route,
+    )
     candidates = candidates_from_snapshot(snapshot)
     accounting = evaluate_snapshot_accounting(snapshot)
 

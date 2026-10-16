@@ -27,6 +27,10 @@ const python = virtualenvPython
 
 const fastTests = [
   "backend/test_angle_utils.py",
+  "backend/test_benchmark_accounting.py",
+  "backend/test_benchmark_execution.py",
+  "backend/test_benchmark_scoring.py",
+  "backend/test_benchmark_suite.py",
   "backend/test_checksheet_converter.py",
   "backend/test_checksheet_storage.py",
   "backend/test_detection_passes.py",

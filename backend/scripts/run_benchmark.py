@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent
@@ -32,11 +31,19 @@ from benchmarks.accounting import (  # noqa: E402
     candidates_from_snapshot,
     evaluate_snapshot_accounting,
 )
+from benchmarks.execution import segment_document  # noqa: E402
 from benchmarks.scoring import (  # noqa: E402
     load_document,
     requirement_failures,
     score_document,
 )
+from benchmarks.suite import (  # noqa: E402
+    build_suite_report,
+    format_suite_markdown,
+    format_suite_text,
+    snapshot_execution_summary,
+)
+from ocr_pipeline import OCR_CHANGESET_ID  # noqa: E402
 
 DOCUMENTS = BACKEND / "benchmarks" / "documents"
 RESULTS = BACKEND / "benchmarks" / "results"
@@ -54,70 +61,6 @@ def resolve_document(relative: str) -> Path:
             return probe
         base = base.parent
     raise FileNotFoundError(f"cannot find {relative} above {BACKEND}")
-
-
-def render_pages(path: Path, dpi: int):
-    if path.suffix.lower() != ".pdf":
-        from PIL import Image
-
-        yield Image.open(path).convert("RGB")
-        return
-    import pypdfium2 as pdfium
-
-    pdf = pdfium.PdfDocument(str(path))
-    for index in range(len(pdf)):
-        yield pdf[index].render(scale=dpi / 72).to_pil().convert("RGB")
-
-
-def _json_safe(value):
-    """Convert NumPy scalars, tuples, and nested scan data to JSON values."""
-
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    if hasattr(value, "tolist"):
-        try:
-            return _json_safe(value.tolist())
-        except (TypeError, ValueError):
-            pass
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (TypeError, ValueError):
-            pass
-    return value
-
-
-def segment_document(path: Path, dpi: int, *, route: str = "page") -> dict:
-    """Run every page and retain the complete result for lifecycle scoring."""
-
-    from ocr_pipeline import get_pipeline
-
-    pipeline = get_pipeline()
-    pages: list[dict] = []
-    started = time.time()
-    for page_no, image in enumerate(render_pages(path, dpi), start=1):
-        result = (
-            pipeline.segment_page(image)
-            if route == "page"
-            else pipeline.segment(image)
-        )
-        pages.append(
-            {
-                "page": page_no,
-                "width": image.width,
-                "height": image.height,
-                "result": _json_safe(result),
-            }
-        )
-    return {
-        "schema_version": 2,
-        "route": route,
-        "dpi": dpi,
-        "seconds": time.time() - started,
-        "pages": pages,
-    }
 
 
 def main() -> int:
@@ -138,6 +81,10 @@ def main() -> int:
         help="write accepted, review, other, counts, reasons, and geometry",
     )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
+    parser.add_argument(
+        "--output-dir",
+        help="write combined-report.json and combined-report.md to this directory",
+    )
     parser.add_argument(
         "--ignore-gates",
         action="store_true",
@@ -204,8 +151,9 @@ def main() -> int:
 
         if not args.regions:
             if args.save_regions:
-                RESULTS.mkdir(parents=True, exist_ok=True)
-                target = RESULTS / f"{fixture.stem}.regions.json"
+                snapshot_dir = Path(args.output_dir) if args.output_dir else RESULTS
+                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                target = snapshot_dir / f"{fixture.stem}.regions.json"
                 legacy_candidates = [
                     {
                         key: value
@@ -220,8 +168,9 @@ def main() -> int:
                 )
                 print(f"wrote {target}")
             if args.save_snapshot:
-                RESULTS.mkdir(parents=True, exist_ok=True)
-                target = RESULTS / f"{fixture.stem}.scan.json"
+                snapshot_dir = Path(args.output_dir) if args.output_dir else RESULTS
+                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                target = snapshot_dir / f"{fixture.stem}.scan.json"
                 target.write_text(
                     json.dumps(snapshot, indent=1, ensure_ascii=False),
                     encoding="utf-8",
@@ -243,6 +192,15 @@ def main() -> int:
             accounting=accounting,
         )
         payload = report.to_dict()
+        payload["fixture"] = fixture.name
+        payload["document_path"] = spec["document"]
+        payload["route"] = snapshot.get("route") if isinstance(snapshot, dict) else None
+        payload["dpi"] = snapshot.get("dpi") if isinstance(snapshot, dict) else None
+        payload["execution"] = (
+            snapshot_execution_summary(snapshot)
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("pages"), list)
+            else {}
+        )
         payload["accounting"] = accounting.to_dict()
         payload["gate_failures"] = failures
         reports.append(payload)
@@ -257,8 +215,24 @@ def main() -> int:
         if failures and not args.ignore_gates:
             failed = True
 
+    suite = build_suite_report(reports, ocr_changeset=OCR_CHANGESET_ID)
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        json_target = output_dir / "combined-report.json"
+        markdown_target = output_dir / "combined-report.md"
+        json_target.write_text(
+            json.dumps(suite, indent=1, ensure_ascii=False), encoding="utf-8"
+        )
+        markdown_target.write_text(format_suite_markdown(suite), encoding="utf-8")
+        if not args.json:
+            print(f"wrote {json_target}")
+            print(f"wrote {markdown_target}")
+
     if args.json:
         print(json.dumps(reports, indent=1, ensure_ascii=False))
+    else:
+        print(format_suite_text(suite))
     return 1 if failed else 0
 
 
