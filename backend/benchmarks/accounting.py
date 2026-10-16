@@ -240,6 +240,10 @@ def evaluate_page_accounting(
     outcome_by_id = {
         _candidate_id(item): item for item in outcomes if _candidate_id(item)
     }
+    published_ids = {
+        "eligible": {_candidate_id(item) for item in regions if _candidate_id(item)},
+        "review": {_candidate_id(item) for item in reviews if _candidate_id(item)},
+    }
     for collection_name, items, wanted_state in (
         ("regions", regions, "eligible"),
         ("review_candidates", reviews, "review"),
@@ -273,12 +277,21 @@ def evaluate_page_accounting(
         if not _valid_bbox(outcome.get("bbox")):
             issue("invalid_bbox", f"candidate_outcomes[{index}] has no usable bbox")
         state = str(outcome.get("state") or "")
+        candidate_id = _candidate_id(outcome)
+        if state in published_ids and (
+            not candidate_id or candidate_id not in published_ids[state]
+        ):
+            issue(
+                "unpublished_outcome",
+                f"active {state} outcome {candidate_id or index} is absent "
+                "from its public collection",
+            )
         if state in {"review", "excluded"} and not str(
             outcome.get("reason") or ""
         ).strip():
             issue(
                 "missing_disposition_reason",
-                f"candidate {_candidate_id(outcome) or index} in state {state} "
+                f"candidate {candidate_id or index} in state {state} "
                 "has no reason",
             )
 

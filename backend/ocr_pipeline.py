@@ -10,6 +10,11 @@ import re
 import numpy as np
 from PIL import Image
 
+from candidate_lifecycle import (
+    final_candidate_counts,
+    reconcile_unpublished_outcomes,
+    retire_candidate_outcomes,
+)
 from debug_dump import StepDumper, dump_force, dump_status, should_dump
 from dimension_compose import compose_engineering_dimension
 from feature_classifier import classify_feature
@@ -55,7 +60,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m6-reference-points-backend"
+OCR_CHANGESET_ID = "mvp1-m9-candidate-accounting"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -8643,6 +8648,12 @@ class OcrPipeline:
             if position is None:
                 continue
             split_regions[position : position + 1] = list(pieces)
+            retire_candidate_outcomes(
+                candidate_outcomes,
+                {str(region.get("candidate_id") or "")},
+                reason="Replaced by separately read stacked callout values",
+                overlays=filtered_overlay_candidates,
+            )
             detected_count += len(pieces) - 1
         regions = split_regions
         if limit_boxes:
@@ -8760,10 +8771,20 @@ class OcrPipeline:
         # The section route has always done this; this one did not, so both the
         # whole callout and the fragment it replaced were balloonned, leaving
         # "Ø20H10+0.084/0" next to a second balloon reading just "+0.0840".
-        # detected_count drops with them so the state invariant still balances.
-        before_supersede = len(regions)
+        # Preserve the replaced upright read as Other so its OCR evidence stays
+        # visible even though only the better slanted value is published.
+        superseded_ids = {
+            str(region.get("candidate_id") or "")
+            for region in regions
+            if region.get("superseded")
+        }
         regions = [r for r in regions if not r.pop("superseded", False)]
-        detected_count -= before_supersede - len(regions)
+        retire_candidate_outcomes(
+            candidate_outcomes,
+            superseded_ids,
+            reason="Superseded by a recovered slanted callout",
+            overlays=filtered_overlay_candidates,
+        )
 
         # A review candidate lying under an accepted slanted read is the
         # upright pass's failed attempt at the same ink — "6.5×0" under
@@ -8877,10 +8898,32 @@ class OcrPipeline:
         # publication, which puts a second balloon exactly on top of the first:
         # on a real sheet "Ø30-0.2" came out twice with an identical box. The
         # section route has always deduped its regions; this route did not.
-        # detected_count drops with them so the state invariant still balances.
-        before_dedupe = len(regions)
+        # Preserve removed duplicates as Other rather than silently dropping
+        # their detector/recognition evidence.
+        pre_dedupe_regions = list(regions)
         regions = dedupe_regions(regions)
-        detected_count -= before_dedupe - len(regions)
+        retained_region_objects = {id(region) for region in regions}
+        duplicate_ids = {
+            str(region.get("candidate_id") or "")
+            for region in pre_dedupe_regions
+            if id(region) not in retained_region_objects
+        }
+        retire_candidate_outcomes(
+            candidate_outcomes,
+            duplicate_ids,
+            reason="Duplicate of another published value",
+            overlays=filtered_overlay_candidates,
+        )
+
+        # This is a conservative guard for future post-processing paths. Any
+        # active detector outcome absent from its public collection is retained
+        # as Other, never silently discarded.
+        reconcile_unpublished_outcomes(
+            regions,
+            review_candidates,
+            candidate_outcomes,
+            overlays=filtered_overlay_candidates,
+        )
 
         # Refresh parse evidence after the final limit-stack, dual-unit,
         # slanted, notes, and deduplication passes. Earlier text can be
@@ -8975,9 +9018,17 @@ class OcrPipeline:
             or str(item.get("candidate_id")) not in candidate_ids
         )
 
-        recognized_count = sum(
-            1 for record in ocr_records if record["recognized"]
-        ) + (1 if notes_region is not None else 0)
+        lifecycle_counts = final_candidate_counts(
+            regions,
+            review_candidates,
+            candidate_outcomes,
+        )
+        detected_count = lifecycle_counts.detected
+        recognized_count = lifecycle_counts.recognized
+        eligible_count = lifecycle_counts.eligible
+        excluded_count = lifecycle_counts.excluded
+        review_count = lifecycle_counts.review
+        unread_count = lifecycle_counts.unread
         recognition_source_counts: Counter[str] = Counter(
             str(
                 record["result"].get("recognition_source")
@@ -8986,17 +9037,6 @@ class OcrPipeline:
             for record in ocr_records
             if record.get("recognized") and not record.get("table_excluded")
         )
-        unread_count = detected_count - recognized_count
-        eligible_count = len(regions)
-        excluded_count = sum(
-            1
-            for outcome in candidate_outcomes
-            if outcome["state"] == "excluded"
-        )
-        review_count = len(review_candidates)
-        if detected_count != eligible_count + excluded_count + review_count:
-            raise AssertionError("Every detected page object must have one final state")
-
         report(
             stage="finalizing",
             message=(

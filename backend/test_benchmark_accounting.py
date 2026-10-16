@@ -137,6 +137,22 @@ def test_recognition_count_mismatch_is_rejected():
     )
 
 
+def test_active_outcome_missing_from_public_collection_is_rejected():
+    result = _result()
+    result["candidate_outcomes"].append(
+        {
+            "candidate_id": "C0004",
+            "bbox": _bbox(160),
+            "state": "eligible",
+            "text": "R5",
+            "reason": "Complete engineering value",
+        }
+    )
+    report = evaluate_page_accounting(result)
+    assert not report.passed
+    assert any(issue.code == "unpublished_outcome" for issue in report.issues)
+
+
 def test_missing_lifecycle_count_is_explicit_failure():
     result = _result()
     del result["review_count"]
