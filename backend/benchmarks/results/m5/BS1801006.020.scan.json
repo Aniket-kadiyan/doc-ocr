@@ -1,0 +1,5327 @@
+{
+ "schema_version": 2,
+ "route": "page",
+ "execution_policy": "native_pdf_first",
+ "source_format": "pdf",
+ "dpi": 250,
+ "seconds": 2.6988015174865723,
+ "pages": [
+  {
+   "page": 1,
+   "width": 2066,
+   "height": 2924,
+   "result": {
+    "count": 14,
+    "detected_count": 43,
+    "recognized_count": 43,
+    "eligible_count": 14,
+    "excluded_count": 28,
+    "review_count": 1,
+    "unread_count": 0,
+    "skipped_existing_count": 0,
+    "filter_rule_counts": {
+     "native_text_engineering_value": 14,
+     "native_text_needs_review": 1,
+     "native_text_non_callout": 26,
+     "table_region": 2
+    },
+    "regions": [
+     {
+      "object_id": "PDF:P1:T00001",
+      "assembly_id": "PDF:P1:T00001",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00002:R001",
+        "text": "60°",
+        "raw_text": "60°",
+        "bbox": {
+         "x": 1154.4,
+         "y": 105.7,
+         "width": 49.0,
+         "height": 25.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00002:R002",
+        "text": "±0°",
+        "raw_text": "±0°",
+        "bbox": {
+         "x": 1210.2,
+         "y": 108.3,
+         "width": 48.4,
+         "height": 20.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00002:R003",
+        "text": "30'",
+        "raw_text": "30'",
+        "bbox": {
+         "x": 1269.3,
+         "y": 108.9,
+         "width": 33.5,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1143.9,
+       "y": 95.1,
+       "width": 169.4,
+       "height": 47.6
+      },
+      "text": "60°±0°30",
+      "confidence": 0.995,
+      "type": "angle",
+      "category": "Angle",
+      "subtype": null,
+      "label": "Angle",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "60°±0°30",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1143.9,
+        "y": 95.1,
+        "width": 169.4,
+        "height": 47.6
+       }
+      },
+      "candidate_id": "PDF:P1:T00001",
+      "raw_text": "60°±0°30",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00002",
+      "assembly_id": "PDF:P1:T00002",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00003:R001",
+        "text": "Ø33",
+        "raw_text": "Ø33",
+        "bbox": {
+         "x": 1158.6,
+         "y": 238.6,
+         "width": 62.9,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1233.4,
+         "y": 241.6,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R003",
+        "text": "0.05",
+        "raw_text": "0.05",
+        "bbox": {
+         "x": 1248.0,
+         "y": 232.6,
+         "width": 51.3,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R004",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1233.4,
+         "y": 269.1,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R005",
+        "text": "0.1",
+        "raw_text": "0.1",
+        "bbox": {
+         "x": 1248.0,
+         "y": 260.1,
+         "width": 31.7,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1148.0,
+       "y": 221.5,
+       "width": 161.8,
+       "height": 69.3
+      },
+      "text": "Ø33-0.05-0.1",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø33-0.05-0.1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1148.0,
+        "y": 221.5,
+        "width": 161.8,
+        "height": 69.3
+       }
+      },
+      "candidate_id": "PDF:P1:T00002",
+      "raw_text": "Ø33-0.05-0.1",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00003",
+      "assembly_id": "PDF:P1:T00003",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00005:R001",
+        "text": "R2",
+        "raw_text": "R2",
+        "bbox": {
+         "x": 777.1,
+         "y": 594.0,
+         "width": 39.7,
+         "height": 24.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00005:R002",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 823.3,
+         "y": 596.4,
+         "width": 60.6,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 766.6,
+       "y": 583.4,
+       "width": 127.8,
+       "height": 46.2
+      },
+      "text": "R2±0.2",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R2±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 766.6,
+        "y": 583.4,
+        "width": 127.8,
+        "height": 46.2
+       }
+      },
+      "candidate_id": "PDF:P1:T00003",
+      "raw_text": "R2±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00004",
+      "assembly_id": "PDF:P1:T00004",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00006:R001",
+        "text": "R2",
+        "raw_text": "R2",
+        "bbox": {
+         "x": 1564.6,
+         "y": 1401.6,
+         "width": 39.1,
+         "height": 24.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00006:R002",
+        "text": "±0.5",
+        "raw_text": "±0.5",
+        "bbox": {
+         "x": 1610.9,
+         "y": 1404.0,
+         "width": 61.0,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1554.1,
+       "y": 1391.0,
+       "width": 128.2,
+       "height": 46.2
+      },
+      "text": "R2±0.5",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R2±0.5",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1554.1,
+        "y": 1391.0,
+        "width": 128.2,
+        "height": 46.2
+       }
+      },
+      "candidate_id": "PDF:P1:T00004",
+      "raw_text": "R2±0.5",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00005",
+      "assembly_id": "PDF:P1:T00005",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00007:R001",
+        "text": "R10",
+        "raw_text": "R10",
+        "bbox": {
+         "x": 744.0,
+         "y": 1503.5,
+         "width": 58.6,
+         "height": 25.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00007:R002",
+        "text": "±2",
+        "raw_text": "±2",
+        "bbox": {
+         "x": 809.0,
+         "y": 1505.9,
+         "width": 38.1,
+         "height": 19.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 733.5,
+       "y": 1492.8,
+       "width": 124.1,
+       "height": 46.7
+      },
+      "text": "R10±2",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R10±2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 733.5,
+        "y": 1492.8,
+        "width": 124.1,
+        "height": 46.7
+       }
+      },
+      "candidate_id": "PDF:P1:T00005",
+      "raw_text": "R10±2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00006",
+      "assembly_id": "PDF:P1:T00006",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00009:R001",
+        "text": "Ø30",
+        "raw_text": "Ø30",
+        "bbox": {
+         "x": 669.2,
+         "y": 1669.5,
+         "width": 62.8,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00009:R002",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 738.3,
+         "y": 1677.8,
+         "width": 60.6,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 658.6,
+       "y": 1658.8,
+       "width": 150.8,
+       "height": 57.8
+      },
+      "text": "Ø30±0.2",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø30±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 658.6,
+        "y": 1658.8,
+        "width": 150.8,
+        "height": 57.8
+       }
+      },
+      "candidate_id": "PDF:P1:T00006",
+      "raw_text": "Ø30±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00007",
+      "assembly_id": "PDF:P1:T00007",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00010:R001",
+        "text": "0.1",
+        "raw_text": "0.1",
+        "bbox": {
+         "x": 1609.0,
+         "y": 2115.4,
+         "width": 40.2,
+         "height": 25.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1598.5,
+       "y": 2104.8,
+       "width": 61.2,
+       "height": 46.3
+      },
+      "text": "0.1",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "0.1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1598.5,
+        "y": 2104.8,
+        "width": 61.2,
+        "height": 46.3
+       }
+      },
+      "candidate_id": "PDF:P1:T00007",
+      "raw_text": "0.1",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00008",
+      "assembly_id": "PDF:P1:T00008",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00012:R001",
+        "text": "Ø23.5",
+        "raw_text": "Ø23.5",
+        "bbox": {
+         "x": 1144.8,
+         "y": 2143.9,
+         "width": 91.8,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00012:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1247.8,
+         "y": 2147.4,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00012:R003",
+        "text": "0.05",
+        "raw_text": "0.05",
+        "bbox": {
+         "x": 1261.2,
+         "y": 2138.5,
+         "width": 51.9,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1134.2,
+       "y": 2127.3,
+       "width": 189.3,
+       "height": 64.0
+      },
+      "text": "Ø23.5-0.05",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø23.5-0.05",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1134.2,
+        "y": 2127.3,
+        "width": 189.3,
+        "height": 64.0
+       }
+      },
+      "candidate_id": "PDF:P1:T00008",
+      "raw_text": "Ø23.5-0.05",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00009",
+      "assembly_id": "PDF:P1:T00009",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00014:R001",
+        "text": "Ø30",
+        "raw_text": "Ø30",
+        "bbox": {
+         "x": 1167.3,
+         "y": 2243.9,
+         "width": 62.2,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00014:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1240.9,
+         "y": 2247.5,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00014:R003",
+        "text": "0.2",
+        "raw_text": "0.2",
+        "bbox": {
+         "x": 1254.9,
+         "y": 2238.5,
+         "width": 35.3,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1156.7,
+       "y": 2227.5,
+       "width": 143.9,
+       "height": 63.5
+      },
+      "text": "Ø30-0.2",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø30-0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1156.7,
+        "y": 2227.5,
+        "width": 143.9,
+        "height": 63.5
+       }
+      },
+      "candidate_id": "PDF:P1:T00009",
+      "raw_text": "Ø30-0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00011",
+      "assembly_id": "PDF:P1:T00011",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00018:R001",
+        "text": "1.3343",
+        "raw_text": "1.3343",
+        "bbox": {
+         "x": 383.7,
+         "y": 2512.7,
+         "width": 97.3,
+         "height": 25.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 373.4,
+       "y": 2502.0,
+       "width": 117.9,
+       "height": 46.9
+      },
+      "text": "1.3343",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "1.3343",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 373.4,
+        "y": 2502.0,
+        "width": 117.9,
+        "height": 46.9
+       }
+      },
+      "candidate_id": "PDF:P1:T00011",
+      "raw_text": "1.3343",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00014",
+      "assembly_id": "PDF:P1:T00014",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00040:R001",
+        "text": "5°",
+        "raw_text": "5°",
+        "bbox": {
+         "x": 197.2,
+         "y": 1761.2,
+         "width": 26.8,
+         "height": 29.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00040:R002",
+        "text": "±0°",
+        "raw_text": "±0°",
+        "bbox": {
+         "x": 202.3,
+         "y": 1797.7,
+         "width": 21.6,
+         "height": 48.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00040:R003",
+        "text": "30'",
+        "raw_text": "30'",
+        "bbox": {
+         "x": 204.1,
+         "y": 1856.8,
+         "width": 21.4,
+         "height": 33.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 185.1,
+       "y": 1749.3,
+       "width": 55.3,
+       "height": 152.9
+      },
+      "text": "5°±0°30",
+      "confidence": 0.995,
+      "type": "angle",
+      "category": "Angle",
+      "subtype": null,
+      "label": "Angle",
+      "orientation": "vertical",
+      "rotation": 87.5,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "5°±0°30",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 185.1,
+        "y": 1749.3,
+        "width": 55.3,
+        "height": 152.9
+       }
+      },
+      "oriented_box": {
+       "x": 233.8,
+       "y": 1749.3,
+       "width": 151.0,
+       "height": 48.7,
+       "rotation": 87.5
+      },
+      "candidate_id": "PDF:P1:T00014",
+      "raw_text": "5°±0°30",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00015",
+      "assembly_id": "PDF:P1:T00015",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00041:R001",
+        "text": "7",
+        "raw_text": "7",
+        "bbox": {
+         "x": 725.0,
+         "y": 934.2,
+         "width": 24.3,
+         "height": 16.0
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00041:R002",
+        "text": "0",
+        "raw_text": "0",
+        "bbox": {
+         "x": 724.6,
+         "y": 915.6,
+         "width": 25.1,
+         "height": 16.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "zero",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00041:R003",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 727.7,
+         "y": 848.0,
+         "width": 20.1,
+         "height": 60.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 714.1,
+       "y": 837.6,
+       "width": 46.0,
+       "height": 123.0
+      },
+      "text": "70±0.2",
+      "confidence": 0.995,
+      "type": "tolerance",
+      "category": "Tolerance",
+      "subtype": null,
+      "label": "Toleranced Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "70±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 714.1,
+        "y": 837.6,
+        "width": 46.0,
+        "height": 123.0
+       }
+      },
+      "oriented_box": {
+       "x": 714.4,
+       "y": 960.6,
+       "width": 122.9,
+       "height": 45.8,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00015",
+      "raw_text": "70±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00016",
+      "assembly_id": "PDF:P1:T00016",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00042:R001",
+        "text": "15",
+        "raw_text": "15",
+        "bbox": {
+         "x": 1581.5,
+         "y": 506.5,
+         "width": 25.1,
+         "height": 32.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00042:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1579.2,
+         "y": 487.9,
+         "width": 2.4,
+         "height": 7.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00042:R003",
+        "text": "0.2",
+        "raw_text": "0.2",
+        "bbox": {
+         "x": 1570.2,
+         "y": 446.0,
+         "width": 20.1,
+         "height": 35.2
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1559.8,
+       "y": 435.6,
+       "width": 57.2,
+       "height": 114.1
+      },
+      "text": "15-0.2",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "15-0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1559.8,
+        "y": 435.6,
+        "width": 57.2,
+        "height": 114.1
+       }
+      },
+      "oriented_box": {
+       "x": 1560.0,
+       "y": 549.7,
+       "width": 114.0,
+       "height": 57.0,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00016",
+      "raw_text": "15-0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00017",
+      "assembly_id": "PDF:P1:T00017",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00043:R001",
+        "text": "114.5",
+        "raw_text": "114.5",
+        "bbox": {
+         "x": 1690.3,
+         "y": 1227.9,
+         "width": 25.1,
+         "height": 80.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00043:R002",
+        "text": "±0.05",
+        "raw_text": "±0.05",
+        "bbox": {
+         "x": 1693.3,
+         "y": 1145.2,
+         "width": 20.1,
+         "height": 76.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1679.7,
+       "y": 1134.8,
+       "width": 46.2,
+       "height": 184.4
+      },
+      "text": "114.5±0.05",
+      "confidence": 0.995,
+      "type": "tolerance",
+      "category": "Tolerance",
+      "subtype": null,
+      "label": "Toleranced Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "114.5±0.05",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1679.7,
+        "y": 1134.8,
+        "width": 46.2,
+        "height": 184.4
+       }
+      },
+      "oriented_box": {
+       "x": 1680.0,
+       "y": 1319.2,
+       "width": 184.3,
+       "height": 45.9,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00017",
+      "raw_text": "114.5±0.05",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     }
+    ],
+    "review_candidates": [
+     {
+      "object_id": "PDF:P1:T00010",
+      "assembly_id": "PDF:P1:T00010",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00017:R001",
+        "text": "S6-5-2",
+        "raw_text": "S6-5-2",
+        "bbox": {
+         "x": 198.2,
+         "y": 2512.7,
+         "width": 96.4,
+         "height": 25.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 187.8,
+       "y": 2502.0,
+       "width": 117.0,
+       "height": 46.9
+      },
+      "text": "S6-5-2",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": true,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "S6-5-2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 187.8,
+        "y": 2502.0,
+        "width": 117.0,
+        "height": 46.9
+       }
+      },
+      "candidate_id": "PDF:P1:T00010",
+      "raw_text": "S6-5-2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_needs_review",
+      "page_filter_reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "review_reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "state": "review",
+      "reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "rule": "native_text_needs_review"
+     }
+    ],
+    "candidate_outcomes": [
+     {
+      "object_id": "PDF:P1:T00001",
+      "assembly_id": "PDF:P1:T00001",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00002:R001",
+        "text": "60°",
+        "raw_text": "60°",
+        "bbox": {
+         "x": 1154.4,
+         "y": 105.7,
+         "width": 49.0,
+         "height": 25.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00002:R002",
+        "text": "±0°",
+        "raw_text": "±0°",
+        "bbox": {
+         "x": 1210.2,
+         "y": 108.3,
+         "width": 48.4,
+         "height": 20.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00002:R003",
+        "text": "30'",
+        "raw_text": "30'",
+        "bbox": {
+         "x": 1269.3,
+         "y": 108.9,
+         "width": 33.5,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1143.9,
+       "y": 95.1,
+       "width": 169.4,
+       "height": 47.6
+      },
+      "text": "60°±0°30",
+      "confidence": 0.995,
+      "type": "angle",
+      "category": "Angle",
+      "subtype": null,
+      "label": "Angle",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "60°±0°30",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1143.9,
+        "y": 95.1,
+        "width": 169.4,
+        "height": 47.6
+       }
+      },
+      "candidate_id": "PDF:P1:T00001",
+      "raw_text": "60°±0°30",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00002",
+      "assembly_id": "PDF:P1:T00002",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00003:R001",
+        "text": "Ø33",
+        "raw_text": "Ø33",
+        "bbox": {
+         "x": 1158.6,
+         "y": 238.6,
+         "width": 62.9,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1233.4,
+         "y": 241.6,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R003",
+        "text": "0.05",
+        "raw_text": "0.05",
+        "bbox": {
+         "x": 1248.0,
+         "y": 232.6,
+         "width": 51.3,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R004",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1233.4,
+         "y": 269.1,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00003:R005",
+        "text": "0.1",
+        "raw_text": "0.1",
+        "bbox": {
+         "x": 1248.0,
+         "y": 260.1,
+         "width": 31.7,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1148.0,
+       "y": 221.5,
+       "width": 161.8,
+       "height": 69.3
+      },
+      "text": "Ø33-0.05-0.1",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø33-0.05-0.1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1148.0,
+        "y": 221.5,
+        "width": 161.8,
+        "height": 69.3
+       }
+      },
+      "candidate_id": "PDF:P1:T00002",
+      "raw_text": "Ø33-0.05-0.1",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00003",
+      "assembly_id": "PDF:P1:T00003",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00005:R001",
+        "text": "R2",
+        "raw_text": "R2",
+        "bbox": {
+         "x": 777.1,
+         "y": 594.0,
+         "width": 39.7,
+         "height": 24.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00005:R002",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 823.3,
+         "y": 596.4,
+         "width": 60.6,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 766.6,
+       "y": 583.4,
+       "width": 127.8,
+       "height": 46.2
+      },
+      "text": "R2±0.2",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R2±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 766.6,
+        "y": 583.4,
+        "width": 127.8,
+        "height": 46.2
+       }
+      },
+      "candidate_id": "PDF:P1:T00003",
+      "raw_text": "R2±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00004",
+      "assembly_id": "PDF:P1:T00004",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00006:R001",
+        "text": "R2",
+        "raw_text": "R2",
+        "bbox": {
+         "x": 1564.6,
+         "y": 1401.6,
+         "width": 39.1,
+         "height": 24.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00006:R002",
+        "text": "±0.5",
+        "raw_text": "±0.5",
+        "bbox": {
+         "x": 1610.9,
+         "y": 1404.0,
+         "width": 61.0,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1554.1,
+       "y": 1391.0,
+       "width": 128.2,
+       "height": 46.2
+      },
+      "text": "R2±0.5",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R2±0.5",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1554.1,
+        "y": 1391.0,
+        "width": 128.2,
+        "height": 46.2
+       }
+      },
+      "candidate_id": "PDF:P1:T00004",
+      "raw_text": "R2±0.5",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00005",
+      "assembly_id": "PDF:P1:T00005",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00007:R001",
+        "text": "R10",
+        "raw_text": "R10",
+        "bbox": {
+         "x": 744.0,
+         "y": 1503.5,
+         "width": 58.6,
+         "height": 25.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00007:R002",
+        "text": "±2",
+        "raw_text": "±2",
+        "bbox": {
+         "x": 809.0,
+         "y": 1505.9,
+         "width": 38.1,
+         "height": 19.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 733.5,
+       "y": 1492.8,
+       "width": 124.1,
+       "height": 46.7
+      },
+      "text": "R10±2",
+      "confidence": 0.995,
+      "type": "radius",
+      "category": "Radius",
+      "subtype": null,
+      "label": "Radius",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "R10±2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 733.5,
+        "y": 1492.8,
+        "width": 124.1,
+        "height": 46.7
+       }
+      },
+      "candidate_id": "PDF:P1:T00005",
+      "raw_text": "R10±2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00006",
+      "assembly_id": "PDF:P1:T00006",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00009:R001",
+        "text": "Ø30",
+        "raw_text": "Ø30",
+        "bbox": {
+         "x": 669.2,
+         "y": 1669.5,
+         "width": 62.8,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00009:R002",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 738.3,
+         "y": 1677.8,
+         "width": 60.6,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 658.6,
+       "y": 1658.8,
+       "width": 150.8,
+       "height": 57.8
+      },
+      "text": "Ø30±0.2",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø30±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 658.6,
+        "y": 1658.8,
+        "width": 150.8,
+        "height": 57.8
+       }
+      },
+      "candidate_id": "PDF:P1:T00006",
+      "raw_text": "Ø30±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00007",
+      "assembly_id": "PDF:P1:T00007",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00010:R001",
+        "text": "0.1",
+        "raw_text": "0.1",
+        "bbox": {
+         "x": 1609.0,
+         "y": 2115.4,
+         "width": 40.2,
+         "height": 25.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1598.5,
+       "y": 2104.8,
+       "width": 61.2,
+       "height": 46.3
+      },
+      "text": "0.1",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "0.1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1598.5,
+        "y": 2104.8,
+        "width": 61.2,
+        "height": 46.3
+       }
+      },
+      "candidate_id": "PDF:P1:T00007",
+      "raw_text": "0.1",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00008",
+      "assembly_id": "PDF:P1:T00008",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00012:R001",
+        "text": "Ø23.5",
+        "raw_text": "Ø23.5",
+        "bbox": {
+         "x": 1144.8,
+         "y": 2143.9,
+         "width": 91.8,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00012:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1247.8,
+         "y": 2147.4,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00012:R003",
+        "text": "0.05",
+        "raw_text": "0.05",
+        "bbox": {
+         "x": 1261.2,
+         "y": 2138.5,
+         "width": 51.9,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1134.2,
+       "y": 2127.3,
+       "width": 189.3,
+       "height": 64.0
+      },
+      "text": "Ø23.5-0.05",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø23.5-0.05",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1134.2,
+        "y": 2127.3,
+        "width": 189.3,
+        "height": 64.0
+       }
+      },
+      "candidate_id": "PDF:P1:T00008",
+      "raw_text": "Ø23.5-0.05",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00009",
+      "assembly_id": "PDF:P1:T00009",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00014:R001",
+        "text": "Ø30",
+        "raw_text": "Ø30",
+        "bbox": {
+         "x": 1167.3,
+         "y": 2243.9,
+         "width": 62.2,
+         "height": 36.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00014:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1240.9,
+         "y": 2247.5,
+         "width": 7.4,
+         "height": 2.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00014:R003",
+        "text": "0.2",
+        "raw_text": "0.2",
+        "bbox": {
+         "x": 1254.9,
+         "y": 2238.5,
+         "width": 35.3,
+         "height": 20.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1156.7,
+       "y": 2227.5,
+       "width": 143.9,
+       "height": 63.5
+      },
+      "text": "Ø30-0.2",
+      "confidence": 0.995,
+      "type": "diameter",
+      "category": "Diameter",
+      "subtype": null,
+      "label": "Diameter",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Ø30-0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1156.7,
+        "y": 2227.5,
+        "width": 143.9,
+        "height": 63.5
+       }
+      },
+      "candidate_id": "PDF:P1:T00009",
+      "raw_text": "Ø30-0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00010",
+      "assembly_id": "PDF:P1:T00010",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00017:R001",
+        "text": "S6-5-2",
+        "raw_text": "S6-5-2",
+        "bbox": {
+         "x": 198.2,
+         "y": 2512.7,
+         "width": 96.4,
+         "height": 25.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 187.8,
+       "y": 2502.0,
+       "width": 117.0,
+       "height": 46.9
+      },
+      "text": "S6-5-2",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": true,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "S6-5-2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 187.8,
+        "y": 2502.0,
+        "width": 117.0,
+        "height": 46.9
+       }
+      },
+      "candidate_id": "PDF:P1:T00010",
+      "raw_text": "S6-5-2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_needs_review",
+      "page_filter_reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "review_reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "state": "review",
+      "reason": "Exact PDF text is numeric but missing a confirming engineering mark",
+      "rule": "native_text_needs_review"
+     },
+     {
+      "object_id": "PDF:P1:T00011",
+      "assembly_id": "PDF:P1:T00011",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00018:R001",
+        "text": "1.3343",
+        "raw_text": "1.3343",
+        "bbox": {
+         "x": 383.7,
+         "y": 2512.7,
+         "width": 97.3,
+         "height": 25.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 373.4,
+       "y": 2502.0,
+       "width": 117.9,
+       "height": 46.9
+      },
+      "text": "1.3343",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "1.3343",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 373.4,
+        "y": 2502.0,
+        "width": 117.9,
+        "height": 46.9
+       }
+      },
+      "candidate_id": "PDF:P1:T00011",
+      "raw_text": "1.3343",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00012",
+      "assembly_id": "PDF:P1:T00012",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00020:R001",
+        "text": "1.6",
+        "raw_text": "1.6",
+        "bbox": {
+         "x": 1956.9,
+         "y": 2512.4,
+         "width": 42.7,
+         "height": 25.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00020:R002",
+        "text": "Surf",
+        "raw_text": "Surf",
+        "bbox": {
+         "x": 1886.3,
+         "y": 2515.8,
+         "width": 50.0,
+         "height": 20.3
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1875.8,
+       "y": 2501.4,
+       "width": 134.3,
+       "height": 46.6
+      },
+      "text": "1.6Surf",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "1.6Surf",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1875.8,
+        "y": 2501.4,
+        "width": 134.3,
+        "height": 46.6
+       }
+      },
+      "candidate_id": "PDF:P1:T00012",
+      "raw_text": "1.6Surf",
+      "source_conflict": false,
+      "page_filter_rule": "table_region",
+      "page_filter_reason": "Candidate lies inside a detected table region",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Candidate lies inside a detected table region",
+      "rule": "table_region"
+     },
+     {
+      "object_id": "PDF:P1:T00013",
+      "assembly_id": "PDF:P1:T00013",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00023:R001",
+        "text": "62-64",
+        "raw_text": "62-64",
+        "bbox": {
+         "x": 417.7,
+         "y": 2562.0,
+         "width": 83.8,
+         "height": 25.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00023:R002",
+        "text": "Rc",
+        "raw_text": "Rc",
+        "bbox": {
+         "x": 515.0,
+         "y": 2562.5,
+         "width": 33.8,
+         "height": 24.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 407.4,
+       "y": 2551.4,
+       "width": 151.8,
+       "height": 47.0
+      },
+      "text": "62-64Rc",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "62-64Rc",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 407.4,
+        "y": 2551.4,
+        "width": 151.8,
+        "height": 47.0
+       }
+      },
+      "candidate_id": "PDF:P1:T00013",
+      "raw_text": "62-64Rc",
+      "source_conflict": false,
+      "page_filter_rule": "table_region",
+      "page_filter_reason": "Candidate lies inside a detected table region",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Candidate lies inside a detected table region",
+      "rule": "table_region"
+     },
+     {
+      "object_id": "PDF:P1:T00014",
+      "assembly_id": "PDF:P1:T00014",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00040:R001",
+        "text": "5°",
+        "raw_text": "5°",
+        "bbox": {
+         "x": 197.2,
+         "y": 1761.2,
+         "width": 26.8,
+         "height": 29.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00040:R002",
+        "text": "±0°",
+        "raw_text": "±0°",
+        "bbox": {
+         "x": 202.3,
+         "y": 1797.7,
+         "width": 21.6,
+         "height": 48.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00040:R003",
+        "text": "30'",
+        "raw_text": "30'",
+        "bbox": {
+         "x": 204.1,
+         "y": 1856.8,
+         "width": 21.4,
+         "height": 33.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 87.5,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 185.1,
+       "y": 1749.3,
+       "width": 55.3,
+       "height": 152.9
+      },
+      "text": "5°±0°30",
+      "confidence": 0.995,
+      "type": "angle",
+      "category": "Angle",
+      "subtype": null,
+      "label": "Angle",
+      "orientation": "vertical",
+      "rotation": 87.5,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "5°±0°30",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 185.1,
+        "y": 1749.3,
+        "width": 55.3,
+        "height": 152.9
+       }
+      },
+      "oriented_box": {
+       "x": 233.8,
+       "y": 1749.3,
+       "width": 151.0,
+       "height": 48.7,
+       "rotation": 87.5
+      },
+      "candidate_id": "PDF:P1:T00014",
+      "raw_text": "5°±0°30",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00015",
+      "assembly_id": "PDF:P1:T00015",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00041:R001",
+        "text": "7",
+        "raw_text": "7",
+        "bbox": {
+         "x": 725.0,
+         "y": 934.2,
+         "width": 24.3,
+         "height": 16.0
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00041:R002",
+        "text": "0",
+        "raw_text": "0",
+        "bbox": {
+         "x": 724.6,
+         "y": 915.6,
+         "width": 25.1,
+         "height": 16.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "zero",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00041:R003",
+        "text": "±0.2",
+        "raw_text": "±0.2",
+        "bbox": {
+         "x": 727.7,
+         "y": 848.0,
+         "width": 20.1,
+         "height": 60.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 714.1,
+       "y": 837.6,
+       "width": 46.0,
+       "height": 123.0
+      },
+      "text": "70±0.2",
+      "confidence": 0.995,
+      "type": "tolerance",
+      "category": "Tolerance",
+      "subtype": null,
+      "label": "Toleranced Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "70±0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 714.1,
+        "y": 837.6,
+        "width": 46.0,
+        "height": 123.0
+       }
+      },
+      "oriented_box": {
+       "x": 714.4,
+       "y": 960.6,
+       "width": 122.9,
+       "height": 45.8,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00015",
+      "raw_text": "70±0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00016",
+      "assembly_id": "PDF:P1:T00016",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00042:R001",
+        "text": "15",
+        "raw_text": "15",
+        "bbox": {
+         "x": 1581.5,
+         "y": 506.5,
+         "width": 25.1,
+         "height": 32.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00042:R002",
+        "text": "-",
+        "raw_text": "-",
+        "bbox": {
+         "x": 1579.2,
+         "y": 487.9,
+         "width": 2.4,
+         "height": 7.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00042:R003",
+        "text": "0.2",
+        "raw_text": "0.2",
+        "bbox": {
+         "x": 1570.2,
+         "y": 446.0,
+         "width": 20.1,
+         "height": 35.2
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1559.8,
+       "y": 435.6,
+       "width": 57.2,
+       "height": 114.1
+      },
+      "text": "15-0.2",
+      "confidence": 0.995,
+      "type": "linear",
+      "category": "Linear",
+      "subtype": null,
+      "label": "Linear Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "15-0.2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1559.8,
+        "y": 435.6,
+        "width": 57.2,
+        "height": 114.1
+       }
+      },
+      "oriented_box": {
+       "x": 1560.0,
+       "y": 549.7,
+       "width": 114.0,
+       "height": 57.0,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00016",
+      "raw_text": "15-0.2",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "object_id": "PDF:P1:T00017",
+      "assembly_id": "PDF:P1:T00017",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00043:R001",
+        "text": "114.5",
+        "raw_text": "114.5",
+        "bbox": {
+         "x": 1690.3,
+         "y": 1227.9,
+         "width": 25.1,
+         "height": 80.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00043:R002",
+        "text": "±0.05",
+        "raw_text": "±0.05",
+        "bbox": {
+         "x": 1693.3,
+         "y": 1145.2,
+         "width": 20.1,
+         "height": 76.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "vertical",
+        "rotation": 269.9,
+        "role": "tolerance",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "bbox": {
+       "x": 1679.7,
+       "y": 1134.8,
+       "width": 46.2,
+       "height": 184.4
+      },
+      "text": "114.5±0.05",
+      "confidence": 0.995,
+      "type": "tolerance",
+      "category": "Tolerance",
+      "subtype": null,
+      "label": "Toleranced Dimension",
+      "orientation": "vertical",
+      "rotation": -90.1,
+      "needs_review": false,
+      "agreement": 1.0,
+      "engine": "pdf-text-layer",
+      "symbols_detected": null,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "114.5±0.05",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1679.7,
+        "y": 1134.8,
+        "width": 46.2,
+        "height": 184.4
+       }
+      },
+      "oriented_box": {
+       "x": 1680.0,
+       "y": 1319.2,
+       "width": 184.3,
+       "height": 45.9,
+       "rotation": -90.1
+      },
+      "candidate_id": "PDF:P1:T00017",
+      "raw_text": "114.5±0.05",
+      "source_conflict": false,
+      "page_filter_rule": "native_text_engineering_value",
+      "page_filter_reason": "Accepted from the original PDF text layer",
+      "review_reason": "",
+      "state": "eligible",
+      "reason": "Accepted from the original PDF text layer",
+      "rule": "native_text_engineering_value"
+     },
+     {
+      "text": "PART NR.",
+      "bbox": {
+       "x": 750.9,
+       "y": 97.2,
+       "width": 176.2,
+       "height": 47.0
+      },
+      "object_id": "PDF:P1:T00018",
+      "assembly_id": "PDF:P1:T00018",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00001:R001",
+        "text": "PART",
+        "raw_text": "PART",
+        "bbox": {
+         "x": 761.4,
+         "y": 108.4,
+         "width": 89.0,
+         "height": 24.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00001:R002",
+        "text": "NR.",
+        "raw_text": "NR.",
+        "bbox": {
+         "x": 862.6,
+         "y": 108.4,
+         "width": 54.0,
+         "height": 24.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00018",
+      "raw_text": "PART NR.",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "PART NR.",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 750.9,
+        "y": 97.2,
+        "width": 176.2,
+        "height": 47.0
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "A",
+      "bbox": {
+       "x": 909.5,
+       "y": 310.8,
+       "width": 62.5,
+       "height": 64.7
+      },
+      "object_id": "PDF:P1:T00019",
+      "assembly_id": "PDF:P1:T00019",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00004:R001",
+        "text": "A",
+        "raw_text": "A",
+        "bbox": {
+         "x": 924.4,
+         "y": 325.6,
+         "width": 32.7,
+         "height": 34.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00019",
+      "raw_text": "A",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "A",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 909.5,
+        "y": 310.8,
+        "width": 62.5,
+        "height": 64.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Detail A",
+      "bbox": {
+       "x": 420.7,
+       "y": 1585.9,
+       "width": 195.0,
+       "height": 66.6
+      },
+      "object_id": "PDF:P1:T00020",
+      "assembly_id": "PDF:P1:T00020",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00008:R001",
+        "text": "Detail",
+        "raw_text": "Detail",
+        "bbox": {
+         "x": 435.6,
+         "y": 1601.4,
+         "width": 115.7,
+         "height": 35.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00008:R002",
+        "text": "A",
+        "raw_text": "A",
+        "bbox": {
+         "x": 568.1,
+         "y": 1601.4,
+         "width": 32.7,
+         "height": 34.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00020",
+      "raw_text": "Detail A",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Detail A",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 420.7,
+        "y": 1585.9,
+        "width": 195.0,
+        "height": 66.6
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "SHARP",
+      "bbox": {
+       "x": 815.4,
+       "y": 2150.4,
+       "width": 136.6,
+       "height": 47.4
+      },
+      "object_id": "PDF:P1:T00021",
+      "assembly_id": "PDF:P1:T00021",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00011:R001",
+        "text": "SHARP",
+        "raw_text": "SHARP",
+        "bbox": {
+         "x": 825.9,
+         "y": 2161.4,
+         "width": 115.6,
+         "height": 25.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00021",
+      "raw_text": "SHARP",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "SHARP",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 815.4,
+        "y": 2150.4,
+        "width": 136.6,
+        "height": 47.4
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "po",
+      "bbox": {
+       "x": 1514.3,
+       "y": 2150.1,
+       "width": 55.4,
+       "height": 46.1
+      },
+      "object_id": "PDF:P1:T00022",
+      "assembly_id": "PDF:P1:T00022",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00013:R001",
+        "text": "po",
+        "raw_text": "po",
+        "bbox": {
+         "x": 1524.8,
+         "y": 2160.7,
+         "width": 34.4,
+         "height": 25.0
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00022",
+      "raw_text": "po",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "po",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1514.3,
+        "y": 2150.1,
+        "width": 55.4,
+        "height": 46.1
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Scale1:2",
+      "bbox": {
+       "x": 1774.2,
+       "y": 2408.6,
+       "width": 252.9,
+       "height": 67.3
+      },
+      "object_id": "PDF:P1:T00023",
+      "assembly_id": "PDF:P1:T00023",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00015:R001",
+        "text": "Scale",
+        "raw_text": "Scale",
+        "bbox": {
+         "x": 1789.1,
+         "y": 2424.1,
+         "width": 116.8,
+         "height": 36.0
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00015:R002",
+        "text": "1",
+        "raw_text": "1",
+        "bbox": {
+         "x": 1926.0,
+         "y": 2424.5,
+         "width": 13.0,
+         "height": 35.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00015:R003",
+        "text": ":",
+        "raw_text": ":",
+        "bbox": {
+         "x": 1965.0,
+         "y": 2434.3,
+         "width": 5.0,
+         "height": 25.3
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00015:R004",
+        "text": "2",
+        "raw_text": "2",
+        "bbox": {
+         "x": 1988.9,
+         "y": 2424.5,
+         "width": 23.3,
+         "height": 35.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00023",
+      "raw_text": "Scale1:2",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Scale1:2",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1774.2,
+        "y": 2408.6,
+        "width": 252.9,
+        "height": 67.3
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Mat.:",
+      "bbox": {
+       "x": 91.9,
+       "y": 2512.3,
+       "width": 73.3,
+       "height": 36.7
+      },
+      "object_id": "PDF:P1:T00024",
+      "assembly_id": "PDF:P1:T00024",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00016:R001",
+        "text": "Mat.:",
+        "raw_text": "Mat.:",
+        "bbox": {
+         "x": 100.1,
+         "y": 2520.7,
+         "width": 56.9,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00024",
+      "raw_text": "Mat.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Mat.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 91.9,
+        "y": 2512.3,
+        "width": 73.3,
+        "height": 36.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Dim.:",
+      "bbox": {
+       "x": 1007.5,
+       "y": 2507.1,
+       "width": 76.4,
+       "height": 36.5
+      },
+      "object_id": "PDF:P1:T00025",
+      "assembly_id": "PDF:P1:T00025",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00019:R001",
+        "text": "Dim.:",
+        "raw_text": "Dim.:",
+        "bbox": {
+         "x": 1015.8,
+         "y": 2515.5,
+         "width": 60.0,
+         "height": 19.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00025",
+      "raw_text": "Dim.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Dim.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1007.5,
+        "y": 2507.1,
+        "width": 76.4,
+        "height": 36.5
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Treat.:",
+      "bbox": {
+       "x": 1877.3,
+       "y": 2538.1,
+       "width": 93.3,
+       "height": 37.4
+      },
+      "object_id": "PDF:P1:T00026",
+      "assembly_id": "PDF:P1:T00026",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00021:R001",
+        "text": "Treat.:",
+        "raw_text": "Treat.:",
+        "bbox": {
+         "x": 1885.7,
+         "y": 2546.8,
+         "width": 76.5,
+         "height": 20.0
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00026",
+      "raw_text": "Treat.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Treat.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1877.3,
+        "y": 2538.1,
+        "width": 93.3,
+        "height": 37.4
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "HARDNESSTreat.:",
+      "bbox": {
+       "x": 87.8,
+       "y": 2550.5,
+       "width": 284.9,
+       "height": 51.0
+      },
+      "object_id": "PDF:P1:T00027",
+      "assembly_id": "PDF:P1:T00027",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00022:R001",
+        "text": "HARDNESS",
+        "raw_text": "HARDNESS",
+        "bbox": {
+         "x": 199.4,
+         "y": 2562.1,
+         "width": 163.1,
+         "height": 25.4
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00022:R002",
+        "text": "Treat.:",
+        "raw_text": "Treat.:",
+        "bbox": {
+         "x": 98.1,
+         "y": 2570.0,
+         "width": 78.3,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00027",
+      "raw_text": "HARDNESSTreat.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "HARDNESSTreat.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 87.8,
+        "y": 2550.5,
+        "width": 284.9,
+        "height": 51.0
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Code nr.:",
+      "bbox": {
+       "x": 1410.2,
+       "y": 2560.7,
+       "width": 123.2,
+       "height": 37.9
+      },
+      "object_id": "PDF:P1:T00028",
+      "assembly_id": "PDF:P1:T00028",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00024:R001",
+        "text": "Code",
+        "raw_text": "Code",
+        "bbox": {
+         "x": 1418.4,
+         "y": 2569.2,
+         "width": 58.3,
+         "height": 20.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00024:R002",
+        "text": "nr.:",
+        "raw_text": "nr.:",
+        "bbox": {
+         "x": 1487.4,
+         "y": 2574.5,
+         "width": 37.7,
+         "height": 15.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00028",
+      "raw_text": "Code nr.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Code nr.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1410.2,
+        "y": 2560.7,
+        "width": 123.2,
+        "height": 37.9
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "CAD",
+      "bbox": {
+       "x": 1279.3,
+       "y": 2591.3,
+       "width": 116.8,
+       "height": 74.6
+      },
+      "object_id": "PDF:P1:T00029",
+      "assembly_id": "PDF:P1:T00029",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00025:R001",
+        "text": "CAD",
+        "raw_text": "CAD",
+        "bbox": {
+         "x": 1295.9,
+         "y": 2608.1,
+         "width": 83.6,
+         "height": 40.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00029",
+      "raw_text": "CAD",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "CAD",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1279.3,
+        "y": 2591.3,
+        "width": 116.8,
+        "height": 74.6
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "MBDesign.:",
+      "bbox": {
+       "x": 1409.2,
+       "y": 2607.8,
+       "width": 172.3,
+       "height": 52.0
+      },
+      "object_id": "PDF:P1:T00030",
+      "assembly_id": "PDF:P1:T00030",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00026:R001",
+        "text": "MB",
+        "raw_text": "MB",
+        "bbox": {
+         "x": 1528.1,
+         "y": 2618.8,
+         "width": 43.0,
+         "height": 24.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00026:R002",
+        "text": "Design.:",
+        "raw_text": "Design.:",
+        "bbox": {
+         "x": 1419.5,
+         "y": 2623.7,
+         "width": 93.1,
+         "height": 25.2
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00030",
+      "raw_text": "MBDesign.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "MBDesign.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1409.2,
+        "y": 2607.8,
+        "width": 172.3,
+        "height": 52.0
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "23-11-2018Dat.:",
+      "bbox": {
+       "x": 1733.6,
+       "y": 2606.2,
+       "width": 259.1,
+       "height": 49.0
+      },
+      "object_id": "PDF:P1:T00031",
+      "assembly_id": "PDF:P1:T00031",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00027:R001",
+        "text": "23-11-2018",
+        "raw_text": "23-11-2018",
+        "bbox": {
+         "x": 1813.1,
+         "y": 2617.6,
+         "width": 169.3,
+         "height": 25.7
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00027:R002",
+        "text": "Dat.:",
+        "raw_text": "Dat.:",
+        "bbox": {
+         "x": 1743.9,
+         "y": 2623.8,
+         "width": 54.4,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00031",
+      "raw_text": "23-11-2018Dat.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "23-11-2018Dat.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1733.6,
+        "y": 2606.2,
+        "width": 259.1,
+        "height": 49.0
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Part Name:",
+      "bbox": {
+       "x": 343.2,
+       "y": 2664.4,
+       "width": 146.4,
+       "height": 37.5
+      },
+      "object_id": "PDF:P1:T00032",
+      "assembly_id": "PDF:P1:T00032",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00028:R001",
+        "text": "Part",
+        "raw_text": "Part",
+        "bbox": {
+         "x": 351.4,
+         "y": 2673.2,
+         "width": 45.8,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00028:R002",
+        "text": "Name:",
+        "raw_text": "Name:",
+        "bbox": {
+         "x": 407.6,
+         "y": 2673.2,
+         "width": 73.8,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00032",
+      "raw_text": "Part Name:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Part Name:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 343.2,
+        "y": 2664.4,
+        "width": 146.4,
+        "height": 37.5
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Drawing nr.:",
+      "bbox": {
+       "x": 1411.3,
+       "y": 2669.4,
+       "width": 160.8,
+       "height": 42.7
+      },
+      "object_id": "PDF:P1:T00033",
+      "assembly_id": "PDF:P1:T00033",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00029:R001",
+        "text": "Drawing",
+        "raw_text": "Drawing",
+        "bbox": {
+         "x": 1419.5,
+         "y": 2678.0,
+         "width": 94.9,
+         "height": 25.2
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00029:R002",
+        "text": "nr.:",
+        "raw_text": "nr.:",
+        "bbox": {
+         "x": 1526.2,
+         "y": 2682.6,
+         "width": 37.7,
+         "height": 15.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00033",
+      "raw_text": "Drawing nr.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Drawing nr.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1411.3,
+        "y": 2669.4,
+        "width": 160.8,
+        "height": 42.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Scale:",
+      "bbox": {
+       "x": 90.9,
+       "y": 2752.6,
+       "width": 84.3,
+       "height": 37.7
+      },
+      "object_id": "PDF:P1:T00034",
+      "assembly_id": "PDF:P1:T00034",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00030:R001",
+        "text": "Scale:",
+        "raw_text": "Scale:",
+        "bbox": {
+         "x": 99.1,
+         "y": 2761.1,
+         "width": 67.9,
+         "height": 20.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00034",
+      "raw_text": "Scale:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Scale:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 90.9,
+        "y": 2752.6,
+        "width": 84.3,
+        "height": 37.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "PUNCH",
+      "bbox": {
+       "x": 743.8,
+       "y": 2682.6,
+       "width": 244.6,
+       "height": 93.7
+      },
+      "object_id": "PDF:P1:T00035",
+      "assembly_id": "PDF:P1:T00035",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00031:R001",
+        "text": "PUNCH",
+        "raw_text": "PUNCH",
+        "bbox": {
+         "x": 764.4,
+         "y": 2704.0,
+         "width": 203.4,
+         "height": 50.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00035",
+      "raw_text": "PUNCH",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "PUNCH",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 743.8,
+        "y": 2682.6,
+        "width": 244.6,
+        "height": 93.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "BS1801006.020",
+      "bbox": {
+       "x": 1393.3,
+       "y": 2717.8,
+       "width": 451.6,
+       "height": 87.8
+      },
+      "object_id": "PDF:P1:T00036",
+      "assembly_id": "PDF:P1:T00036",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00032:R001",
+        "text": "BS1801006.020",
+        "raw_text": "BS1801006.020",
+        "bbox": {
+         "x": 1412.1,
+         "y": 2738.4,
+         "width": 414.1,
+         "height": 46.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00036",
+      "raw_text": "BS1801006.020",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "BS1801006.020",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1393.3,
+        "y": 2717.8,
+        "width": 451.6,
+        "height": 87.8
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Sheet",
+      "bbox": {
+       "x": 1410.3,
+       "y": 2826.4,
+       "width": 83.2,
+       "height": 37.7
+      },
+      "object_id": "PDF:P1:T00037",
+      "assembly_id": "PDF:P1:T00037",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00033:R001",
+        "text": "Sheet",
+        "raw_text": "Sheet",
+        "bbox": {
+         "x": 1418.5,
+         "y": 2834.8,
+         "width": 66.8,
+         "height": 20.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00037",
+      "raw_text": "Sheet",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Sheet",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1410.3,
+        "y": 2826.4,
+        "width": 83.2,
+        "height": 37.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "No of sheets",
+      "bbox": {
+       "x": 1617.6,
+       "y": 2825.9,
+       "width": 164.1,
+       "height": 38.6
+      },
+      "object_id": "PDF:P1:T00038",
+      "assembly_id": "PDF:P1:T00038",
+      "assembly_rule": "native_pdf_runs",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00034:R001",
+        "text": "No",
+        "raw_text": "No",
+        "bbox": {
+         "x": 1625.8,
+         "y": 2835.7,
+         "width": 30.0,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00034:R002",
+        "text": "of",
+        "raw_text": "of",
+        "bbox": {
+         "x": 1665.8,
+         "y": 2834.7,
+         "width": 23.9,
+         "height": 20.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       },
+       {
+        "candidate_id": "PDF:P1:G00034:R003",
+        "text": "sheets",
+        "raw_text": "sheets",
+        "bbox": {
+         "x": 1697.8,
+         "y": 2834.8,
+         "width": 75.7,
+         "height": 20.8
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00038",
+      "raw_text": "No of sheets",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "No of sheets",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1617.6,
+        "y": 2825.9,
+        "width": 164.1,
+        "height": 38.6
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "nr.:",
+      "bbox": {
+       "x": 1411.1,
+       "y": 2861.2,
+       "width": 54.1,
+       "height": 31.7
+      },
+      "object_id": "PDF:P1:T00039",
+      "assembly_id": "PDF:P1:T00039",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00035:R001",
+        "text": "nr.:",
+        "raw_text": "nr.:",
+        "bbox": {
+         "x": 1419.3,
+         "y": 2869.5,
+         "width": 37.7,
+         "height": 15.1
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00039",
+      "raw_text": "nr.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "nr.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1411.1,
+        "y": 2861.2,
+        "width": 54.1,
+        "height": 31.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "1",
+      "bbox": {
+       "x": 1499.1,
+       "y": 2856.9,
+       "width": 26.1,
+       "height": 35.9
+      },
+      "object_id": "PDF:P1:T00040",
+      "assembly_id": "PDF:P1:T00040",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00036:R001",
+        "text": "1",
+        "raw_text": "1",
+        "bbox": {
+         "x": 1507.4,
+         "y": 2865.0,
+         "width": 9.6,
+         "height": 19.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00040",
+      "raw_text": "1",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1499.1,
+        "y": 2856.9,
+        "width": 26.1,
+        "height": 35.9
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "1",
+      "bbox": {
+       "x": 1705.4,
+       "y": 2856.9,
+       "width": 26.1,
+       "height": 35.9
+      },
+      "object_id": "PDF:P1:T00041",
+      "assembly_id": "PDF:P1:T00041",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00037:R001",
+        "text": "1",
+        "raw_text": "1",
+        "bbox": {
+         "x": 1713.6,
+         "y": 2865.0,
+         "width": 9.6,
+         "height": 19.6
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "base",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00041",
+      "raw_text": "1",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "1",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1705.4,
+        "y": 2856.9,
+        "width": 26.1,
+        "height": 35.9
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "Form.:",
+      "bbox": {
+       "x": 1849.4,
+       "y": 2851.6,
+       "width": 90.2,
+       "height": 36.9
+      },
+      "object_id": "PDF:P1:T00042",
+      "assembly_id": "PDF:P1:T00042",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00038:R001",
+        "text": "Form.:",
+        "raw_text": "Form.:",
+        "bbox": {
+         "x": 1857.6,
+         "y": 2860.1,
+         "width": 73.8,
+         "height": 19.9
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00042",
+      "raw_text": "Form.:",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "Form.:",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1849.4,
+        "y": 2851.6,
+        "width": 90.2,
+        "height": 36.9
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     },
+     {
+      "text": "A4",
+      "bbox": {
+       "x": 1944.1,
+       "y": 2835.5,
+       "width": 82.2,
+       "height": 63.7
+      },
+      "object_id": "PDF:P1:T00043",
+      "assembly_id": "PDF:P1:T00043",
+      "assembly_rule": "atomic",
+      "assembly_conflict": false,
+      "assembly_review_reason": "",
+      "assembly_children": [
+       {
+        "candidate_id": "PDF:P1:G00039:R001",
+        "text": "A4",
+        "raw_text": "A4",
+        "bbox": {
+         "x": 1958.6,
+         "y": 2850.1,
+         "width": 53.2,
+         "height": 34.5
+        },
+        "polygon": [],
+        "confidence": 0.995,
+        "orientation": "horizontal",
+        "rotation": 0.3,
+        "role": "other",
+        "recognition_source": "native_pdf",
+        "recognition_evidence": {},
+        "source_conflict": false
+       }
+      ],
+      "candidate_id": "PDF:P1:T00043",
+      "raw_text": "A4",
+      "confidence": 0.995,
+      "orientation": "horizontal",
+      "rotation": 0.0,
+      "recognized": true,
+      "recognition_source": "native_pdf",
+      "recognition_evidence": {
+       "selected_source": "native_pdf",
+       "sources": [
+        "native_pdf"
+       ],
+       "native_text": "A4",
+       "ocr_text": "",
+       "agreement": 1.0,
+       "conflict": false,
+       "native_span_ids": [],
+       "native_bbox": {
+        "x": 1944.1,
+        "y": 2835.5,
+        "width": 82.2,
+        "height": 63.7
+       }
+      },
+      "source_conflict": false,
+      "needs_review": false,
+      "page_filter_rule": "native_text_non_callout",
+      "page_filter_reason": "Exact PDF text did not form an engineering callout",
+      "review_reason": "",
+      "state": "excluded",
+      "reason": "Exact PDF text did not form an engineering callout",
+      "rule": "native_text_non_callout"
+     }
+    ],
+    "source_profile": {
+     "kind": "vector",
+     "page": 1,
+     "page_count": 1,
+     "native_text_available": true,
+     "native_span_count": 77,
+     "native_character_count": 292,
+     "raster_coverage": 0.0152,
+     "vector_object_count": 339,
+     "text_layer_usable": true,
+     "text_layer_strategy": "native_text_first",
+     "text_layer_fonts": [
+      "",
+      "AIGDT",
+      "ArialMT",
+      "Tahoma"
+     ],
+     "text_layer_fallback_reason": null
+    },
+    "recognition_source_counts": {
+     "native_pdf": 43
+    },
+    "assembly_stats": {
+     "atomic_detection_count": 79,
+     "object_count": 43,
+     "assembled_object_count": 24,
+     "absorbed_fragment_count": 36,
+     "conflict_count": 0,
+     "rule_counts": {}
+    },
+    "structured_symbol_stats": {
+     "schema_version": 1,
+     "object_count": 0,
+     "complete_count": 0,
+     "review_count": 0,
+     "kind_counts": {}
+    },
+    "coordinate_space": "page"
+   }
+  }
+ ],
+ "fixture": "BS1801006.020.json",
+ "document": "docs/BS1801006.020.pdf",
+ "title": "PUNCH, drawing BS1801006.020"
+}

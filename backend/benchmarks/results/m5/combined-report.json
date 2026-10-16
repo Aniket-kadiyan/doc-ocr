@@ -1,0 +1,486 @@
+{
+ "schema_version": 1,
+ "milestone": "M5 combined M1-M4 regression",
+ "ocr_changeset": "mvp1-m4-margin-tables-short-chamfers",
+ "summary": {
+  "documents": 6,
+  "documents_passed": 5,
+  "documents_failed": 1,
+  "gate_failures": 1,
+  "seconds": 549.085,
+  "totals": {
+   "expected": 203,
+   "matched": 142,
+   "partial": 40,
+   "missed": 21,
+   "type_correct": 136,
+   "type_total": 203,
+   "semantic_exact": 137,
+   "disposition_correct": 111,
+   "disposition_total": 203,
+   "noise_detections": 1,
+   "unexpected_detections": 30,
+   "unmatched_review_or_other": 896,
+   "mean_percent": 90.3,
+   "by_expected_disposition": {
+    "accepted": {
+     "expected": 182,
+     "matched": 131,
+     "semantic_exact": 126,
+     "disposition_correct": 108
+    },
+    "review": {
+     "expected": 0,
+     "matched": 0,
+     "semantic_exact": 0,
+     "disposition_correct": 0
+    },
+    "other": {
+     "expected": 21,
+     "matched": 11,
+     "semantic_exact": 11,
+     "disposition_correct": 3
+    }
+   }
+  },
+  "accounting": {
+   "pages": 6,
+   "pages_passed": 5,
+   "issue_count": 1,
+   "unavailable_documents": 0,
+   "passed": false
+  },
+  "execution": {
+   "source_profile_pages": {
+    "raster": 4,
+    "vector": 2
+   },
+   "text_layer_strategy_pages": {
+    "native_text_first": 2,
+    "raster_ocr": 4
+   },
+   "recognition_source_counts": {
+    "native_pdf": 236,
+    "ocr": 782
+   }
+  }
+ },
+ "documents": [
+  {
+   "fixture": "129E01-13300-ID.json",
+   "document": "PIPE, EXH PRESSURE, drawing 129E01-13300-ID",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 182.94948601722717,
+   "totals": {
+    "expected": 34,
+    "matched": 26,
+    "partial": 4,
+    "missed": 4,
+    "mean_percent": 90.1,
+    "type_correct": 24,
+    "type_total": 34,
+    "semantic_exact": 24,
+    "disposition_correct": 21,
+    "disposition_total": 34,
+    "noise_detections": 0,
+    "unexpected_detections": 11,
+    "unmatched_review_or_other": 166,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 28,
+      "matched": 24,
+      "semantic_exact": 22,
+      "disposition_correct": 20
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 6,
+      "matched": 2,
+      "semantic_exact": 2,
+      "disposition_correct": 1
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 183
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 183
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "47630.json",
+   "document": "ASSY HITCH PIN 5/8 x 5, drawing 47630",
+   "passed": false,
+   "gate_failures": [
+    "candidate accounting issues 1 exceed maximum 0"
+   ],
+   "seconds": 39.62392807006836,
+   "totals": {
+    "expected": 19,
+    "matched": 18,
+    "partial": 1,
+    "missed": 0,
+    "mean_percent": 98.7,
+    "type_correct": 17,
+    "type_total": 19,
+    "semantic_exact": 17,
+    "disposition_correct": 17,
+    "disposition_total": 19,
+    "noise_detections": 0,
+    "unexpected_detections": 1,
+    "unmatched_review_or_other": 81,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 19,
+      "matched": 18,
+      "semantic_exact": 17,
+      "disposition_correct": 17
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     }
+    }
+   },
+   "accounting": {
+    "passed": false,
+    "issue_count": 1
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 102
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 102
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "503645_DES001_CF_BALLOON_DRAWING.json",
+   "document": "ICE Connection Shaft Center, drawing 503645_DES001 R2",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 23.361598253250122,
+   "totals": {
+    "expected": 47,
+    "matched": 32,
+    "partial": 11,
+    "missed": 4,
+    "mean_percent": 91.7,
+    "type_correct": 28,
+    "type_total": 47,
+    "semantic_exact": 32,
+    "disposition_correct": 32,
+    "disposition_total": 47,
+    "noise_detections": 0,
+    "unexpected_detections": 7,
+    "unmatched_review_or_other": 143,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 43,
+      "matched": 29,
+      "semantic_exact": 29,
+      "disposition_correct": 31
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 4,
+      "matched": 3,
+      "semantic_exact": 3,
+      "disposition_correct": 1
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "vector": 1
+    },
+    "text_layer_strategy_pages": {
+     "native_text_first": 1
+    },
+    "recognition_source_counts": {
+     "native_pdf": 193
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "vector",
+      "text_layer_strategy": "native_text_first",
+      "recognition_source_counts": {
+       "native_pdf": 193
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "56103-0182B.json",
+   "document": "INLINE LOCKNUT, drawing 56103-0182 rev B",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 56.53847408294678,
+   "totals": {
+    "expected": 24,
+    "matched": 16,
+    "partial": 5,
+    "missed": 3,
+    "mean_percent": 87.2,
+    "type_correct": 18,
+    "type_total": 24,
+    "semantic_exact": 15,
+    "disposition_correct": 9,
+    "disposition_total": 24,
+    "noise_detections": 0,
+    "unexpected_detections": 2,
+    "unmatched_review_or_other": 67,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 24,
+      "matched": 16,
+      "semantic_exact": 15,
+      "disposition_correct": 9
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 82
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 82
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "ballwoon_drawing.json",
+   "document": "PIPE ASM, EXH PRESS SENSOR, drawing 7475870300",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 243.9127938747406,
+   "totals": {
+    "expected": 67,
+    "matched": 38,
+    "partial": 19,
+    "missed": 10,
+    "mean_percent": 86.3,
+    "type_correct": 37,
+    "type_total": 67,
+    "semantic_exact": 37,
+    "disposition_correct": 20,
+    "disposition_total": 67,
+    "noise_detections": 0,
+    "unexpected_detections": 8,
+    "unmatched_review_or_other": 410,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 56,
+      "matched": 32,
+      "semantic_exact": 31,
+      "disposition_correct": 19
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 11,
+      "matched": 6,
+      "semantic_exact": 6,
+      "disposition_correct": 1
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 415
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 415
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "BS1801006.020.json",
+   "document": "PUNCH, drawing BS1801006.020",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 2.6988015174865723,
+   "totals": {
+    "expected": 12,
+    "matched": 12,
+    "partial": 0,
+    "missed": 0,
+    "mean_percent": 100.0,
+    "type_correct": 12,
+    "type_total": 12,
+    "semantic_exact": 12,
+    "disposition_correct": 12,
+    "disposition_total": 12,
+    "noise_detections": 1,
+    "unexpected_detections": 1,
+    "unmatched_review_or_other": 29,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 12,
+      "matched": 12,
+      "semantic_exact": 12,
+      "disposition_correct": 12
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "vector": 1
+    },
+    "text_layer_strategy_pages": {
+     "native_text_first": 1
+    },
+    "recognition_source_counts": {
+     "native_pdf": 43
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "vector",
+      "text_layer_strategy": "native_text_first",
+      "recognition_source_counts": {
+       "native_pdf": 43
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

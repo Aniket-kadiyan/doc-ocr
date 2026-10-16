@@ -55,7 +55,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m4-margin-tables-short-chamfers"
+OCR_CHANGESET_ID = "mvp1-m6-reference-points-backend"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -93,6 +93,13 @@ PREFIX_RECHECK_PHI_SCORE = 0.20
 # Oversized-cluster refinement is a best-effort accuracy improvement. It must
 # never expand into unbounded OCR work during a whole-page scan.
 GROUPING_MAX_REFINEMENTS = 8
+
+# Reference-point table cells are normalized to a consistent text height
+# before recognition. The table search is bounded because each candidate grid
+# requires a recognition pass and a sheet may contain several administrative
+# tables unrelated to coordinate points.
+TABLE_READ_ROW_HEIGHT = 30.0
+MAX_TABLES_READ = 6
 
 
 def sort_reading_order(
@@ -535,6 +542,7 @@ class OcrPipeline:
             "text_recognizer": self._text_recognizer_available,
             "text_line_orientation": self._text_orientation_available,
             "page_batch_recognition": self._page_batch_recognition_available,
+            "reference_points": True,
             "auto_balloon_detection_mode": (
                 "detector_only"
                 if self._text_detector_available
@@ -2134,6 +2142,100 @@ class OcrPipeline:
         # or the caller may have handed us a crop of the block itself.
         whole = extract_title_fields(_read(image, 0, 0), keywords)
         return whole if any(field["value"] for field in whole) else fields
+
+    def _read_reference_table_cells(
+        self,
+        image: Image.Image,
+        table: "GridTable",
+    ) -> dict[tuple[int, int], str]:
+        """Recognize one ruled table and return its text by lattice cell."""
+
+        from reference_table import assign_text_to_cells
+
+        heights = sorted(cell.box.height for cell in table.cells)
+        row_height = float(heights[len(heights) // 2]) if heights else 0.0
+        if row_height <= 0:
+            return {}
+        factor = max(0.1, min(4.0, TABLE_READ_ROW_HEIGHT / row_height))
+
+        crop = image.crop(table.bbox.box)
+        if abs(factor - 1.0) > 0.02:
+            crop = crop.resize(
+                (
+                    max(1, int(round(crop.width * factor))),
+                    max(1, int(round(crop.height * factor))),
+                ),
+                Image.LANCZOS,
+            )
+        boxes = self._detect_regions_ocr(crop)
+        for box in boxes:
+            box["x"] = float(box["x"]) / factor + table.bbox.x
+            box["y"] = float(box["y"]) / factor + table.bbox.y
+            box["w"] = float(box["w"]) / factor
+            box["h"] = float(box["h"]) / factor
+        return assign_text_to_cells(table, boxes)
+
+    def reference_points(self, image: Image.Image) -> dict[str, Any]:
+        """Read a coordinate table and locate its named points in the views.
+
+        This is deliberately separate from dimension scanning. The returned
+        points have no balloon number, tolerance, inspection method, or export
+        state, and an unmatched table row remains explicit instead of being
+        silently discarded.
+        """
+
+        from reference_table import (
+            MAX_TABLE_COLUMNS,
+            MIN_TABLE_COLUMNS,
+            MIN_TABLE_ROWS,
+            extract_grid_tables,
+            identify_reference_table,
+        )
+        from symbol_markers import build_templates, locate_markers
+
+        page = image.convert("RGB")
+        tables = extract_grid_tables(page)
+        readable = sorted(
+            (
+                table
+                for table in tables
+                if table.row_count >= MIN_TABLE_ROWS
+                and MIN_TABLE_COLUMNS <= table.column_count <= MAX_TABLE_COLUMNS
+            ),
+            key=lambda table: (
+                table.row_count,
+                table.bbox.width * table.bbox.height,
+            ),
+            reverse=True,
+        )[:MAX_TABLES_READ]
+
+        reference = None
+        for table in readable:
+            reference = identify_reference_table(
+                [table],
+                [self._read_reference_table_cells(page, table)],
+            )
+            if reference is not None:
+                break
+
+        if reference is None:
+            return {"table": None, "markers": [], "table_count": len(tables)}
+
+        templates = build_templates(
+            page,
+            {point.symbol: point.name_box for point in reference.points},
+            reference.value_boxes,
+        )
+        markers = locate_markers(
+            page,
+            templates,
+            excluded=[table.bbox for table in tables],
+        )
+        return {
+            "table": reference,
+            "markers": markers,
+            "table_count": len(tables),
+        }
 
     @staticmethod
     def _lines_from_boxes(

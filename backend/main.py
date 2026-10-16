@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from checksheet_converter import (
@@ -54,7 +54,13 @@ from pdf_text_first import (
 from native_symbol_enrichment import enrich_native_result_with_geometry
 from pdf_text_layer import text_layer_regions
 from scan_jobs import ProgressReporter, ScanJobManager
-from source_images import SourceImageError, render_source_page
+from source_images import (
+    MAX_PAGE_PIXELS,
+    MAX_SOURCE_BYTES,
+    SourceImageError,
+    render_source_page,
+)
+from starlette.concurrency import run_in_threadpool
 
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
@@ -1103,6 +1109,113 @@ def cancel_scan_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
+
+
+@app.post("/ocr/reference-points")
+async def read_reference_points(
+    file: UploadFile = File(..., description="The whole rendered drawing page"),
+    display_scale: float = Form(
+        1.0,
+        description=(
+            "Submitted pixels per annotation pixel, used to map returned "
+            "geometry into the drawing's annotation coordinate space"
+        ),
+    ),
+) -> dict[str, Any]:
+    """Read a coordinate reference table and locate its point-name markers.
+
+    Reference points are intentionally independent of the dimension scan and
+    its candidate lifecycle. They are temporary results for review: this API
+    does not create balloons, persist annotations, or add anything to export.
+    """
+
+    if not math.isfinite(display_scale) or display_scale <= 0:
+        raise HTTPException(status_code=422, detail="display_scale must be positive")
+
+    raw = await file.read(MAX_SOURCE_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=422, detail="The reference image is empty")
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "The reference image exceeds the configured "
+                f"{MAX_SOURCE_BYTES // (1024 * 1024)} MB limit"
+            ),
+        )
+    try:
+        with Image.open(io.BytesIO(raw)) as source:
+            image = source.convert("RGB")
+    except (UnidentifiedImageError, OSError, EOFError, Image.DecompressionBombError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not decode the reference image: {error}",
+        ) from error
+    if image.width * image.height > MAX_PAGE_PIXELS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"The reference page has {image.width * image.height:,} pixels; "
+                f"the limit is {MAX_PAGE_PIXELS:,}"
+            ),
+        )
+
+    result = await run_in_threadpool(get_pipeline().reference_points, image)
+
+    def box(layout: Any) -> dict[str, float]:
+        return {
+            "x": round(layout.x / display_scale, 1),
+            "y": round(layout.y / display_scale, 1),
+            "width": round(layout.width / display_scale, 1),
+            "height": round(layout.height / display_scale, 1),
+        }
+
+    table = result["table"]
+    if table is None:
+        return {
+            "found": False,
+            "tableCount": result["table_count"],
+            "table": None,
+            "unmatchedSymbols": [],
+        }
+
+    markers_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for marker in result["markers"]:
+        markers_by_symbol.setdefault(marker.symbol, []).append(
+            {
+                "bbox": box(marker.bbox),
+                "score": marker.score,
+                "margin": marker.margin,
+            }
+        )
+
+    points = [
+        {
+            "symbol": point.symbol,
+            "coordinates": [
+                {"axis": axis, "value": value}
+                for axis, value in point.coordinates
+            ],
+            "nameBox": box(point.name_box),
+            "rowBox": box(point.row_box),
+            "markers": markers_by_symbol.get(point.symbol, []),
+        }
+        for point in table.points
+    ]
+    return {
+        "found": True,
+        "tableCount": result["table_count"],
+        "table": {
+            "bbox": box(table.bbox),
+            "headerBox": box(table.header_box),
+            "axes": list(table.axes),
+            "nameHeader": table.name_header,
+            "points": points,
+        },
+        "unmatchedSymbols": [
+            point["symbol"] for point in points if not point["markers"]
+        ],
+    }
 
 
 @app.post("/ocr/title-fields")

@@ -23,7 +23,7 @@ class PhiEvidenceRulesTests(unittest.TestCase):
     def test_runtime_changeset_identifies_this_package(self) -> None:
         self.assertEqual(
             OCR_CHANGESET_ID,
-            "mvp1-m4-margin-tables-short-chamfers",
+            "mvp1-m6-reference-points-backend",
         )
         self.assertEqual(OcrPipeline().status["ocr_changeset"], OCR_CHANGESET_ID)
 
