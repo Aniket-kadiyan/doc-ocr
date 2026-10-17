@@ -21,7 +21,15 @@ def digit_quality_score(text: str, confidence: float) -> float:
         score += 8.0
     if re.search(r"±|\+/-", t):
         score += 4.0
-    if re.search(r"[ØøφΦ]", t):
+    if re.search(r"[ØøφΦ∅⌀]", t):
+        score += 3.0
+    # The hole-callout glyphs: depth, counterbore, countersink. A read that
+    # carries one is better evidence than a read that does not, because the
+    # failure it rules out is the damaging one — when the recogniser drops
+    # the glyph the two numbers either side fuse into a value that looks
+    # perfectly well formed ("Ø2.50 ↧13" becomes "Ø2.5013") and is published
+    # without anything to question. Scored like Ø for the same reason.
+    if re.search(r"[↧⌴⌵]", t):
         score += 3.0
     if re.search(r"±", t):
         score += 6.0
@@ -30,8 +38,10 @@ def digit_quality_score(text: str, confidence: float) -> float:
     if re.search(r"\d,\d{3}", t):
         score -= 12.0
 
-    # Penalize garbage letters (mis-read noise)
-    letters = re.sub(r"[ØøRr±°'\".\d\s]", "", t)
+    # Penalize garbage letters (mis-read noise). The engineering glyphs are
+    # not noise and are exempt: scoring ↧ as a stray letter cost a correct
+    # depth callout four points against the fused misread of itself.
+    letters = re.sub(r"[Øø∅⌀Rr±°×↧⌴⌵'\".\d\s]", "", t)
     score -= len(letters) * 4.0
 
     # Penalize very short or very long nonsense

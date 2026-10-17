@@ -202,7 +202,10 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     // newlines. A notes paragraph needs neither: its line breaks are what let
     // the sheet split it back into numbered points, and "fixing" prose only
     // risks turning letters into engineering symbols.
-    text: isNoteRegion(r) ? (r.text ?? "") : fixEngineeringSymbols(r.text ?? ""),
+    text:
+      isNoteRegion(r) || isGdtRegion(r)
+        ? (r.text ?? "")
+        : fixEngineeringSymbols(r.text ?? ""),
     confidence: r.confidence ?? 0,
     type: r.type,
     category: r.category,
@@ -305,6 +308,16 @@ export function mapPageSegmentRegions(
 /** A notes paragraph region, flagged as such by the backend rule engine. */
 function isNoteRegion(r: { type?: string; category?: string }): boolean {
   return r.category === "General Note" || r.type === "General Note";
+}
+
+/**
+ * A feature control frame read by the backend's GD&T pass. Its text is
+ * ``⌖ Ø0.3 A`` — the registry glyph, then the fields — and the symbol fixer
+ * must not touch it: that fixer turns a leading ⊕ into Ø, which would rewrite
+ * a position control as a diameter.
+ */
+function isGdtRegion(r: { type?: string; category?: string }): boolean {
+  return r.category === "GD&T" || r.type === "GD&T";
 }
 
 export async function runSegmentOcr(

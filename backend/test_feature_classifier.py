@@ -33,14 +33,24 @@ from feature_classifier import classify_feature
         # Hole features
         ("Ø8 THRU", fd.CAT_HOLE),
         ("4X Ø10 THRU", fd.CAT_HOLE),
-        # Counterbore (12), Depth (15) and GD&T (16) are switched off in
-        # feature_rules, so these fall through to the diameter they carry.
+        # Counterbore (12) and Depth (15) are switched off in feature_rules,
+        # so these fall through to the diameter they carry.
         # test_feature_rules.py covers that decision; this file records what
         # the classifier does with the sections that are on.
-        ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),
-        ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),
-        ("POSITION Ø0.1 A B", fd.CAT_DIAMETER),
-        ("FLATNESS 0.05", fd.CAT_LINEAR),
+        ("Ø12 CBORE Ø20", fd.CAT_HOLE),
+        ("Ø10 × 15 DEEP", fd.CAT_HOLE),
+        # The same two callouts as a drawing actually prints them — in glyphs,
+        # not words. Neither was recognised as a hole before.
+        ("Ø12 ⌴Ø20", fd.CAT_HOLE),
+        ("Ø2.50 ↧13", fd.CAT_HOLE),
+        ("Ø3.50 ⌵Ø7 X 90°", fd.CAT_HOLE),
+        # GD&T (16) is on, behind gdt_text's evidence requirements: a
+        # spelled-out control with a tolerance is claimed...
+        ("POSITION Ø0.1 A B", fd.CAT_GDT),
+        ("FLATNESS 0.05", fd.CAT_GDT),
+        # ...while the same words inside a measurement specification are not.
+        # This string is from a real drawing's accuracy note and is the false
+        # positive that kept the section switched off.
         ("ROUNDNESS(2PT./180)", fd.CAT_LINEAR),
         # Surface finish
         ("Ra 1.6", fd.CAT_SURFACE),

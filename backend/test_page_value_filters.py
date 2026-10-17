@@ -463,3 +463,187 @@ def test_a_real_part_number_still_passes() -> None:
     for text in ("ISD-600-500Y", "ISC-A00-008Y", "SCM415", "E545", "R24"):
         decision = evaluate_page_value(candidate(text))
         assert decision.accepted, text
+
+
+# --- hole callouts -----------------------------------------------------------
+#
+# A hole is written as a feature term plus the machining instructions that
+# apply to it, in glyph notation: ↧ depth, ⌴ counterbore, ⌵ countersink. None
+# of it matched any grammar, so on a sheet that dimensions its holes this way
+# every callout was rejected as an incomplete value and sent to review.
+
+
+def test_a_hole_callout_is_one_complete_value() -> None:
+    for text in (
+        "Ø2.50 ↧13",
+        "Ø 2.50 ↧ 13",
+        "M3x0.5 - 6H ↧3",
+        "M3x0.5 - 6H THRU ALL",
+        "2 x Ø2.50 ↧8.50",
+        "2 x Ø2.50 THRU ALL",
+        "Ø4 H7 ↧10",
+        "Ø6.50 ⌴Ø11 ↧4.40",
+        "Ø3.50 ⌵Ø7 X 90°",
+        "Ø3.50 X 90° NEAR SIDE",
+        "13 DEEP",
+        # Drill on one printed line, thread on the next, read as one string.
+        "Ø2.50 ↧13 M3x0.5 - 6H ↧13",
+    ):
+        decision = evaluate_page_value(candidate(normalize_page_value_text(text)))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_a_depth_on_its_own_keeps_its_glyph() -> None:
+    # The arrow is the whole meaning of the callout: "0.90" alone does not say
+    # that the 0.90 is a depth. It used to be stripped as crop-boundary noise.
+    assert normalize_page_value_text("↧ 0.90") == "↧0.90"
+    assert evaluate_page_value(candidate("↧0.90")).accepted
+
+
+def test_the_down_arrow_paddle_returns_is_folded_onto_the_depth_glyph() -> None:
+    # PaddleOCR has no U+21A7 in its charset and returns U+2193 for the glyph.
+    assert normalize_page_value_text("2.50 ↓13") == "2.50 ↧13"
+    assert normalize_page_value_text("M3x0.5 - 6H ↓13") == "M3x0.5 - 6H ↧13"
+
+
+def test_an_arrow_with_no_number_behind_it_is_still_boundary_noise() -> None:
+    # A leader arrowhead intruding on a crop. Only an arrow that runs straight
+    # into a number is read as a depth.
+    assert normalize_page_value_text("→ 25") == "25"
+    assert normalize_page_value_text("↑25") == "25"
+
+
+def test_the_diameter_glyph_paddle_returns_is_folded_anywhere_in_the_text() -> None:
+    # U+2205 EMPTY SET is what the recogniser emits for Ø. Only a LEADING one
+    # was folded, so a counted callout kept a glyph no grammar recognised.
+    assert normalize_page_value_text("2 x ∅2.50 THRU") == "2 x Ø2.50 THRU"
+    assert evaluate_page_value(candidate("2 x Ø2.50 THRU")).accepted
+
+
+def test_a_fit_class_and_a_stacked_deviation_are_complete_values() -> None:
+    for text in ("Ø4 H7", "Ø20H10 +0.084/0", "Ø33 +0.012 0", "+0.012 0"):
+        decision = evaluate_page_value(candidate(normalize_page_value_text(text)))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_two_fused_numbers_are_still_not_a_value() -> None:
+    # The unsigned lower deviation is allowed only behind a signed upper one.
+    for text in ("33 0.5", "25 40", "12.5 0.25"):
+        decision = evaluate_page_value(candidate(text))
+        assert not decision.accepted, text
+
+
+def test_prose_is_not_a_hole_callout() -> None:
+    for text in (
+        "3 PLACES",
+        "DO NOT SCALE",
+        "REMOVE ALL BURRS 0.2",
+        "ALL DIMENSIONS ARE IN mm",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert not decision.accepted, text
+
+
+def test_a_depth_glyph_read_as_a_letter_is_repaired() -> None:
+    # The recogniser substitutes "T" for ↧ at small text sizes.
+    assert normalize_page_value_text("M3x0.5-6H T4.50") == "M3x0.5-6H↧4.50"
+    assert normalize_page_value_text("Ø2.50 T13") == "Ø2.50↧13"
+
+
+def test_the_letter_repair_leaves_everything_else_alone() -> None:
+    # A fit class set tight against its size, a part number, a range, and a
+    # phrase that is not a callout at all.
+    for text in ("Ø50T7", "ISD-600T500", "20 TO 25", "PART T5", "T10"):
+        assert normalize_page_value_text(text) == text, text
+
+
+def test_a_tolerance_zone_with_its_datums_is_a_value() -> None:
+    # Read correctly by the authoritative pass out of a feature control frame,
+    # then thrown out by the grammar and sent to review.
+    for text in ("Ø0.02A", "Ø0.02 A", "Ø0.1 A B", "Ø0.3 A B C"):
+        assert evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_a_length_beside_a_datum_letter_is_not_one() -> None:
+    # The Ø is what separates a tolerance zone from a fused read of a length
+    # and the section label next to it.
+    for text in ("25 A", "0.5 m", "12.5 B"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_an_orphaned_closing_bracket_is_boundary_noise() -> None:
+    # A reference dimension's "(" is routinely read as something else.
+    assert normalize_page_value_text("Ø20.86)") == "Ø20.86"
+    # ...but a balanced pair is left alone, because stripping it leaves
+    # something incomplete and the strip is then discarded.
+    assert normalize_page_value_text("(20.86)") == "(20.86)"
+    assert normalize_page_value_text("1.00[25.40]") == "1.00[25.40]"
+
+
+# --- view captions label a region, not a value -------------------------------
+
+
+def _detail_caption_page(value_text: str) -> list[PageValueCandidate]:
+    caption = candidate("Detail C", x=1500, y=300, width=200, height=34)
+    scale = candidate("SCALE 5:1", x=1500, y=340, width=200, height=34)
+    value = candidate(value_text, x=1520, y=450, width=160, height=34)
+    return [caption, scale, value]
+
+
+def test_a_dimension_inside_a_detail_view_survives_its_caption() -> None:
+    # The nearby-label radius is sized for a title-block field beside its
+    # value — about 240px at 250dpi. A view caption is a heading over a whole
+    # region, so every dimension under one was being hard-excluded: no
+    # balloon, and no review box either.
+    for text in ("Ø20.6 -0.1", "0.30 X 45° TYP.", "Ø2.50 ↧13"):
+        page = _detail_caption_page(normalize_page_value_text(text))
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+        assert decision.rule_name != "detail_view_section", text
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_a_damaged_dimension_under_a_caption_goes_to_review_not_oblivion() -> None:
+    # "Ø20.6 -0.1" read as "20.6~0.1". It is not a value, but it is not part
+    # of the caption either, so it must reach an inspector.
+    for text in ("20.6~0.1", "20.86=0.01"):
+        page = _detail_caption_page(text)
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+        assert decision.rule_name == "invalid_engineering_value", text
+
+
+def test_the_pieces_of_a_split_caption_are_still_excluded() -> None:
+    for text in ("C", "A-A", "(3x)", "1:1", "5:1"):
+        page = _detail_caption_page(text)
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+        assert not decision.accepted, text
+        assert decision.rule_name in {"detail_view_section", "scale_information"}, (
+            text,
+            decision.rule_name,
+        )
+
+
+def test_a_caption_reached_through_line_context_is_also_a_heading() -> None:
+    # reconstruct_line_context sweeps up the caption on the line above, and
+    # the keyword branch reads text and context together — so "R212.5" was
+    # excluded by a "SECTION VIEW B-B" it merely sat under.
+    value = PageValueCandidate(
+        text="R212.5",
+        bbox={"x": 2646, "y": 1480, "width": 39, "height": 159},
+        context_text="SECTION VIEW B-B",
+    )
+    decision = evaluate_page_value(value)
+    assert decision.accepted, decision.rule_name
+
+
+def test_a_caption_fragment_reached_through_context_is_still_excluded() -> None:
+    piece = PageValueCandidate(
+        text="C",
+        bbox={"x": 2646, "y": 1480, "width": 39, "height": 40},
+        context_text="SECTION VIEW B-B",
+    )
+    assert not evaluate_page_value(piece).accepted
+
+
+def test_the_caption_itself_is_excluded_by_its_own_words() -> None:
+    for text in ("SECTION VIEW B-B", "Detail D", "Section A-A"):
+        assert not evaluate_page_value(candidate(text)).accepted, text

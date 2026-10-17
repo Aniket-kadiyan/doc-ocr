@@ -495,10 +495,27 @@ def _cells_are_adjacent(
     return vertical_edge or horizontal_edge
 
 
+#: How many adjacent cells a group needs before it is called a table.
+#:
+#: Two was not enough. A drawing that frames its dimension text — a common
+#: CAD style, and what a basic dimension always looks like — puts two framed
+#: numbers next to each other all over the views, and every such pair was
+#: being masked. The mask is applied by whitening the page BEFORE detection,
+#: so those values were not merely rejected: the detector never saw them, and
+#: they reached neither a balloon nor the review queue. On one sheet that is
+#: what removed "59.8" from the scan entirely.
+#:
+#: Three is the smallest group a ruled table can have and still be one, and
+#: measured over five real sheets it removes the pairs sitting on the views
+#: while leaving every title block and revision grid masked.
+TABLE_MASK_MIN_CELLS = 3
+
+
 def _retain_repeated_cell_groups(
     cells: Sequence[LayoutBox],
     *,
     tolerance: int,
+    minimum_cells: int = TABLE_MASK_MIN_CELLS,
 ) -> list[LayoutBox]:
     """Discard isolated drawing rectangles while retaining repeated grids."""
 
@@ -528,7 +545,7 @@ def _retain_repeated_cell_groups(
     return [
         cell
         for index, cell in enumerate(cells)
-        if counts.get(find(index), 0) >= 2
+        if counts.get(find(index), 0) >= minimum_cells
     ]
 
 

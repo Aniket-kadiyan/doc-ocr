@@ -75,6 +75,15 @@ import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
 import { ScanProgressBanner } from "@/components/ScanProgressBanner";
+import { GdtOverlay } from "@/components/GdtOverlay";
+import { GdtPanel } from "@/components/GdtPanel";
+import {
+  fetchGdtRegistry,
+  recognizeGdtSymbols,
+  scaleResult,
+} from "@/lib/gdtClient";
+import { framesForPage, overlayItems } from "@/lib/gdtSymbols";
+import type { GdtPageResult, GdtRegistry } from "@/types/gdt";
 import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
 import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
@@ -116,6 +125,10 @@ const OCR_RENDER_SCALE = 250 / 72;
  * an E-size sheet comes back at a lower resolution rather than not at all.
  */
 const REFERENCE_RENDER_SCALE = 10;
+// Finer than the displayed canvas, coarser than the reference-point pass: a
+// GD&T glyph is larger than a point name, and the whole page is read rather
+// than matched against a handful of templates.
+const GDT_RENDER_SCALE = 4;
 const REFERENCE_MAX_PIXELS = 48_000_000;
 
 const MIN_BOX = 8;
@@ -193,6 +206,13 @@ export function DrawingViewer() {
     string | null
   >(null);
   const [findingReferencePoints, setFindingReferencePoints] = useState(false);
+  // GD&T recognition is presentation-only: it never writes into the
+  // annotation store, so it lives in component state beside the reference
+  // table rather than in the project.
+  const [gdtResult, setGdtResult] = useState<GdtPageResult | null>(null);
+  const [gdtRegistry, setGdtRegistry] = useState<GdtRegistry | null>(null);
+  const [gdtSelectedKey, setGdtSelectedKey] = useState<string | null>(null);
+  const [findingGdtSymbols, setFindingGdtSymbols] = useState(false);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const currentBoxRef = useRef<BBox | null>(null);
 
@@ -1290,6 +1310,103 @@ export function DrawingViewer() {
 
   findReferencePointsRef.current = findReferencePoints;
 
+  /**
+   * Find feature control frames and GD&T symbols on this page.
+   *
+   * Like the reference-point pass, and for the same reason, the sheet is
+   * re-rendered finer than the displayed canvas before it is read. GD&T
+   * modifiers are printed at note size — a circled Ⓜ is around 20px at a
+   * typical frame height, with a 10px letter inside it — and below that the
+   * recognizer correctly refuses to name them. Resolution is the cheapest
+   * accuracy available here.
+   *
+   * These are not inspection values. They carry no tolerance of their own, no
+   * balloon number and no measurement, they are not saved into the project
+   * and not exported; they are shown for an operator to read and correct.
+   */
+  const findGdtSymbols = useCallback(async () => {
+    const source = sourceCanvasRef.current;
+    if (!source) return;
+
+    setSelectionError(null);
+    setScanSummary(null);
+    setSelectedScanSections([]);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setGdtSelectedKey(null);
+    setFindingGdtSymbols(true);
+    setIsProcessing(true);
+
+    const projectAtStart = projectIdRef.current;
+    const page = currentPage;
+    try {
+      let readCanvas = source;
+      let readScale = 1;
+      if (pdfDoc) {
+        const base = await pdfDoc.getPage(page);
+        const unscaled = base.getViewport({ scale: 1 });
+        const budget = Math.sqrt(
+          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
+        );
+        const renderScale = Math.min(GDT_RENDER_SCALE, budget);
+        if (renderScale > PDF_RENDER_SCALE) {
+          try {
+            const { canvas } = await renderPdfPage(pdfDoc, page, renderScale);
+            readCanvas = canvas;
+            readScale = renderScale / PDF_RENDER_SCALE;
+          } catch {
+            readCanvas = source;
+            readScale = 1;
+          }
+        }
+      }
+
+      const raw = await recognizeGdtSymbols(readCanvas, null, { page });
+      if (projectIdRef.current !== projectAtStart) return;
+      if (!raw) {
+        setGdtResult(null);
+        setSelectionError(
+          "The OCR service could not be reached for GD&T recognition."
+        );
+        return;
+      }
+
+      // Boxes come back in the upscaled render's pixels; the overlay draws in
+      // page coordinates.
+      const result = scaleResult(raw, readScale);
+      setGdtResult(result);
+      void fetchGdtRegistry().then(setGdtRegistry);
+
+      if (result.counts.frames === 0 && result.counts.symbols === 0) {
+        setSelectionError(
+          "No feature control frames or GD&T symbols were found on this page."
+        );
+      } else if (result.counts.ambiguous > 0) {
+        setSelectionError(
+          `${result.counts.ambiguous} detection${
+            result.counts.ambiguous === 1 ? "" : "s"
+          } need review — see the GD&T panel.`
+        );
+      }
+    } catch (error) {
+      setGdtResult(null);
+      setSelectionError(
+        error instanceof Error
+          ? error.message
+          : "GD&T recognition failed."
+      );
+    } finally {
+      setFindingGdtSymbols(false);
+      setIsProcessing(false);
+    }
+  }, [
+    currentPage,
+    pdfDoc,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+  ]);
+
   const openScanReviewCandidate = useCallback(
     (candidate: PageScanReviewCandidate) => {
       setSelectionError(null);
@@ -1612,6 +1729,8 @@ export function DrawingViewer() {
         onScanWholePage={() => void scanWholePage()}
         onFindReferencePoints={() => void findReferencePoints()}
         findingReferencePoints={findingReferencePoints}
+        onFindGdtSymbols={() => void findGdtSymbols()}
+        findingGdtSymbols={findingGdtSymbols}
         onToggleDrawValue={() => {
           setSelectionError(null);
           setScanSummary(null);
@@ -1679,6 +1798,16 @@ export function DrawingViewer() {
                       height={stageSize.height}
                       listening={!drawingActive}
                     />
+
+                    {gdtResult && (
+                      <GdtOverlay
+                        frames={framesForPage(gdtResult, currentPage)}
+                        items={overlayItems(gdtResult, currentPage)}
+                        scale={scale}
+                        selectedKey={gdtSelectedKey}
+                        onSelect={(key) => setGdtSelectedKey(key)}
+                      />
+                    )}
 
                     {SCAN_DEBUG_OVERLAY_ENABLED && scanOverlay && (
                       <ScanDebugOverlay
@@ -1836,6 +1965,21 @@ export function DrawingViewer() {
                 onClear={() => {
                   setReferenceTable(null);
                   setSelectedReferenceSymbol(null);
+                }}
+              />
+            ) : null
+          }
+          gdtPanel={
+            gdtResult && gdtResult.page === currentPage ? (
+              <GdtPanel
+                result={gdtResult}
+                registry={gdtRegistry}
+                selectedKey={gdtSelectedKey}
+                disabled={isProcessing}
+                onSelect={setGdtSelectedKey}
+                onClear={() => {
+                  setGdtResult(null);
+                  setGdtSelectedKey(null);
                 }}
               />
             ) : null

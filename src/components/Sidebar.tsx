@@ -8,6 +8,8 @@ interface SidebarProps {
   annotations: Annotation[];
   /** The sheet's reference-point table, when one has been read. */
   referencePanel?: ReactNode;
+  /** GD&T detections awaiting review, when the pass has been run. */
+  gdtPanel?: ReactNode;
   reviewCandidates: ReviewSidebarItem[];
   disabled?: boolean;
   selectedId: string | null;
@@ -33,6 +35,7 @@ export interface ReviewSidebarItem {
 export function Sidebar({
   annotations,
   referencePanel = null,
+  gdtPanel = null,
   reviewCandidates,
   disabled = false,
   selectedId,
@@ -73,6 +76,15 @@ export function Sidebar({
         // rows, and it must not push the balloon list off the sidebar.
         <div className="max-h-[45%] shrink-0 overflow-y-auto bg-white">
           {referencePanel}
+        </div>
+      )}
+
+      {gdtPanel && (
+        // Bounded like the reference table, and for the same reason: a dense
+        // sheet can carry a dozen frames, and the balloon list must stay
+        // reachable underneath them.
+        <div className="max-h-[45%] shrink-0 overflow-y-auto bg-white">
+          {gdtPanel}
         </div>
       )}
 

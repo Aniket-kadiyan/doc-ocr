@@ -6,6 +6,8 @@ from PIL import Image, ImageDraw
 
 from page_layout import (
     LAYOUT_MAX_PANELS,
+    LayoutBox,
+    _retain_repeated_cell_groups,
     analyze_page_layout,
     crop_section,
     detect_table_masks,
@@ -214,3 +216,26 @@ def test_the_margin_pass_does_not_run_on_a_small_section() -> None:
     masks = detect_table_masks(synthetic_drawing())
 
     assert all(mask.width >= 2 and mask.height >= 2 for mask in masks)
+
+
+def test_two_framed_values_on_a_view_are_not_a_table():
+    """A pair of adjacent rectangles is drawing geometry, not a ruled grid.
+
+    Masking happens by whitening the page before detection, so a mask landing
+    on the views deletes the values under it outright — no balloon and no
+    review box. A drawing that frames its dimension text produces such pairs
+    all over, and two cells used to be enough to call them a table.
+    """
+    pair = [
+        LayoutBox(100, 100, 80, 40),
+        LayoutBox(100, 140, 80, 40),
+    ]
+    assert _retain_repeated_cell_groups(pair, tolerance=4) == []
+
+
+def test_a_ruled_grid_is_still_a_table():
+    grid = [
+        LayoutBox(100, 100 + row * 40, 80, 40)
+        for row in range(4)
+    ]
+    assert len(_retain_repeated_cell_groups(grid, tolerance=4)) == 4

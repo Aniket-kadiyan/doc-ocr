@@ -43,9 +43,14 @@ CAT_UNKNOWN = "Unknown"
 
 # ── Unicode symbols ──────────────────────────────────────────────────────────
 DIAMETER_SYMBOLS = "Øø⌀φΦ∅"
-COUNTERBORE_SYMBOL = "⌴"
-COUNTERSINK_SYMBOL = "⌵"
-DEPTH_SYMBOL = "⌵⌷↧⌇"  # depth glyph is OCR'd inconsistently; treat loosely
+COUNTERBORE_SYMBOL = "⌴⊔"
+COUNTERSINK_SYMBOL = "⌵∨"
+# The ISO depth glyph is ↧. PaddleOCR has no such code point in its charset
+# and returns U+2193 DOWNWARDS ARROW for it on CAD-rendered callouts, so both
+# are listed; page_value_filters folds the second onto the first before any of
+# this is consulted. ⌵ is NOT a depth glyph — it is the countersink above,
+# and listing it here made every countersink read as a blind hole.
+DEPTH_SYMBOL = "↧↓⌷⌇"
 DATUM_TRIANGLE = "▽▼△▲"
 WELD_SYMBOLS = "△▽◁▷⏊"
 

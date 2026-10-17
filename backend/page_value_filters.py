@@ -130,20 +130,34 @@ _ANGLE_VALUE = _compile(
     rf"\s*-\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?))?"
     r"(?:\s*(?:MAX|MIN|TYP|REF|BASIC)\.?)?$"
 )
+# An ISO fit class: the tolerance-zone letter and its grade, printed straight
+# after the size ("Ø4 H7", "Ø18h6", "20 JS9"). Grades run 01 to 18, which is
+# what keeps a misread word with a long number behind it out.
+_FIT_CLASS = r"[A-Za-z]{1,2}\s*(?:0?[1-9]|1[0-8])(?![\d.])"
+# "THRU" on its own, and the "THRU ALL" that CAD packages write for a hole
+# that passes through every wall it meets. Without ALL every one of them was
+# rejected as an incomplete value.
+_THRU = r"THRU(?:\s*ALL)?"
 _LINEAR_VALUE = _compile(
     rf"^(?:\d+\s*[X×]\s*)?"
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
+    rf"(?:\s*{_FIT_CLASS})?"
     rf"(?:\s*±\s*{_NUMBER}"
     rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
     # Two stacked deviations, printed one above the other on the drawing and
     # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
     # a shaft or hole limit often has upper AND lower below nominal. Listed
     # before the single-deviation branch so the longer form wins.
-    rf"|\s*[+-]\s*{_NUMBER}\s*[+-]\s*{_NUMBER}"
+    #
+    # The second sign is optional because a limit at nominal is printed as a
+    # bare "0" ("Ø33 +0.012 / 0" — the commonest hole fit on a sheet). The
+    # FIRST sign stays required, which is what keeps two fused unrelated
+    # numbers from passing as a nominal and its deviation.
+    rf"|\s*[+-]\s*{_NUMBER}\s*/?\s*[+-]?\s*{_NUMBER}"
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
-    r"(?:\s*(?:MAX|MIN|TYP|REF|BASIC|THRU)\.?)?$"
+    rf"(?:\s*(?:MAX|MIN|TYP|REF|BASIC|{_THRU})\.?)?$"
 )
 # A chamfer: the leg length and the angle it cuts, written "1 × 45°" and
 # often prefixed CHF or C. Neither grammar above covers it. The linear one
@@ -156,7 +170,7 @@ _CHAMFER_VALUE = _compile(
     rf"^(?:CHF|C)?\s*(?:"
     rf"{_NUMBER}\s*[X×]\s*{_ANGLE_MAGNITUDE}"
     rf"|{_ANGLE_MAGNITUDE}\s*[X×]\s*{_NUMBER}"
-    rf")$"
+    rf")(?:\s*(?:MAX|MIN|TYP|REF|BASIC)\.?)?$"
 )
 # The same chamfer in the short form JIS and ISO drawings use, where the 45
 # degrees is implied and only the leg is printed: "C3", "C0.5", "CHF2". The
@@ -170,12 +184,104 @@ _SHORT_CHAMFER_VALUE = _compile(
 _THREAD_VALUE = _compile(
     rf"^M\s*\d+(?:\.\d+)?"
     rf"(?:\s*[X×]\s*{_NUMBER})?"
-    r"(?:\s*-\s*[0-9A-Z]+)?"
-    r"(?:\s*(?:THRU|TYP|REF)\.?)?$"
+    # A metric thread may carry a pitch class and a tolerance class ("6H",
+    # "6g", "6H-6g"), so the hyphenated field repeats.
+    r"(?:\s*-\s*[0-9A-Z]+)*"
+    rf"(?:\s*(?:{_THRU}|TYP|REF)\.?)?$"
 )
 _STANDALONE_TOLERANCE = _compile(
-    rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
+    # A deviation pair printed one above the other and read back on one line
+    # with no nominal in the crop ("+0.012 0", "+0.05 -0.05"). The first
+    # member must carry an explicit sign, which is what stops a pair of plain
+    # numbers from passing as a tolerance.
+    rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?"
+    rf"(?:\s*[+-]?\s*{_NUMBER}\s*°?)?$"
 )
+# ── Hole callouts ───────────────────────────────────────────────────────────
+#
+# A hole is not dimensioned like a length. It is written as a feature term —
+# a diameter or a thread — followed by the machining instructions that apply
+# to it, in the compact glyph notation of ISO 129 / ASME Y14.5:
+#
+#     Ø2.50 ↧13                 2.5 diameter, 13 deep
+#     M3x0.5 - 6H ↧3            tapped M3, thread 3 deep
+#     2 x Ø2.50 THRU ALL        two holes, through every wall
+#     Ø4 H7 ↧10                 reamed to an H7 fit, 10 deep
+#     Ø6.50 ⌴Ø11 ↧4.40          6.5 drill, counterbored Ø11 by 4.4 deep
+#     Ø3.50 ⌵Ø7 X 90°           3.5 drill, countersunk to Ø7 at 90°
+#     ↧0.90                     a depth on its own, pointing at the feature
+#
+# None of it matched any grammar above, so on a sheet that dimensions its
+# holes this way every hole callout was rejected as "not one complete
+# engineering value" and went to the review queue instead of being ballooned.
+# That is most of the dimensions on a typical machined part.
+#
+# The shape is: an optional count, one feature term, then one or more
+# modifiers. At least one modifier is required — a feature term on its own is
+# already a plain linear or thread value and is matched as one above.
+_HOLE_COUNT = rf"(?:\d+\s*[X×]\s*)?"
+_DIAMETER_TERM = rf"(?:SØ|Ø)?\s*{_NUMBER}(?:\s*{_FIT_CLASS})?"
+_THREAD_TERM = (
+    rf"M\s*\d+(?:\.\d+)?"
+    rf"(?:\s*[X×]\s*{_NUMBER})?"
+    r"(?:\s*-\s*[0-9A-Za-z]+)*"
+)
+_DEPTH_TERM = rf"↧\s*{_NUMBER}"
+_COUNTERBORE_TERM = (
+    rf"⌴\s*(?:Ø\s*)?{_NUMBER}"
+    rf"(?:\s*{_DEPTH_TERM})?"
+)
+_COUNTERSINK_TERM = (
+    rf"⌵\s*(?:Ø\s*)?{_NUMBER}"
+    rf"(?:\s*[X×]\s*{_ANGLE_MAGNITUDE})?"
+)
+# Where the feature is cut, and the shop words for the glyphs above. "NEAR
+# SIDE" / "FAR SIDE" is how a drawing says which face a blind feature enters.
+_HOLE_WORD = (
+    rf"(?:{_THRU}|DEEP|DP|DEPTH|CBORE|C'BORE|CSK|C'SINK|SF|SPOTFACE"
+    r"|TYP|REF|MIN|MAX|BASIC|TAP|TAPPED|DRILL|REAM"
+    r"|(?:NEAR|FAR)\s*SIDE|BOTH\s*SIDES)"
+)
+_HOLE_MODIFIER = (
+    rf"(?:{_DEPTH_TERM}|{_COUNTERBORE_TERM}|{_COUNTERSINK_TERM}"
+    rf"|[X×]\s*{_ANGLE_MAGNITUDE}|{_HOLE_WORD}\.?)"
+)
+_HOLE_SEPARATOR = r"\s*[,/]?\s*"
+_ONE_HOLE_CALLOUT = (
+    rf"{_HOLE_COUNT}(?:{_THREAD_TERM}|{_DIAMETER_TERM})"
+    rf"(?:{_HOLE_SEPARATOR}{_HOLE_MODIFIER})+"
+)
+# A hole is usually specified on two printed lines — the drill on one, the
+# thread or counterbore on the next — and a crop that covers both comes back
+# as a single string. Two callouts are allowed for that reason; more than two
+# is a clustering error, not a callout.
+_HOLE_CALLOUT_VALUE = _compile(
+    rf"^{_ONE_HOLE_CALLOUT}(?:{_HOLE_SEPARATOR}{_ONE_HOLE_CALLOUT})?$"
+)
+# A geometric tolerance and the datums it is taken from, as it is printed
+# inside a feature control frame: "Ø0.02 A", "Ø0.1 A B". The authoritative
+# pass reads these correctly and the grammar then threw them out, which sent
+# a value the fast pass had read as "0.02A" — and which only passed at all by
+# accident, through the compact-identifier escape hatch — to review instead.
+#
+# The Ø is required. Without it "25 A" is a length beside a section label as
+# easily as it is a tolerance, and fused reads of exactly that shape are
+# common. Datum letters are the ISO set: I, O and Q are never used, because
+# they read as 1 and 0. Case-sensitive, unlike most of this file: a datum is
+# printed as a capital, and "0.5 m" is not one.
+_DATUM_LETTER = r"[A-HJ-NP-Z]"
+_DIAMETRAL_TOLERANCE_WITH_DATUM = re.compile(
+    rf"^Ø\s*{_NUMBER}"
+    r"(?:\s*[ⓂⓁⓈ])?"
+    rf"(?:\s*-?\s*{_DATUM_LETTER}\b){{1,3}}$"
+)
+# A depth with no feature term in the crop. It is a complete dimension on its
+# own: the leader says which feature it belongs to.
+_STANDALONE_DEPTH_VALUE = _compile(
+    rf"^{_DEPTH_TERM}(?:\s*(?:MIN|MAX|TYP|REF)\.?)?$"
+)
+
+
 # Leader and extension lines touch the crop edge and read as a stray dash or
 # bar, so "-" and "~" join the punctuation already treated as boundary noise.
 # normalize_page_value_text only strips these when what remains is itself a
@@ -183,8 +289,20 @@ _STANDALONE_TOLERANCE = _compile(
 # A leader arrowhead touching the crop reads as an arrow glyph. Arrows are
 # never part of a value so they are stripped from the front; a leading "-" is
 # deliberately NOT stripped, because it is the sign of a real value.
-_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,\u2190-\u21FF\u25B6\u25C0]+\s*")
-_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,\-\u2010-\u2015~]+$")
+# U+21A7 is carved out of the arrow range: by this point _normalize_symbols
+# has folded the depth glyph onto it, and "↧0.90" is a whole callout — the
+# depth IS the dimension there. Stripping it published a bare "0.90" and
+# threw away the only thing that said what the number measures.
+_BOUNDARY_NOISE_START = re.compile(
+    r"^[?¦|;,\u2190-\u21A6\u21A8-\u21FF\u25B6\u25C0]+\s*"
+)
+# ")" joins the trailing noise because a reference dimension's opening
+# bracket is routinely read as something else — "(20.86)" comes back
+# "Ø20.86)" — and the orphaned bracket then failed every grammar. Stripping
+# is still only kept when what remains is itself a complete value, so a
+# balanced "(25)" and a dual-unit "1.00[25.40]" are untouched: removing their
+# closing bracket leaves something incomplete and the strip is discarded.
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,)\-\u2010-\u2015~]+$")
 _KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
 _KEYWORD_CONFUSABLES = str.maketrans(
     {
@@ -216,10 +334,55 @@ def _normalize_symbols(text: str) -> str:
         .replace("”", "″")
         .replace("ø", "Ø")
         .replace("φ", "Ø")
+        .replace("ϕ", "Ø")
         .replace("Φ", "Ø")
         .replace("⌀", "Ø")
+        # U+2205 EMPTY SET is what PaddleOCR actually emits for a drawing's Ø:
+        # it is in the recogniser's charset and U+2300 DIAMETER SIGN is not.
+        # Only the LEADING one was being folded (symbol_normalize), so a
+        # counted callout — "2 x ∅2.50 ↧8.50" — kept a diameter glyph that no
+        # grammar here recognises and was rejected whole.
+        .replace("∅", "Ø")
     )
+    normalized = canonical_hole_glyphs(normalized)
     return " ".join(normalized.strip().split())
+
+
+# The ISO depth glyph (↧ U+21A7) is not in PaddleOCR's charset. Measured
+# against CAD-rendered callouts, the recogniser returns U+2193 DOWNWARDS ARROW
+# for it on every read it does not drop entirely — "Ø2.50 ↧13" comes back
+# "2.50↓13" — so the down-arrow family is folded onto the canonical glyph.
+#
+# Only an arrow that leads straight into a number is folded. That is the one
+# shape a leader arrowhead intruding on a crop does not have: an arrowhead is
+# a filled triangle (handled separately as boundary noise) and carries no
+# number behind it, while a depth callout is always the glyph and its depth.
+_DEPTH_GLYPH_SOURCES = "↧↓⇓⇩↡⤓⍗⌄"
+_COUNTERBORE_GLYPH_SOURCES = "⌴⊔"
+_COUNTERSINK_GLYPH_SOURCES = "⌵∨"
+DEPTH_GLYPH = "↧"
+COUNTERBORE_GLYPH = "⌴"
+COUNTERSINK_GLYPH = "⌵"
+_DEPTH_GLYPH_RE = re.compile(rf"[{_DEPTH_GLYPH_SOURCES}]\s*(?=[\d.])")
+_COUNTERBORE_GLYPH_RE = re.compile(
+    rf"[{_COUNTERBORE_GLYPH_SOURCES}]\s*(?=[Ø\d.])"
+)
+_COUNTERSINK_GLYPH_RE = re.compile(
+    rf"[{_COUNTERSINK_GLYPH_SOURCES}]\s*(?=[Ø\d.])"
+)
+
+
+def canonical_hole_glyphs(text: str) -> str:
+    """Fold the hole-callout glyphs OCR renders inconsistently.
+
+    Public so the OCR cleanup layers can apply it as early as possible: a
+    candidate scored and voted on while it still carries a raw down-arrow is
+    scored as if it carried a stray letter.
+    """
+
+    out = _DEPTH_GLYPH_RE.sub(DEPTH_GLYPH, text)
+    out = _COUNTERBORE_GLYPH_RE.sub(COUNTERBORE_GLYPH, out)
+    return _COUNTERSINK_GLYPH_RE.sub(COUNTERSINK_GLYPH, out)
 
 
 def _unwrapped_value(text: str) -> str:
@@ -248,6 +411,8 @@ def _is_single_value(value: str) -> bool:
         or _THREAD_VALUE.fullmatch(value)
         or _STANDALONE_TOLERANCE.fullmatch(value)
         or _SHORT_CHAMFER_VALUE.fullmatch(value)
+        or _HOLE_CALLOUT_VALUE.fullmatch(value)
+        or _STANDALONE_DEPTH_VALUE.fullmatch(value)
     )
 
 
@@ -289,9 +454,43 @@ def is_complete_engineering_value(text: str) -> bool:
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
         return True
+    if _HOLE_CALLOUT_VALUE.fullmatch(value):
+        return True
+    if _STANDALONE_DEPTH_VALUE.fullmatch(value):
+        return True
+    if _DIAMETRAL_TOLERANCE_WITH_DATUM.fullmatch(value):
+        return True
     if _is_dual_unit_value(value):
         return True
     return bool(COMPACT_IDENTIFIER_VALUE.fullmatch(value))
+
+
+# The depth glyph is a bar, a stem and an arrowhead, so a recogniser that
+# cannot place it reaches for the letter it looks most like. Measured over
+# CAD-rendered callouts at 26/34/44px, the substitution it makes is "T"
+# ("M3x0.5-6H \u21a74.50" comes back "M3x0.5-6H T4.50").
+#
+# Folding a T onto the glyph on sight would be reckless — a part number
+# carries capitals next to digits. Two guards keep it honest:
+#
+#   * the letter must stand apart. A fit class is set tight against the size
+#     it qualifies ("Ø50T7", "ISD-600T500"); a depth glyph has a space in
+#     front of it, which is where the recogniser puts the substitution.
+#   * the repaired string must parse as a whole hole callout. That is what
+#     stops it anywhere else: "PART T5" repairs to "PART↧5", which is not a
+#     callout, so the repair is discarded and the text is left alone.
+_DEPTH_LETTER_RE = re.compile(r"(?<=[\dA-Za-z])\s+[T⊤Ŧ]\s*(?=[\d.])")
+
+
+def _repaired_depth_letter(value: str) -> str | None:
+    """A hole callout whose depth glyph was read as a letter, or None."""
+
+    if not _DEPTH_LETTER_RE.search(value):
+        return None
+    repaired = _DEPTH_LETTER_RE.sub(DEPTH_GLYPH, value)
+    if repaired == value or not _HOLE_CALLOUT_VALUE.fullmatch(repaired):
+        return None
+    return repaired
 
 
 def normalize_page_value_text(text: str) -> str:
@@ -307,6 +506,9 @@ def normalize_page_value_text(text: str) -> str:
     stripped = _BOUNDARY_NOISE_END.sub("", stripped).strip()
     if stripped != normalized and is_complete_engineering_value(stripped):
         return stripped
+    repaired = _repaired_depth_letter(normalized)
+    if repaired is not None:
+        return repaired
     return normalized
 
 
@@ -389,11 +591,49 @@ def needs_expanded_filter_context(text: str, bbox: BBox) -> bool:
     )
 
 
+# Longest a token may be and still be read as a piece of a view caption.
+# A caption the detector split comes back as "C", "A-A", "(3x)", "1:1" or
+# "B(3x)"; five characters covers all of them.
+_CAPTION_FRAGMENT_MAX_CHARS = 5
+# ...or the caption's ratio, however it is spaced and whatever it is glued to.
+# "SCALE 1 : 1" comes back as the single token "Scale1:1", which the SCALE
+# word pattern cannot see (it needs a word boundary) and which is too long to
+# be a fragment, so without this it reached the review queue as a value.
+_CAPTION_RATIO = re.compile(r"(?<!\d)\d{1,3}\s*:\s*\d{1,3}(?!\d)")
+
+
+def _is_caption_fragment(text: str) -> bool:
+    """Whether a token could be part of a split view or scale caption."""
+
+    compact = "".join(str(text or "").split())
+    if len(compact) <= _CAPTION_FRAGMENT_MAX_CHARS:
+        return True
+    return bool(_CAPTION_RATIO.search(compact))
+
+
 def _matches_text_or_nearby_label(
     candidate: PageValueCandidate,
     page_candidates: Sequence[PageValueCandidate],
     pattern: re.Pattern[str],
+    *,
+    nearby_only_caption_fragments: bool = False,
 ) -> bool:
+    if pattern.search(_canonical_keyword_text(candidate.text)):
+        return True
+    # A view caption is a heading over a whole region, not a field label
+    # beside its value, and the nearby-label radius is sized for the latter:
+    # ~240px at 250dpi. So every damaged dimension inside a detail view was
+    # being deleted by the caption above it — "Ø20.6 -0.1" read as
+    # "20.6~0.1" and "Ø20.86 +0.01" read as "20.86=0.01" both vanished
+    # under "Detail C", with no balloon and no review box, because this rule
+    # is a hard exclusion. Only something short enough to be a piece of the
+    # caption itself may be taken by proximity to one.
+    # The candidate's reconstructed line context is the same kind of evidence
+    # as a neighbouring box, and it reaches further: "R212.5" was excluded
+    # because the context rebuilt for it swept up "SECTION VIEW B-B" from the
+    # line above. It goes behind the same guard.
+    if nearby_only_caption_fragments and not _is_caption_fragment(candidate.text):
+        return False
     if pattern.search(_candidate_keyword_text(candidate)):
         return True
     if not _is_context_exclusion_prone(candidate.text):
@@ -475,6 +715,7 @@ def _detail_view_section(
         candidate,
         page_candidates,
         DETAIL_VIEW_SECTION,
+        nearby_only_caption_fragments=True,
     )
 
 
@@ -486,6 +727,9 @@ def _scale_information(
         candidate,
         page_candidates,
         SCALE_LABEL,
+        # "SCALE 5:1" is printed under the detail caption it belongs to, so
+        # it covers the same view and needs the same guard.
+        nearby_only_caption_fragments=True,
     )
 
 

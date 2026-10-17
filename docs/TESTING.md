@@ -31,10 +31,25 @@ backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
 | `npm run lint` | Next.js/TypeScript source through ESLint CLI |
 | `npm run typecheck` | TypeScript without emitting files |
 | `npm run test:frontend` | Value/tolerance, numbering, state, migration, exports, and balloon geometry |
-| `npm run test:backend` | Fast Python parsing, conversion, clustering, and balloon-builder regressions |
+| `npm run test:backend` | Fast Python parsing, conversion, clustering, GD&T recognition, and balloon-builder regressions |
 | `npm run test:ocr` | OpenCV region refinement and synthetic PaddleOCR integration; may load models |
 | `npm run verify` | Lint, typecheck, frontend tests, and fast Python tests |
 | `npm run build` | Production Next.js build; run before a release |
+
+The GD&T accuracy benchmark is separate from both suites because it is slow
+and, with `--ocr`, loads models. It is a measurement tool, not a pass/fail
+gate:
+
+```bash
+cd backend
+PYTHONPATH=. .venv/bin/python scripts/run_gdt_eval.py --ocr --save
+```
+
+Compare its per-class output against
+`backend/benchmarks/results/gdt_baseline.json` after any change to detection,
+templates or thresholds. An aggregate that holds steady while a rare class
+collapses is exactly what that report exists to catch. See
+[GDT_DATASET.md](GDT_DATASET.md) for what the numbers mean.
 
 `scripts/run-python-tests.mjs` selects
 `backend\.venv\Scripts\python.exe` on Windows and

@@ -33,6 +33,7 @@ from checksheet_routes import router as checksheet_router
 from checksheet_storage import initialize_checksheet_storage
 from config_env import get_cors_origins, load_env_files
 from debug_dump import dump_status
+from gdt_routes import router as gdt_router
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -52,6 +53,7 @@ app = FastAPI(
     version="0.2.0",
 )
 app.include_router(checksheet_router)
+app.include_router(gdt_router)
 
 # PaddleOCR is expensive and the local service normally serves one operator.
 # A single worker prevents concurrent scans from competing for the same model
@@ -215,6 +217,14 @@ async def recognize_region(
     ),
     x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
     x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+    gdt: bool = Query(
+        False,
+        description=(
+            "Also run GD&T symbol recognition over this region and return it "
+            "under a 'gdt' key. Off by default so the existing response and "
+            "the existing cost are unchanged."
+        ),
+    ),
 ) -> dict[str, Any]:
     """PaddleOCR primary; TrOCR when confidence < 95%."""
     raw = await file.read()
@@ -231,10 +241,35 @@ async def recognize_region(
     )
     dim_type = result.get("type") or classify_dimension(result["text"]).value
 
-    return {
+    response: dict[str, Any] = {
         **result,
         "type": dim_type if isinstance(dim_type, str) else dim_type.value,
     }
+
+    # Additive: present only when asked for. A failure here degrades this one
+    # key to an error record and leaves the OCR result intact, because an
+    # operator mid-inspection needs the value they drew a box around even when
+    # symbol recognition cannot run.
+    if gdt:
+        try:
+            import gdt_pipeline
+            from gdt_routes import _ocr_hook
+
+            page_result = await run_in_threadpool(
+                gdt_pipeline.analyze_page,
+                image,
+                ocr_fn=_ocr_hook(),
+                source="ocr/recognize",
+            )
+            response["gdt"] = page_result.to_dict()
+        except Exception as exc:  # noqa: BLE001
+            response["gdt"] = {
+                "error": f"{type(exc).__name__}: {exc}",
+                "frames": [],
+                "symbols": [],
+            }
+
+    return response
 
 
 @app.post("/ocr/segment")

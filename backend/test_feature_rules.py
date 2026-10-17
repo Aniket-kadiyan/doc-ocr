@@ -18,12 +18,30 @@ from feature_classifier import classify_feature
 
 OUT_OF_SCOPE_SECTIONS = {
     rules.FILLET,
-    rules.COUNTERBORE,
-    rules.DEPTH,
-    rules.GDT,
     rules.QUANTITY_PREFIX,
     rules.REFERENCE,
 }
+
+# Sections 12 and 15 used to be in the set above. They were switched on
+# because a drawing does not spell "COUNTERBORE" or "DEEP" — it prints ⌴ and
+# ↧ — so leaving them off dropped the depth from every hole callout on a
+# sheet that dimensions its holes the ISO way ("Ø2.50 ↧13").
+RE_ENABLED_SECTIONS = {rules.COUNTERBORE, rules.DEPTH}
+
+# Section 16 (GD&T) used to be in the set above. It was switched on after the
+# reason for switching it off was established by measurement rather than
+# assumed: the old rule matched any term from GDT_KEYWORDS anywhere in a
+# string, and over 170 OCR strings from four real drawings that produced no
+# true positives and one false positive — a 400-character accuracy note
+# mentioning SQUARENESS would have been published as a perpendicularity
+# control.
+#
+# The vocabulary was never the problem; the guards were. `gdt_text` now
+# requires the shape of a callout — short text, a tolerance value, no
+# measurement-specification wording — and on the same corpus claims nothing,
+# while recognising spelled-out controls the graphical recognizer cannot see
+# because they have no glyph to match. test_gdt_text.py holds both halves of
+# that down.
 
 
 # --- the registry itself ------------------------------------------------------
@@ -53,7 +71,8 @@ def test_overall_dimensions_is_off_for_a_different_reason():
 def test_the_working_sections_are_on():
     for section in (
         rules.LINEAR, rules.DIAMETER, rules.RADIUS, rules.CHAMFER, rules.ANGLE,
-        rules.TAPER, rules.THREAD, rules.THRU, rules.COUNTERSINK, rules.SPOTFACE,
+        rules.TAPER, rules.THREAD, rules.THRU, rules.COUNTERBORE,
+        rules.COUNTERSINK, rules.SPOTFACE, rules.DEPTH,
         rules.DATUM, rules.SURFACE_FINISH, rules.WELD, rules.MATERIAL,
         rules.HEAT_TREATMENT, rules.COATING, rules.DEBURRING, rules.BASIC,
         rules.GENERAL_NOTES,
@@ -69,22 +88,25 @@ def test_describe_lists_every_section():
 
 # --- hole keywords follow their sections -------------------------------------
 
-def test_disabled_hole_sections_drop_their_keywords():
+def test_enabled_hole_sections_keep_their_keywords():
     active = rules.active_hole_modifiers()
-    for word in ("CBORE", "COUNTERBORE", "C'BORE", "DEEP", "DP", "DEPTH"):
-        assert word not in active, word
-
-
-def test_enabled_hole_sections_keep_theirs():
-    active = rules.active_hole_modifiers()
-    for word in ("THRU", "THROUGH", "CSK", "COUNTERSINK", "SF", "SPOTFACE"):
+    for word in (
+        "THRU", "THROUGH", "CSK", "COUNTERSINK", "SF", "SPOTFACE",
+        "CBORE", "COUNTERBORE", "C'BORE", "DEEP", "DP", "DEPTH",
+    ):
         assert word in active, word
+
+
+def test_re_enabled_sections_record_why():
+    for section in RE_ENABLED_SECTIONS:
+        assert rules.is_enabled(section)
+        assert rules.rule(section).reason == rules.REQUESTED
 
 
 def test_subtypes_follow_the_same_rule():
     names = [name for _, name in rules.active_hole_subtypes()]
-    assert "Counterbore" not in names
-    assert "Blind Hole" not in names
+    assert "Counterbore" in names
+    assert "Blind Hole" in names
     assert "Through Hole" in names and "Countersink" in names
 
 
@@ -93,15 +115,41 @@ def test_subtypes_follow_the_same_rule():
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),   # 12 Counterbore, off
-        ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),   # 15 Depth, off
-        ("⏥ 0.05 A", fd.CAT_LINEAR),          # 16 GD&T, off
-        ("Position Ø0.1 A B", fd.CAT_DIAMETER),
         ("25 REF", fd.CAT_LINEAR),            # 25 Reference, off
         ("(25)", fd.CAT_LINEAR),
     ],
 )
 def test_out_of_scope_sections_do_not_claim_text(text, expected):
+    assert classify_feature(text).category == expected
+
+
+@pytest.mark.parametrize(
+    "text,subtype",
+    [
+        ("⏥ 0.05 A", "Flatness"),
+        ("Position Ø0.1 A B", "Position"),
+        ("FLATNESS 0.05", "Flatness"),
+    ],
+)
+def test_the_guarded_gdt_section_claims_real_callouts(text, subtype):
+    """Section 16 is on, and these are what it is on *for*."""
+    feature = classify_feature(text)
+    assert feature.category == fd.CAT_GDT
+    assert feature.subtype == subtype
+    assert feature.gdt_text is not None, "the evidence must travel with it"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("ROUNDNESS(2PT./180)", fd.CAT_LINEAR),
+        ("SQUARENESS WITH FACE 50µm MAX.", fd.CAT_NOTE),
+        ("TAPER 50µm MAX.", fd.CAT_TAPER),
+        ("POSITION", fd.CAT_NOTE),
+    ],
+)
+def test_the_guarded_gdt_section_leaves_ordinary_text_alone(text, expected):
+    """The false positives that kept section 16 switched off."""
     assert classify_feature(text).category == expected
 
 

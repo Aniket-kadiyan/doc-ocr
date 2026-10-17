@@ -5,6 +5,7 @@ PaddleOCR pipeline: best digit read + balanced symbol compose.
 from __future__ import annotations
 from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
+import logging
 import re
 
 import numpy as np
@@ -52,12 +53,14 @@ from symbol_vision import (
     symbols_to_dict,
 )
 
+logger = logging.getLogger(__name__)
+
 # Identifies the OCR package the running backend actually loaded, surfaced on
 # /health. The backend imports these modules once at startup, so editing them
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "m2-p05-quarter-turn-gap-slant-margin-tables"
+OCR_CHANGESET_ID = "m2-p07-hole-callouts-captions-table-masks"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -3310,7 +3313,7 @@ class OcrPipeline:
             return inside(center(r), other) or inside(center(other), r)
 
         def symbol_count(t: str) -> int:
-            return sum(t.count(ch) for ch in "Ø°±×/")
+            return sum(t.count(ch) for ch in "Ø°±×/↧⌴⌵")
 
         def junk_letters(t: str) -> int:
             # Letters that belong on a dimension: the H of a fit class, R for a
@@ -3802,6 +3805,35 @@ class OcrPipeline:
             regions,
             key=lambda region: region["bbox"]["width"] * region["bbox"]["height"],
         )
+
+    def _frame_regions(self, image: Image.Image) -> list[dict[str, Any]]:
+        """Every feature control frame on the page, as scan regions.
+
+        Fails soft: the frame pass is additive to a scan that already works
+        without it, and an operator mid-inspection needs the values the scan
+        found even when symbol recognition cannot run.
+        """
+        try:
+            import gdt_pipeline
+            from gdt_config import get_config
+
+            if not get_config().enabled:
+                return []
+
+            def ocr_fn(crop: Image.Image) -> tuple[str, float]:
+                try:
+                    result = self.recognize(crop)
+                    return (
+                        result.get("text") or "",
+                        float(result.get("confidence") or 0.0),
+                    )
+                except Exception:  # noqa: BLE001 - one unreadable cell
+                    return ("", 0.0)
+
+            return gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn)
+        except Exception:  # noqa: BLE001
+            logger.exception("feature control frame pass failed; scan continues")
+            return []
 
     def _notes_regions(
         self,
@@ -5570,7 +5602,17 @@ class OcrPipeline:
                 previous_result,
                 authoritative_attempts,
             )
-            accurate_text = str(accurate_result.get("text") or "")
+            # Normalise exactly as the preliminary read is normalised above.
+            # Without this the authoritative text was published raw, so a
+            # value that only the re-read got right kept whatever glyph the
+            # recogniser happened to emit — a depth callout reached the sheet
+            # as "M3x0.5-6H \u2193 13" while the identical preliminary read
+            # would have been published as "M3x0.5-6H \u21a7 13".
+            accurate_text = normalize_page_value_text(
+                strip_foreign_glyphs(str(accurate_result.get("text") or ""))
+            )
+            accurate_result = dict(accurate_result)
+            accurate_result["text"] = accurate_text
             record["result"] = accurate_result
             record["text"] = accurate_text
             record["recognized"] = bool(accurate_text)
@@ -5870,6 +5912,34 @@ class OcrPipeline:
             detected_count -= before_notes - len(regions)
             regions.append(notes_region)
             detected_count += 1
+
+        # Feature control frames. The detector finds text, so a frame reached
+        # this point as its tolerance compartment alone — "0.3", ballooned as
+        # a linear dimension — plus a review box over the rest of it that no
+        # OCR could read. The frames are found from their rules and read
+        # structurally; everything the scan produced inside one gives way to
+        # it. Same accounting as the notes blocks above.
+        report(
+            stage="gdt",
+            message="Reading feature control frames",
+            percent=99,
+            completed=detected_count,
+            total=detected_count,
+            candidate_count=len(regions),
+            operation_label="Feature control frames",
+        )
+        frame_regions = [
+            region
+            for region in self._frame_regions(image)
+            if not overlaps_existing_value(region["bbox"], existing_value_boxes)
+        ]
+        if frame_regions:
+            from gdt_pipeline import absorb_frames
+
+            regions, review_candidates, delta = absorb_frames(
+                regions, review_candidates, frame_regions
+            )
+            detected_count += delta
 
         # Two detection passes can resolve the same callout and both survive to
         # publication, which puts a second balloon exactly on top of the first:

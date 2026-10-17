@@ -5,10 +5,14 @@ from __future__ import annotations
 import re
 
 from angle_utils import normalize_primes
+from page_value_filters import canonical_hole_glyphs
 
 
 def count_engineering_symbols(text: str) -> int:
-    return len(re.findall(r"[±°Ø'\"]", text))
+    # ↧ ⌴ ⌵ are the depth, counterbore and countersink glyphs: a read that
+    # keeps one is a better read of a hole callout, for the same reason Ø
+    # counts here.
+    return len(re.findall(r"[±°Ø∅⌀↧⌴⌵'\"]", text))
 
 
 def engineering_quality_score(text: str, confidence: float) -> float:
@@ -25,7 +29,7 @@ def fix_engineering_symbols_light(text: str) -> str:
     if not text:
         return ""
 
-    t = normalize_primes(text.strip())
+    t = canonical_hole_glyphs(normalize_primes(text.strip()))
     t = t.replace("+/−", "±").replace("+/-", "±").replace("＋", "+")
     # Leading diameter / radius markers only (not φ inside numbers)
     t = re.sub(r"^[\s]*(?:⊕|∅|⌀|[φΦø])", "Ø", t)

@@ -144,6 +144,100 @@ export. The sheet is re-rendered several times finer than an auto-balloon
 scan for this, because point names are printed at note size — which is also
 why the pass runs after the scan rather than sharing its render.
 
+## GD&T symbols
+
+**GD&T Symbols** in the main toolbar finds feature control frames and GD&T
+symbols on the current page, names each one, and reads a frame's compartments
+into structured fields — characteristic, tolerance, zone shape, material
+condition, and datum references in precedence order — rather than one flat
+string.
+
+Detections are drawn over the drawing and listed in the sidebar, leading with
+the ones that need review. Selecting one shows its engineering meaning,
+confidence, the text it reads with, and where it sits. Green means the
+recognizer committed to the reading; amber means it did not, and the panel
+offers the alternatives it could not separate so a correction is one click.
+
+Some pairs *are* the same mark — counterbore and spotface, profile-of-a-line
+and arc length, `Ø` and `SØ` — and those always come back amber with both
+candidates named. An uncertain glyph is never promoted to a definitive
+symbol, and a tolerance that could not be read says so instead of appearing
+absent, because absent means something specific.
+
+These are not ballooned values. They carry no tolerance of their own, no
+inspection method and no balloon number, and they are not saved into a project
+or an export. The page is re-rendered finer than the displayed canvas before
+reading, because GD&T modifiers are printed at note size.
+
+Corrections are recorded locally and can be read back through the API; see
+[docs/GDT_RECOGNITION.md](docs/GDT_RECOGNITION.md) for the pipeline,
+configuration and API, and [docs/GDT_DATASET.md](docs/GDT_DATASET.md) for what
+the accuracy numbers do and do not mean.
+
+## Hole callouts
+
+A hole is not dimensioned like a length. It is written as a feature term and
+the machining instructions that apply to it, in the glyph notation of ISO 129
+and ASME Y14.5 — `↧` depth, `⌴` counterbore, `⌵` countersink:
+
+| On the drawing | What it says |
+| --- | --- |
+| `Ø2.50 ↧13` | 2.5 diameter, 13 deep |
+| `M3x0.5 - 6H ↧3` | tapped M3, thread 3 deep |
+| `2 x Ø2.50 THRU ALL` | two holes, through every wall |
+| `Ø4 H7 ↧10` | reamed to an H7 fit, 10 deep |
+| `Ø6.50 ⌴Ø11 ↧4.40` | 6.5 drill, counterbored Ø11 by 4.4 deep |
+| `Ø3.50 ⌵Ø7 X 90°` | 3.5 drill, countersunk to Ø7 at 90° |
+| `↧0.90` | a depth on its own, the leader naming the feature |
+
+All of these balloon as one value and are labelled **Hole** with a subtype
+(Blind Hole, Counterbore, Countersink, Through Hole), or **Thread** when the
+feature term is a thread.
+
+PaddleOCR has no `↧` in its charset and returns `↓` for it, or `T` at small
+text sizes; both are folded onto the canonical glyph before anything else
+sees the text. The `T` repair only fires where it turns a string that parses
+as nothing into a whole hole callout, so a fit class set tight against its
+size (`Ø50T7`) and a part number (`ISD-600T500`) are left alone.
+
+Where the recogniser drops the glyph outright, the two numbers either side
+fuse — `Ø2.50 ↧13` becomes `Ø2.5013`. A read that keeps the glyph now
+outscores the fused read of itself, so voting prefers it; a read confident
+enough to win outright before voting can still publish the fused value.
+
+## Table masks
+
+A ruled grid is whitened out before the detector runs, so the scan does not
+spend its budget reading a revision table. Because the masking happens before
+detection, anything under a mask is not merely rejected — it is never seen,
+and reaches neither a balloon nor the review queue.
+
+That makes a wrong mask expensive, so a group needs **three** adjacent cells
+before it counts as a table. Two was enough until it was measured: a drawing
+that frames its dimension text — the usual style for a basic dimension — puts
+two framed numbers beside each other all over its views, and every such pair
+was masked. On one sheet that deleted a 45×103px "59.8" the detector reads
+perfectly well.
+
+If values are missing from a whole area of a sheet rather than here and
+there, check the mask list: `analyze_page_layout(image).table_masks`, and the
+scan's own `candidate_outcomes` will have no entry at all for anything
+underneath one.
+
+## View captions
+
+`DETAIL C`, `SECTION A-A` and `SCALE 5:1` are never ballooned, and neither are
+the pieces they break into when the detector splits them (`C`, `A-A`, `(3x)`,
+`1:1`). The caption is matched by proximity as well as by its own text,
+because a split caption leaves a bare letter nobody can match on wording.
+
+Proximity is only allowed to take something short enough to be a piece of the
+caption. A caption is a heading over a whole region, not a field label beside
+its value, and the proximity radius is sized for the latter — about 240px at
+250dpi. Without that guard every dimension inside a detail view was deleted
+by the caption above it, and deleted *silently*: this is a hard exclusion, so
+those values got no balloon and no review box either.
+
 ## Notes paragraphs
 
 A drawing's NOTES paragraph is published as one **General Note** region, not
@@ -164,6 +258,8 @@ per language, gets one region per block.
   rotated variants.
 - If OCR misses a symbol, insert it with the buttons in the Value editor.
 - OCR is PaddleOCR-only. The former Tesseract worker is not used.
+- OCR reads text, not glyphs: a `⌖` comes back as `+`. GD&T symbols are
+  recognized by shape in a separate pass — see **GD&T symbols** above.
 
 ## Balloon appearance
 
@@ -204,4 +300,4 @@ acceptance checklist, and explicitly deferred follow-ups.
 | `public/balloon-style.json` | Single deployed balloon-style data file |
 | `tools/balloon_builder/` | Developer-only artwork conversion and validation utility |
 | `scripts/` | Cross-platform OCR and test launchers |
-| `docs/` | Testing and balloon-style operating documentation |
+| `docs/` | Testing, balloon-style, and GD&T operating documentation |

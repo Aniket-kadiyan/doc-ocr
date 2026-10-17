@@ -24,6 +24,8 @@ interface ToolbarProps {
   onScanWholePage: () => void;
   onFindReferencePoints: () => void;
   findingReferencePoints: boolean;
+  onFindGdtSymbols: () => void;
+  findingGdtSymbols: boolean;
   onToggleDrawValue: () => void;
   onToggleBalloons: () => void;
   onZoomIn: () => void;
@@ -51,6 +53,8 @@ export function Toolbar({
   onScanWholePage,
   onFindReferencePoints,
   findingReferencePoints,
+  onFindGdtSymbols,
+  findingGdtSymbols,
   onToggleDrawValue,
   onToggleBalloons,
   onZoomIn,
@@ -152,6 +156,20 @@ export function Toolbar({
         } disabled:opacity-50`}
       >
         {findingReferencePoints ? "Reading table…" : "Reference Points"}
+      </button>
+
+      <button
+        type="button"
+        onClick={onFindGdtSymbols}
+        disabled={isProcessing || !canSaveProject}
+        title="Find feature control frames and GD&T symbols on this page, and show what each one means. Detections are shown for review — they are not ballooned and not exported."
+        className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+          findingGdtSymbols
+            ? "bg-indigo-600 text-white"
+            : "border border-slate-200 text-slate-700 hover:bg-slate-50"
+        } disabled:opacity-50`}
+      >
+        {findingGdtSymbols ? "Reading symbols…" : "GD&T Symbols"}
       </button>
 
       <button

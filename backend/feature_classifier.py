@@ -48,9 +48,12 @@ class Feature:
     symbols: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     quantity: int | None = None
+    #: Set when the GD&T text rule fired, carrying the evidence it acted on.
+    #: Additive: consumers that do not know about it are unaffected.
+    gdt_text: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "category": self.category,
             "subtype": self.subtype,
             "label": self.label,
@@ -58,6 +61,9 @@ class Feature:
             "keywords": self.keywords,
             "quantity": self.quantity,
         }
+        if self.gdt_text is not None:
+            out["gdt_text"] = self.gdt_text
+        return out
 
 
 def _kw_match(upper: str, kw: str) -> bool:
@@ -87,22 +93,30 @@ def _has_datum_reference(upper: str) -> bool:
     return bool(re.fullmatch(r"[\[\(]?[A-CE-Z][\]\)]?", upper.strip()))
 
 
-def _detect_gdt(text: str, upper: str, symbols: set[str]) -> tuple[str, str | None] | None:
-    """Feature control frames. Off by default — spec section 16 is out of scope."""
+def _detect_gdt(text: str, upper: str, symbols: set[str]):
+    """Textual GD&T recognition — spec section 16.
+
+    Delegates to :mod:`gdt_text`, which requires the *shape* of a callout and
+    not merely a GD&T word. The rule used to live here and matched any term
+    from ``GDT_KEYWORDS`` anywhere in a string; measured over 170 OCR strings
+    from four real drawings that produced no true positives and one false
+    positive — a 400-character accuracy note mentioning SQUARENESS would have
+    been published as a perpendicularity control. That is why the section was
+    switched off, and why it is the guards rather than the vocabulary that
+    were missing.
+
+    Returns ``(category, subtype, match)`` or ``None``.
+    """
     if not rules.is_enabled(rules.GDT):
         return None
-    """Return (category, subtype) if this is a Feature Control Frame / GD&T."""
-    for glyph, name in fd.GDT_SYMBOLS.items():
-        if glyph in text:
-            return fd.CAT_GDT, name
-    # A pipe-delimited frame like "| Ø0.1 | A | B |" is a strong FCF signal.
-    pipe_frame = text.count("|") >= 2 and re.search(r"\d", text)
-    for kw, name in fd.GDT_KEYWORDS.items():
-        if _kw_match(upper, kw):
-            return fd.CAT_GDT, name
-    if pipe_frame and any(g in text for g in fd.DIAMETER_SYMBOLS):
-        return fd.CAT_GDT, None
-    return None
+
+    import gdt_text
+
+    match, _ = gdt_text.recognize(text)
+    if match is None:
+        return None
+    subtype = match.name if match.name != "Feature Control Frame" else None
+    return fd.CAT_GDT, subtype, match
 
 
 def _detect_thread(upper: str) -> str | None:
@@ -116,6 +130,29 @@ def _hole_subtype(kws: list[str]) -> str | None:
         if present & keyset:
             return name
     return None
+
+
+#: The glyph notation a drawing uses for the same modifiers the keyword table
+#: spells out. A sheet that writes "Ø2.50 ↧13" never prints the word DEEP, so
+#: keyword matching alone saw no hole at all and the callout fell through to
+#: Diameter — the depth, the counterbore and the countersink were simply not
+#: reported. Each glyph stands in for its own keyword, so the section switches
+#: in feature_rules keep working unchanged.
+_HOLE_GLYPH_KEYWORDS: tuple[tuple[str, str], ...] = tuple(
+    [(g, "DEPTH") for g in fd.DEPTH_SYMBOL]
+    + [(g, "CBORE") for g in fd.COUNTERBORE_SYMBOL]
+    + [(g, "CSK") for g in fd.COUNTERSINK_SYMBOL]
+)
+
+
+def _hole_glyph_keywords(raw: str, active: frozenset[str]) -> list[str]:
+    """Keywords implied by the hole glyphs present in the text."""
+
+    found: list[str] = []
+    for glyph, keyword in _HOLE_GLYPH_KEYWORDS:
+        if glyph in raw and keyword in active and keyword not in found:
+            found.append(keyword)
+    return found
 
 
 def _quantity(text: str) -> int | None:
@@ -226,8 +263,12 @@ def classify_feature(
     # ── Priority 1: Feature Control Frame / GD&T ────────────────────────────
     gdt = _detect_gdt(raw, upper, set(detected_symbols))
     if gdt is not None:
-        feat.category, feat.subtype = gdt
+        feat.category, feat.subtype, match = gdt
         feat.symbols = detected_symbols
+        # Source text, confidence and the evidence that carried the decision
+        # travel with the result, so a GD&T label can be argued with rather
+        # than taken on trust.
+        feat.gdt_text = match.to_dict()
         feat.label = _label_for(feat)
         return feat
 
@@ -276,7 +317,13 @@ def classify_feature(
         return feat
 
     # ── Priority 6: Hole Feature (modifiers) ────────────────────────────────
-    hole_kws = _found_keywords(upper, rules.active_hole_modifiers())
+    active_modifiers = rules.active_hole_modifiers()
+    hole_kws = _found_keywords(upper, active_modifiers)
+    hole_kws += [
+        keyword
+        for keyword in _hole_glyph_keywords(raw, active_modifiers)
+        if keyword not in hole_kws
+    ]
     if hole_kws:
         feat.category = fd.CAT_HOLE
         feat.keywords = hole_kws
