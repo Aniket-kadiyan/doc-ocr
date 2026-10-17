@@ -19,6 +19,11 @@ from typing import Iterable, Literal, Sequence
 import numpy as np
 from PIL import Image
 
+try:
+    import cv2
+except ImportError:  # pragma: no cover - the populated-rows test then passes
+    cv2 = None  # type: ignore
+
 
 SCAN_DEBUG_OVERLAY_ENABLED = True
 
@@ -495,6 +500,29 @@ def _cells_are_adjacent(
     return vertical_edge or horizontal_edge
 
 
+#: What makes a group of adjacent cells a table rather than a part view.
+#:
+#: A machined block in orthographic projection IS a grid of rectangles — the
+#: outline, its pockets and its steps are all cells bounded by rules — and
+#: the grid detector cannot tell it from a table by geometry alone. On one
+#: drawing that produced 27 masks on a sheet with no tables, and because a
+#: mask is applied by whitening the page BEFORE detection, every dimension
+#: inside those views (16 of the 17 the author pointed at) was never seen.
+#:
+#: What separates them was measured over six sheets: a table's rows are text
+#: height and nearly every cell holds text; a part view's cells are large
+#: and mostly empty. Tables measured at a median cell height of 0.010–0.060
+#: of the page, with 57–100% of cells populated; part views at 0.068–0.150
+#: with 0–44% populated (one at 67%, caught by its height). The thresholds sit
+#: between the two populations.
+TABLE_CELL_MAX_HEIGHT_RATIO = 0.065
+TABLE_CELL_MIN_OCCUPANCY = 0.5
+TABLE_CELL_MIN_TEXT_PER_CELL = 3.0
+#: Size band for a text-like ink component inside a cell, as a fraction of
+#: the page height: a glyph on a 250dpi render is 30–40px of ~2900.
+TEXT_COMPONENT_MIN_HEIGHT_RATIO = 0.0025
+TEXT_COMPONENT_MAX_HEIGHT_RATIO = 0.025
+
 #: How many adjacent cells a group needs before it is called a table.
 #:
 #: Two was not enough. A drawing that frames its dimension text — a common
@@ -511,13 +539,13 @@ def _cells_are_adjacent(
 TABLE_MASK_MIN_CELLS = 3
 
 
-def _retain_repeated_cell_groups(
+def _group_repeated_cells(
     cells: Sequence[LayoutBox],
     *,
     tolerance: int,
     minimum_cells: int = TABLE_MASK_MIN_CELLS,
-) -> list[LayoutBox]:
-    """Discard isolated drawing rectangles while retaining repeated grids."""
+) -> list[list[LayoutBox]]:
+    """Adjacent cells grouped, keeping only groups large enough to be a grid."""
 
     parent = list(range(len(cells)))
 
@@ -542,11 +570,90 @@ def _retain_repeated_cell_groups(
     for index in range(len(cells)):
         root = find(index)
         counts[root] = counts.get(root, 0) + 1
+    groups: dict[int, list[LayoutBox]] = {}
+    for index, cell in enumerate(cells):
+        groups.setdefault(find(index), []).append(cell)
+    return [group for group in groups.values() if len(group) >= minimum_cells]
+
+
+def _retain_repeated_cell_groups(
+    cells: Sequence[LayoutBox],
+    *,
+    tolerance: int,
+    minimum_cells: int = TABLE_MASK_MIN_CELLS,
+) -> list[LayoutBox]:
+    """Discard isolated drawing rectangles while retaining repeated grids."""
+
     return [
         cell
-        for index, cell in enumerate(cells)
-        if counts.get(find(index), 0) >= minimum_cells
+        for group in _group_repeated_cells(
+            cells,
+            tolerance=tolerance,
+            minimum_cells=minimum_cells,
+        )
+        for cell in group
     ]
+
+
+def _text_component_count(
+    ink: np.ndarray,
+    *,
+    page_height: int,
+) -> int:
+    """How many glyph-sized ink components a cell's interior holds."""
+
+    if cv2 is None or ink.size == 0 or not ink.any():
+        return 0
+    _count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        ink.astype(np.uint8),
+        connectivity=8,
+    )
+    if stats.shape[0] <= 1:
+        return 0
+    heights = stats[1:, cv2.CC_STAT_HEIGHT]
+    widths = stats[1:, cv2.CC_STAT_WIDTH]
+    min_height = max(5, int(page_height * TEXT_COMPONENT_MIN_HEIGHT_RATIO))
+    max_height = max(min_height + 1, int(page_height * TEXT_COMPONENT_MAX_HEIGHT_RATIO))
+    glyph_like = (
+        (heights >= min_height)
+        & (heights <= max_height)
+        & (widths >= 2)
+        & (widths <= 6 * heights)
+        & (heights <= 8 * widths)
+    )
+    return int(np.count_nonzero(glyph_like))
+
+
+def _group_looks_like_a_table(
+    group: Sequence[LayoutBox],
+    ink: np.ndarray,
+    *,
+    page_height: int,
+    tolerance: int,
+) -> bool:
+    """Text-height rows, nearly all of them holding text. See the constants."""
+
+    heights = np.array([cell.height for cell in group], dtype=float)
+    if float(np.median(heights)) > page_height * TABLE_CELL_MAX_HEIGHT_RATIO:
+        return False
+    if cv2 is None:
+        return True
+    inset = max(2, tolerance)
+    populated = 0
+    components = 0
+    for cell in group:
+        interior = ink[
+            cell.y + inset : max(cell.y + inset, cell.y1 - inset),
+            cell.x + inset : max(cell.x + inset, cell.x1 - inset),
+        ]
+        count = _text_component_count(interior, page_height=page_height)
+        components += count
+        populated += count >= 2
+    occupancy = populated / len(group)
+    return (
+        occupancy > TABLE_CELL_MIN_OCCUPANCY
+        or components / len(group) >= TABLE_CELL_MIN_TEXT_PER_CELL
+    )
 
 
 def _merge_rectangular_cells(
@@ -638,10 +745,17 @@ def _grid_masks(
         page_height=page_height,
         tolerance=tolerance,
     )
-    repeated_cells = _retain_repeated_cell_groups(
-        cells,
-        tolerance=tolerance * 2,
-    )
+    repeated_cells = [
+        cell
+        for group in _group_repeated_cells(cells, tolerance=tolerance * 2)
+        if _group_looks_like_a_table(
+            group,
+            ink,
+            page_height=page_height,
+            tolerance=tolerance,
+        )
+        for cell in group
+    ]
     return _discard_mostly_contained_boxes(
         _merge_rectangular_cells(repeated_cells, tolerance=tolerance * 2)
     )

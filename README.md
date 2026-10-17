@@ -212,17 +212,28 @@ spend its budget reading a revision table. Because the masking happens before
 detection, anything under a mask is not merely rejected — it is never seen,
 and reaches neither a balloon nor the review queue.
 
-That makes a wrong mask expensive, so a group needs **three** adjacent cells
-before it counts as a table. Two was enough until it was measured: a drawing
-that frames its dimension text — the usual style for a basic dimension — puts
-two framed numbers beside each other all over its views, and every such pair
-was masked. On one sheet that deleted a 45×103px "59.8" the detector reads
-perfectly well.
+That makes a wrong mask the most expensive mistake in the page route, and the
+easiest to make: a machined block in orthographic projection *is* a grid of
+rectangles — outline, pockets, steps — and by geometry alone it is a table.
+One drawing produced 27 masks on a sheet with no tables, each tracing a view,
+and 16 of the 17 dimensions its author pointed at as "clearly printed but not
+detected" sat inside one.
+
+So a group of adjacent cells is a table only if it looks like one inside:
+
+- its rows are **text height** — median cell height at most 6.5% of the page;
+- its cells are **populated** — more than half hold at least two glyph-sized
+  ink components, or they average three or more.
+
+Measured over six real sheets, every title block, tolerance table, parts list
+and margin legend passes both, and every part view fails at least one. A
+sparse revision table with mostly empty rows is no longer masked; its few
+labels are read and then rejected by the revision and date rules instead.
 
 If values are missing from a whole area of a sheet rather than here and
-there, check the mask list: `analyze_page_layout(image).table_masks`, and the
-scan's own `candidate_outcomes` will have no entry at all for anything
-underneath one.
+there, check the mask list: `analyze_page_layout(image).table_masks`. The
+scan's `candidate_outcomes` will have no entry at all for anything underneath
+one.
 
 ## View captions
 
