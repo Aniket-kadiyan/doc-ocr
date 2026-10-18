@@ -479,11 +479,45 @@ def needs_expanded_filter_context(text: str, bbox: BBox) -> bool:
     )
 
 
+# Nearby DETAIL/SECTION/SCALE text describes a view, not every value inside
+# that view.  Only shapes that can themselves be pieces of a split caption may
+# inherit those exclusions: view letters (C, A-A), multiplicities ((3x),
+# B(3x)), and scale ratios (1:1).  Explicit forms avoid treating short real
+# values such as 25, R3, C3, or 0.5 as caption fragments.
+_CAPTION_PIECE = re.compile(
+    r"^(?:[A-Z](?:-[A-Z])?|[A-Z]?\(?\d{1,2}[X×]\)?)$",
+    re.IGNORECASE,
+)
+_CAPTION_RATIO = re.compile(r"(?<!\d)\d{1,3}\s*:\s*\d{1,3}(?!\d)")
+
+
+def _is_caption_fragment(text: str) -> bool:
+    """Whether one OCR object can be part of a split view caption."""
+
+    compact = "".join(str(text or "").split())
+    return bool(
+        compact
+        and (
+            _CAPTION_PIECE.fullmatch(compact)
+            or _CAPTION_RATIO.search(compact)
+        )
+    )
+
+
 def _matches_text_or_nearby_label(
     candidate: PageValueCandidate,
     page_candidates: Sequence[PageValueCandidate],
     pattern: re.Pattern[str],
+    *,
+    nearby_only_caption_fragments: bool = False,
 ) -> bool:
+    # A keyword read from the candidate itself is direct evidence. Rebuilt
+    # context and separate nearby boxes are proximity evidence and, for view
+    # captions, must pass the caption-fragment guard below.
+    if pattern.search(_canonical_keyword_text(candidate.text)):
+        return True
+    if nearby_only_caption_fragments and not _is_caption_fragment(candidate.text):
+        return False
     if pattern.search(_candidate_keyword_text(candidate)):
         return True
     if not _is_context_exclusion_prone(candidate.text):
@@ -565,6 +599,7 @@ def _detail_view_section(
         candidate,
         page_candidates,
         DETAIL_VIEW_SECTION,
+        nearby_only_caption_fragments=True,
     )
 
 
@@ -576,6 +611,7 @@ def _scale_information(
         candidate,
         page_candidates,
         SCALE_LABEL,
+        nearby_only_caption_fragments=True,
     )
 
 

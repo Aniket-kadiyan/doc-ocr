@@ -1,68 +1,53 @@
-QTracX selective integration — SI-2.2
-======================================
+QTracX selective integration SI-2.3
+==================================
 
-Base branch
------------
-Apply this package to the selective-integration branch after commit:
+Purpose
+-------
+Prevent nearby DETAIL, SECTION, and SCALE captions from hiding drawing
+dimensions. Direct caption text and genuine split-caption fragments remain
+excluded. Valid values continue to the balloon workflow; malformed numeric
+values continue to Reviews through the existing invalid-value disposition.
 
-7f41b31 feat(ocr): support structured hole callouts and ISO fits
-
-No commit or push was made by Codex.
-
-What this changes
+Expected baseline
 -----------------
-- Accepts stacked tolerance bounds read on one line, including:
-  - Ø33 +0.012 0
-  - Ø33 -0.05 -0.10
-  - +0.012 0
-  - +0.05 -0.05
-- Parses the first stacked value as the upper bound and the second as the
-  lower bound instead of treating the first value as a signed nominal.
-- Keeps single-bound tolerances such as +0.1 and -0.5 unchanged.
-- Accepts the tolerance-zone and datum portion of feature-control frames:
-  - Ø0.02A
-  - Ø0.1 A B
-  - Ø0.3 A B C
-  - Ø0.02Ⓜ A B
-- Records these FCF values as a complete GD&T parse with the tolerance zone,
-  optional material-condition glyph, and datum sequence retained separately.
-- Removes an orphan closing parenthesis only when the remaining whole string
-  is a complete engineering value. Balanced reference and dual-unit brackets
-  remain unchanged.
+Branch: selective-integration
+Commit: 3f4bc95730d8b019e3409b667c8a6a74b84f33f6
 
-Safety guards
--------------
-- Two unsigned numbers such as 33 0.5 remain invalid.
-- A datum sequence requires Ø and 1–3 valid uppercase datum letters.
-- Values such as 25 A, 0.5 m, lowercase datum text, and I/O/Q datum letters
-  remain invalid.
-- Mixed text such as ZONE A 25) is not repaired into a value.
+Files in this package
+---------------------
+backend/page_value_filters.py
+backend/test_page_value_filters.py
 
-Apply
+Apply on Windows PowerShell
+---------------------------
+1. Open the doc-ocr repository root in PowerShell.
+2. Confirm you are on selective-integration and have no uncommitted changes:
+
+   git status --short --branch
+
+3. Extract this ZIP over the repository root and allow the two files above to
+   be replaced. From PowerShell, for example:
+
+   Expand-Archive -Path "<download-folder>\QTracX_SI2_3_caption_proximity_safety.zip" `
+     -DestinationPath . -Force
+
+4. Review the exact changes:
+
+   git diff -- backend/page_value_filters.py backend/test_page_value_filters.py
+
+Tests
 -----
-1. Confirm you are on selective-integration and have no uncommitted work:
+Run from doc-ocr\backend:
 
-   git branch --show-current
-   git status --short
-
-2. Extract the ZIP into the doc-ocr repository root and allow it to overwrite
-   the matching backend files.
-
-3. Review the files before testing:
-
-   git status --short
-   git diff --check
-   git diff --stat
-
-Targeted tests (PowerShell, from doc-ocr\backend)
--------------------------------------------------
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
      test_page_value_filters.py `
      test_engineering_value_parser.py `
-     test_engineering_disposition.py
+     test_engineering_disposition.py `
+     test_page_layout.py `
+     test_angle_utils.py
 
-Recommended combined SI regression tests
-----------------------------------------
+Optional wider regression set:
+
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
      test_page_layout.py `
      test_page_value_filters.py `
@@ -74,9 +59,6 @@ Recommended combined SI regression tests
 
 Suggested commit message
 ------------------------
-feat(ocr): parse stacked tolerances and FCF datum values
+fix(ocr): prevent view captions from hiding dimensions
 
-Scope note
-----------
-This is SI-2.2 only. DETAIL/SECTION/SCALE proximity handling remains isolated
-for SI-2.3 so it can be tested without mixing it into value parsing.
+This package does not contain or create a Git commit.
