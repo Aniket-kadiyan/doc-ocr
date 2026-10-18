@@ -21,13 +21,10 @@ def synthetic_drawing() -> Image.Image:
     draw.rectangle((40, 40, 260, 250), outline="black", width=2)
     draw.line((270, 300, 350, 300), fill="black", width=2)
 
-    # A repeated 3x4 grid is unambiguously tabular.
+    # A repeated 3x4 grid with populated, text-height rows is tabular.
     x_values = (458, 518, 578, 638)
-    y_values = (30, 90, 150, 210, 270)
-    for x in x_values:
-        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
-    for y in y_values:
-        draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
+    y_values = (30, 54, 78, 102, 126)
+    _populated_grid(draw, x_values, y_values)
     return image
 
 
@@ -47,16 +44,13 @@ def test_interior_repeated_grid_is_a_page_table_mask() -> None:
     image = Image.new("RGB", (640, 420), "white")
     draw = ImageDraw.Draw(image)
     x_values = (280, 340, 400, 460)
-    y_values = (80, 130, 180, 230, 280)
-    for x in x_values:
-        draw.line((x, y_values[0], x, y_values[-1]), fill="black", width=2)
-    for y in y_values:
-        draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
+    y_values = (80, 104, 128, 152, 176)
+    _populated_grid(draw, x_values, y_values)
 
     masks = detect_table_masks(image)
 
     assert masks
-    assert any(_contains(mask, 370, 180) for mask in masks)
+    assert any(_contains(mask, 370, 130) for mask in masks)
 
 
 def test_adaptive_layout_never_uses_the_complete_page_as_one_panel() -> None:
@@ -111,6 +105,55 @@ def _grid(draw: ImageDraw.ImageDraw, x_values, y_values) -> None:
         draw.line((x_values[0], y, x_values[-1], y), fill="black", width=2)
 
 
+def _populated_grid(draw: ImageDraw.ImageDraw, x_values, y_values) -> None:
+    _grid(draw, x_values, y_values)
+    for left, _right in zip(x_values, x_values[1:]):
+        for top, _bottom in zip(y_values, y_values[1:]):
+            draw.text((left + 8, top + 5), "12", fill="black")
+
+
+def test_two_framed_values_are_not_enough_to_hard_mask_a_region() -> None:
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (260, 360), (100, 150, 200))
+    draw.text((280, 116), "12.5", fill="black")
+    draw.text((280, 166), "8.2", fill="black")
+
+    assert not any(_contains(mask, 310, 150) for mask in detect_table_masks(image))
+
+
+def test_an_empty_grid_is_a_part_view_not_a_table() -> None:
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (280, 340, 400, 460), (80, 130, 180, 230, 280))
+    # One dimension inside the view must remain available to detection.
+    draw.text((300, 100), "21.42", fill="black")
+
+    assert not any(_contains(mask, 370, 180) for mask in detect_table_masks(image))
+
+
+def test_text_height_grid_with_one_dimension_is_not_a_table() -> None:
+    try:
+        import cv2  # noqa: F401 - this assertion exercises component analysis
+    except ImportError:
+        return
+
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    _grid(draw, (280, 340, 400, 460), (80, 104, 128, 152, 176))
+    draw.text((300, 86), "21.42", fill="black")
+
+    assert not any(_contains(mask, 370, 130) for mask in detect_table_masks(image))
+
+
+def test_large_populated_cells_are_a_part_view_not_a_table() -> None:
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    _populated_grid(draw, (100, 300, 500), (60, 200, 340))
+
+    assert not any(_contains(mask, 300, 200) for mask in detect_table_masks(image))
+
+
 def test_a_part_view_crossed_by_extension_lines_is_not_a_table() -> None:
     # GPD 18T: the part outline and the extension lines of "23 -0.1" close
     # into two stacked boxes 180 and 280 px tall on a 2068 px page. Masking
@@ -144,7 +187,11 @@ def test_a_title_block_grid_is_still_a_table() -> None:
     # 47630: the revision table, 4 rows of 41 px cells across 1170 px.
     image = Image.new("RGB", (2924, 2068), "white")
     draw = ImageDraw.Draw(image)
-    _grid(draw, (1568, 1631, 1694, 1774, 2742), (88, 129, 170, 211, 252))
+    _populated_grid(
+        draw,
+        (1568, 1631, 1694, 1774, 2742),
+        (88, 129, 170, 211, 252),
+    )
 
     assert any(_contains(mask, 1660, 190) for mask in detect_table_masks(image))
 
@@ -163,6 +210,9 @@ def _sheet_with_a_margin_legend() -> Image.Image:
         draw.line((left, y, right, y), fill="black", width=2)
     for x in (left, middle, right):
         draw.line((x, top, x, top + rows * row_height), fill="black", width=2)
+    for index in range(rows):
+        draw.text((left + 8, top + index * row_height + 20), "12", fill="black")
+        draw.text((middle + 8, top + index * row_height + 20), "A", fill="black")
 
     # Ordinary drawing geometry in the centre must remain available to OCR.
     draw.rectangle((700, 300, 1500, 900), outline="black", width=2)
