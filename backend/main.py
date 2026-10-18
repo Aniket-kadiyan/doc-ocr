@@ -33,6 +33,7 @@ from checksheet_index import (
 )
 from checksheet_routes import router as checksheet_router
 from checksheet_storage import initialize_checksheet_storage
+from client_diagnostics import ClientDiagnosticEvent, record_client_diagnostic
 from app_logging import (
     configure_logging,
     get_logger,
@@ -105,7 +106,6 @@ async def request_diagnostics(request: Request, call_next):
             request.method == "GET"
             and request.url.path.startswith("/ocr/scan-jobs/")
         )
-        completion_level = logging.DEBUG if quiet_request else logging.INFO
         logger.debug(
             "HTTP request started",
             extra={"event": "request_started"},
@@ -124,6 +124,15 @@ async def request_diagnostics(request: Request, call_next):
             )
             raise
         response.headers["X-Request-ID"] = correlation_id
+        completion_level = (
+            logging.ERROR
+            if response.status_code >= 500
+            else logging.WARNING
+            if response.status_code >= 400
+            else logging.DEBUG
+            if quiet_request
+            else logging.INFO
+        )
         logger.log(
             completion_level,
             "HTTP request completed",
@@ -194,6 +203,14 @@ class ChecksheetTemplateRequest(BaseModel):
 
     source_json: dict[str, Any]
     source_file_name: str = Field(min_length=1, max_length=255)
+
+
+@app.post("/diagnostics/client-events", status_code=204)
+def client_diagnostic(event: ClientDiagnosticEvent) -> Response:
+    """Persist allow-listed frontend failure metadata for local support."""
+
+    record_client_diagnostic(event, get_logger("frontend"))
+    return Response(status_code=204)
 
 
 @app.post("/documents/raster-page")

@@ -97,6 +97,15 @@ recognized values, password, token, or database connection string. Health and
 scan-progress polling are logged only at `DEBUG` level to avoid filling the
 production log with routine polling.
 
+The frontend adds a correlation ID to OCR, scan, checksheet, and raster-image
+requests. Failed API messages include that diagnostic reference so support can
+locate the matching backend event. Uncaught browser errors and rejected
+promises are reported to `/diagnostics/client-events`; this endpoint accepts
+only the error type, operation label, category, and optional HTTP status. It
+does not accept error messages, stack traces, drawing values, filenames,
+browser URLs, or uploaded content. Client reporting is rate-limited and never
+interrupts the drawing workflow if the backend itself is unavailable.
+
 ## Internal checksheets
 
 Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a

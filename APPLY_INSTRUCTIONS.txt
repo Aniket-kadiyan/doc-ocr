@@ -1,46 +1,37 @@
-QTracX M1.2 Windows logging-test correction
-============================================
+QTracX M1.3 — Frontend diagnostics and request correlation
+===========================================================
 
-Branch
-------
-Remain on: Configuration-and-logging
+Branch: Configuration-and-logging
 
-How to apply
+Prerequisite
 ------------
-Copy the backend folder from this package over the repository root.
-Allow Windows to replace:
+M1.2 backend structured logging must already be applied and committed.
 
-  backend/test_app_logging.py
+Apply
+-----
+Copy this folder's contents over the doc-ocr repository root and allow Windows
+to merge folders and replace existing files. Do not revert M1.1 or M1.2.
 
-This is an incremental correction for the previously supplied M1.2 package.
-Do not revert the earlier M1.2 files.
-
-What it fixes
--------------
-The three logging tests now close the RotatingFileHandler before their
-TemporaryDirectory is removed. Windows locks open log files, which caused
-WinError 32 even though the actual logging assertions succeeded.
-
-Validation
-----------
-From doc-ocr/backend:
-
+Test from doc-ocr/backend
+-------------------------
   .\.venv-gpu\Scripts\python.exe -m unittest -v `
-    test_config_env.py test_app_logging.py test_ocr_runtime.py
+    test_config_env.py test_app_logging.py `
+    test_client_diagnostics.py test_ocr_runtime.py
 
-Expected result: Ran 18 tests ... OK
+Expected: 21 tests pass.
 
-Then, from the repository root:
+Test from the repository root
+-----------------------------
+  npm run lint
+  npm run typecheck
+  npm run test:frontend
 
-  npm run verify
+Expected frontend result: 28 test files and 148 tests pass.
 
-The six test_symbol_markers.py failures shown in the supplied output are
-separate from this logging change and are not modified by this package.
+The previously observed six test_symbol_markers.py failures are separate from
+this diagnostics package.
 
-Commit
-------
-Do not create a separate commit for this correction if the M1.2 commit has not
-yet been made. Include it in:
-
-  feat(logging): add structured backend diagnostics
+Suggested commit message
+------------------------
+  feat(logging): correlate frontend and backend diagnostics
 
