@@ -1,58 +1,79 @@
-REPLACEMENT M0 PACKAGE — MVP1 f82c907
-======================================
+QTracX Milestone 1 — Backend Logging Slice
+===========================================
 
-This package replaces the earlier M0 ZIP. Do not use the earlier package.
+Apply this incremental package to the existing branch:
 
-Correct baseline
-----------------
-  Branch: MVP1
-  Commit: f82c90789d5535434e3f8f9d23a09e59c368c8d5
-  Subject: feat(ocr): add native PDF evidence with OCR provenance
+  Configuration-and-logging
 
-This baseline also contains the persistent Review/Other candidate lifecycle
-from commit 046f67f. The replacement DrawingViewer preserves scanCandidates,
-native-PDF sourceDocument handling, and recognitionEvidence.
+Expected base commit:
 
+  06b73f50cbe54bd2ba359dca8a9a948f23008b6b
+  feat(config): add validated QTracX runtime settings
 
-Apply over the current erroneous M0 files
------------------------------------------
-1. Extract this replacement ZIP into a temporary folder.
-2. Copy its backend, scripts, and src folders into the doc-ocr repository root.
-3. Allow Windows to merge folders and replace files.
-4. The corrected files can be copied directly over the earlier M0 package.
-5. Review:
-
-     git status --short
-     git diff --check
-
-Do not restore the entire repository and do not delete the Review/Other files.
+Nothing has been committed or pushed by Codex.
 
 
-Run tests on Windows
---------------------
-From doc-ocr/backend:
+APPLY TO THE SAME BRANCH
+------------------------
+From the repository root:
 
-  .\.venv-gpu\Scripts\python.exe -m unittest -v test_source_images.py
+git switch Configuration-and-logging
+git pull origin Configuration-and-logging
+
+Extract this ZIP and copy its contents over the repository root while
+preserving the backend and scripts folders. Do not create another branch.
+
+Changed files:
+
+  .gitignore
+  README.md
+  backend/main.py
+  backend/scan_jobs.py
+  scripts/run-python-tests.mjs
+
+New files:
+
+  backend/app_logging.py
+  backend/test_app_logging.py
+
+
+FOCUSED TESTS
+-------------
+From doc-ocr\backend:
+
+.\.venv-gpu\Scripts\python.exe -m unittest -v `
+  test_config_env.py test_app_logging.py test_ocr_runtime.py
+
+Expected: 18 tests pass.
 
 From the repository root:
 
-  npm run typecheck
-  npm run lint
-  npm run test:frontend
+npm run verify
 
 
-Run the backend
----------------
-From doc-ocr/backend:
+RUNTIME CHECK
+-------------
+Start the backend normally. In another PowerShell window run:
 
-  $env:CUDA_VISIBLE_DEVICES="0"
-  $env:OCR_DEVICE="gpu:0"
-  $env:OCR_RELOAD="false"
-  .\.venv-gpu\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+$response = Invoke-WebRequest http://127.0.0.1:8000/health
+$response.StatusCode
+$response.Headers["X-Request-ID"]
+Get-Content .\backend\logs\qtracx-backend.log -Tail 20
 
-The backend must be running while opening or previewing a TIFF file.
+Expected:
+
+  StatusCode is 200.
+  X-Request-ID contains a UUID.
+  The log contains backend_starting and backend_ready events.
+
+Run an Auto Balloon scan and check the log again. Events for that scan should
+share one job_id and include scan_job_queued, scan_job_started, scan_job_stage,
+and a terminal scan_job_completed, scan_job_failed, or scan_job_cancelled event.
 
 
-Suggested commit message
-------------------------
-feat(source): add multi-page TIFF and validated image loading
+COMMIT MESSAGE
+--------------
+feat(logging): add structured backend diagnostics
+
+After testing, commit and push this to Configuration-and-logging. The frontend
+diagnostic slice will continue on that same branch.

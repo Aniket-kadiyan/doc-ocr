@@ -83,6 +83,20 @@ scripts\win-ocr-setup.bat
 The `ocr-api`, `ocr-api:debug`, and `ocr-api:debug:force` commands choose the
 correct virtual-environment Python path on Windows, macOS, and Linux.
 
+## Diagnostic logs
+
+The backend writes newline-delimited JSON diagnostics to
+`backend/logs/qtracx-backend.log` by default. `QTRACX_LOG_DIR`,
+`QTRACX_LOG_LEVEL`, `QTRACX_LOG_MAX_MB`, and `QTRACX_LOG_BACKUP_COUNT` control
+the destination, detail level, rotation size, and retained file count.
+
+Each API response includes `X-Request-ID`. The same identifier follows a
+queued OCR scan through its background worker, making one user's request and
+scan stages traceable without logging the uploaded drawing, request body,
+recognized values, password, token, or database connection string. Health and
+scan-progress polling are logged only at `DEBUG` level to avoid filling the
+production log with routine polling.
+
 ## Internal checksheets
 
 Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a
