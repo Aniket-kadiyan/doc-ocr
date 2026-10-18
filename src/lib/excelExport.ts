@@ -1,11 +1,14 @@
 import type ExcelJS from "exceljs";
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet } from "@/lib/project";
+import { buildReferenceValueRows } from "@/lib/referenceValues";
 import type { BalloonedPageImage } from "@/lib/balloonedPageExport";
+import type { ReferencePageImage } from "@/lib/referencePageExport";
 import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 export const EXCEL_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -118,14 +121,15 @@ function setTableColumnWidths(
   });
 }
 
-function addBalloonedPageImages(
+function addDrawingPageImages(
   workbook: ExcelJS.Workbook,
   worksheet: ExcelJS.Worksheet,
-  pages: BalloonedPageImage[],
+  balloonedPages: BalloonedPageImage[],
+  referencePages: ReferencePageImage[],
   imageStartColumn: number
 ) {
   const headingCell = worksheet.getCell(1, imageStartColumn);
-  headingCell.value = "Ballooned Pages";
+  headingCell.value = "Drawing Pages";
   headingCell.font = {
     name: "Arial",
     size: 14,
@@ -141,8 +145,23 @@ function addBalloonedPageImages(
   headingCell.border = thinBorder;
   worksheet.getColumn(imageStartColumn).width = 18;
 
+  const pageNumbers = [
+    ...new Set([
+      ...balloonedPages.map((page) => page.page),
+      ...referencePages.map((page) => page.page),
+    ]),
+  ].sort((left, right) => left - right);
+  const images = pageNumbers.flatMap((pageNumber) => [
+    ...balloonedPages
+      .filter((page) => page.page === pageNumber)
+      .map((page) => ({ page, label: "Balloons" })),
+    ...referencePages
+      .filter((page) => page.page === pageNumber)
+      .map((page) => ({ page, label: "References" })),
+  ]);
+
   let captionRow = 2;
-  for (const page of pages) {
+  for (const { page, label } of images) {
     const scale = Math.min(
       1,
       MAX_IMAGE_WIDTH / Math.max(1, page.width),
@@ -152,7 +171,7 @@ function addBalloonedPageImages(
     const height = Math.max(1, Math.round(page.height * scale));
 
     const caption = worksheet.getCell(captionRow, imageStartColumn);
-    caption.value = `Page ${page.page}`;
+    caption.value = `Page ${page.page} — ${label}`;
     caption.font = { name: "Arial", bold: true, color: { argb: "FF334155" } };
     caption.alignment = { horizontal: "left", vertical: "middle" };
 
@@ -205,24 +224,19 @@ function addCompanyHeader(
   );
 }
 
-/** Build a workbook without touching browser download APIs, enabling unit tests. */
-export async function buildInspectionWorkbook(args: {
-  annotations: Annotation[];
-  pages: BalloonedPageImage[];
-  options: ExcelExportOptions;
-}): Promise<ExcelJS.Workbook> {
-  const ExcelJSImport = await import("exceljs");
-  const ExcelJSRuntime = ExcelJSImport.default ?? ExcelJSImport;
-  const workbook = new ExcelJSRuntime.Workbook();
-  workbook.creator = "Doc OCR Box";
-  workbook.created = new Date();
-  workbook.modified = new Date();
-
-  const title = workbookTitle(args.options.fileName);
-  const partColumns = partColumnNames(args.options.partCount);
-  const inspection = buildInspectionSheet(args.annotations, partColumns);
-  const metadata = normalizeDocumentMetadata(args.options.metadata);
-  const worksheet = workbook.addWorksheet("Checksheet", {
+function addInspectionWorksheet(args: {
+  workbook: ExcelJS.Workbook;
+  sheetName: string;
+  title: string;
+  headers: string[];
+  rows: string[][];
+  metadata: DocumentMetadata;
+  partCount: number;
+  companyLogoDataUrl?: string;
+  balloonedPages: BalloonedPageImage[];
+  referencePages: ReferencePageImage[];
+}): ExcelJS.Worksheet {
+  const worksheet = args.workbook.addWorksheet(args.sheetName, {
     views: [{ state: "frozen", ySplit: TABLE_HEADER_ROW }],
     pageSetup: {
       orientation: "landscape",
@@ -241,15 +255,15 @@ export async function buildInspectionWorkbook(args: {
   });
   worksheet.properties.defaultRowHeight = 20;
 
-  const leftColumnCount = Math.max(METADATA_WIDTH, inspection.headers.length);
+  const leftColumnCount = Math.max(METADATA_WIDTH, args.headers.length);
   const leftEndColumn = worksheet.getColumn(leftColumnCount).letter;
   addCompanyHeader(
-    workbook,
+    args.workbook,
     worksheet,
     leftEndColumn,
-    args.options.companyLogoDataUrl
+    args.companyLogoDataUrl
   );
-  styleMergedValue(worksheet, `A2:${leftEndColumn}2`, title, {
+  styleMergedValue(worksheet, `A2:${leftEndColumn}2`, args.title, {
     fill: "FFDCE6F1",
     color: "FF0F172A",
     size: 14,
@@ -257,28 +271,34 @@ export async function buildInspectionWorkbook(args: {
   worksheet.getRow(1).height = 36;
   worksheet.getRow(2).height = 24;
 
-  addMetadataPair(worksheet, "A4", "B4:D4", "Part Name", metadata.partName);
+  addMetadataPair(
+    worksheet,
+    "A4",
+    "B4:D4",
+    "Part Name",
+    args.metadata.partName
+  );
   addMetadataPair(
     worksheet,
     "E4",
     "F4:G4",
     "Document No.",
-    metadata.documentNumber
+    args.metadata.documentNumber
   );
   addMetadataPair(
     worksheet,
     "H4",
     "I4:J4",
     "Revision No.",
-    metadata.revisionNumber
+    args.metadata.revisionNumber
   );
   worksheet.getRow(4).height = 24;
 
   const headerRow = worksheet.getRow(TABLE_HEADER_ROW);
-  headerRow.values = inspection.headers;
+  headerRow.values = args.headers;
   headerRow.height = 28;
   headerRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-    if (columnNumber > inspection.headers.length) return;
+    if (columnNumber > args.headers.length) return;
     cell.font = { name: "Arial", bold: true, color: { argb: "FFFFFFFF" } };
     cell.fill = {
       type: "pattern",
@@ -293,12 +313,12 @@ export async function buildInspectionWorkbook(args: {
     cell.border = thinBorder;
   });
 
-  inspection.rows.forEach((values, index) => {
+  args.rows.forEach((values, index) => {
     const row = worksheet.getRow(TABLE_HEADER_ROW + index + 1);
     row.values = values;
     row.height = 22;
     row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-      if (columnNumber > inspection.headers.length) return;
+      if (columnNumber > args.headers.length) return;
       cell.font = { name: "Arial", size: 10, color: { argb: "FF0F172A" } };
       cell.alignment = {
         horizontal: columnNumber === 1 ? "center" : "left",
@@ -316,20 +336,93 @@ export async function buildInspectionWorkbook(args: {
     });
   });
 
-  setTableColumnWidths(worksheet, args.options.partCount);
+  setTableColumnWidths(worksheet, args.partCount);
   worksheet.autoFilter = {
     from: { row: TABLE_HEADER_ROW, column: 1 },
-    to: { row: TABLE_HEADER_ROW, column: inspection.headers.length },
+    to: { row: TABLE_HEADER_ROW, column: args.headers.length },
   };
 
-  const imageStartColumn = leftColumnCount + 2;
-  addBalloonedPageImages(workbook, worksheet, args.pages, imageStartColumn);
+  addDrawingPageImages(
+    args.workbook,
+    worksheet,
+    args.balloonedPages,
+    args.referencePages,
+    leftColumnCount + 2
+  );
+  return worksheet;
+}
+
+/** Build a workbook without touching browser download APIs, enabling unit tests. */
+export async function buildInspectionWorkbook(args: {
+  annotations: Annotation[];
+  pages: BalloonedPageImage[];
+  referenceTables?: readonly PageReferenceTable[];
+  referencePages?: ReferencePageImage[];
+  options: ExcelExportOptions;
+}): Promise<ExcelJS.Workbook> {
+  const ExcelJSImport = await import("exceljs");
+  const ExcelJSRuntime = ExcelJSImport.default ?? ExcelJSImport;
+  const workbook = new ExcelJSRuntime.Workbook();
+  workbook.creator = "Doc OCR Box";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const title = workbookTitle(args.options.fileName);
+  const partColumns = partColumnNames(args.options.partCount);
+  const inspection = buildInspectionSheet(args.annotations, partColumns);
+  const metadata = normalizeDocumentMetadata(args.options.metadata);
+  addInspectionWorksheet({
+    workbook,
+    sheetName: "Checksheet",
+    title,
+    headers: inspection.headers,
+    rows: inspection.rows,
+    metadata,
+    partCount: args.options.partCount,
+    companyLogoDataUrl: args.options.companyLogoDataUrl,
+    balloonedPages: args.pages,
+    referencePages: [],
+  });
+
+  const referenceValues = buildReferenceValueRows(args.referenceTables ?? []);
+  const referencePages = args.referencePages ?? [];
+  if (referenceValues.length > 0 || referencePages.length > 0) {
+    const nextNumber =
+      inspection.rows.reduce(
+        (largest, row) => Math.max(largest, Number(row[0]) || 0),
+        0
+      ) + 1;
+    const referenceRows = referenceValues.map((reference, index) => [
+      String(nextNumber + index),
+      reference.label,
+      reference.value,
+      "",
+      ...partColumns.map(() => ""),
+      "",
+      "",
+    ]);
+    addInspectionWorksheet({
+      workbook,
+      sheetName: "References",
+      title: `${title} — References`,
+      headers: inspection.headers,
+      rows: referenceRows,
+      metadata,
+      partCount: args.options.partCount,
+      companyLogoDataUrl: args.options.companyLogoDataUrl,
+      balloonedPages: [],
+      referencePages,
+    });
+  }
+
   return workbook;
 }
 
 export async function downloadInspectionWorkbook(args: {
   annotations: Annotation[];
   pages: BalloonedPageImage[];
+  referenceTables?: readonly PageReferenceTable[];
+  referencePages?: ReferencePageImage[];
   options: ExcelExportOptions;
 }): Promise<string> {
   const workbook = await buildInspectionWorkbook(args);

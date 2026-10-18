@@ -10,6 +10,7 @@ import { ExportPanel } from "@/components/ExportPanel";
 import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface ToolbarProps {
   isSelectingScanArea: boolean;
@@ -23,7 +24,6 @@ interface ToolbarProps {
   hasBalloons: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
-  onFindReferencePoints: () => void;
   findingReferencePoints: boolean;
   onToggleDrawValue: () => void;
   onToggleBalloons: () => void;
@@ -37,6 +37,7 @@ interface ToolbarProps {
   onRemoveDrawing: () => void;
   canSaveProject: boolean;
   scanCandidates: ScanCandidate[];
+  referenceTables: PageReferenceTable[];
 }
 
 export function Toolbar({
@@ -51,7 +52,6 @@ export function Toolbar({
   hasBalloons,
   onSelectScanSection,
   onScanWholePage,
-  onFindReferencePoints,
   findingReferencePoints,
   onToggleDrawValue,
   onToggleBalloons,
@@ -65,6 +65,7 @@ export function Toolbar({
   onRemoveDrawing,
   canSaveProject,
   scanCandidates,
+  referenceTables,
 }: ToolbarProps) {
   const [debugDump, setDebugDump] = useState(false);
 
@@ -132,6 +133,7 @@ export function Toolbar({
       <ExportPanel
         disabled={isProcessing}
         scanCandidates={scanCandidates}
+        referenceTables={referenceTables}
       />
 
       <KeywordSettings />
@@ -145,20 +147,6 @@ export function Toolbar({
         onSelectSection={onSelectScanSection}
         onScanWholePage={onScanWholePage}
       />
-
-      <button
-        type="button"
-        onClick={onFindReferencePoints}
-        disabled={isProcessing || !canSaveProject}
-        title="Read a coordinate reference table and show its named points on the drawing"
-        className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-          findingReferencePoints
-            ? "bg-teal-600 text-white"
-            : "border border-slate-200 text-slate-700 hover:bg-slate-50"
-        } disabled:opacity-50`}
-      >
-        {findingReferencePoints ? "Reading table…" : "Reference Points"}
-      </button>
 
       <button
         type="button"
@@ -186,7 +174,7 @@ export function Toolbar({
 
       {isProcessing && !isScanRunning && (
         <span className="text-sm text-blue-600 animate-pulse">
-          Running OCR…
+          {findingReferencePoints ? "Reading reference points…" : "Running OCR…"}
         </span>
       )}
 

@@ -23,6 +23,8 @@ export interface BalloonedPageImage {
 interface RenderBalloonedPagesArgs {
   project: ProjectRecord;
   annotations: Annotation[];
+  /** Pages that need a balloon-only companion image even when they have no balloon. */
+  additionalPages?: readonly number[];
   style: BalloonStyle;
   artworkImage: HTMLImageElement | null;
 }
@@ -127,13 +129,15 @@ function drawAnnotation(
 }
 
 /**
- * Render each page containing at least one exported value exactly once. Hidden
- * annotations are deliberately included because hiding is presentation-only;
- * the same values remain present in the exported checksheet table.
+ * Render each page containing an exported value, plus explicitly requested
+ * companion pages, exactly once. Hidden annotations are deliberately included
+ * because hiding is presentation-only; the same values remain present in the
+ * exported checksheet table.
  */
 export async function renderBalloonedPages({
   project,
   annotations,
+  additionalPages = [],
   style,
   artworkImage,
 }: RenderBalloonedPagesArgs): Promise<BalloonedPageImage[]> {
@@ -144,7 +148,12 @@ export async function renderBalloonedPages({
   }
 
   const values = valueAnnotations(annotations);
-  const pageNumbers = [...new Set(values.map((annotation) => annotation.page))]
+  const pageNumbers = [
+    ...new Set([
+      ...values.map((annotation) => annotation.page),
+      ...additionalPages,
+    ]),
+  ]
     .filter((page) => Number.isInteger(page) && page > 0)
     .sort((left, right) => left - right);
   if (pageNumbers.length === 0) return [];

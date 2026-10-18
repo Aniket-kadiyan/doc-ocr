@@ -91,8 +91,8 @@ export function CreateChecksheetDialog({
               Create inspection checksheet
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              The drawing and current balloon specifications will be saved as an
-              independent snapshot.
+              The drawing, balloon specifications, and reference-point values
+              will be saved as an independent snapshot.
             </p>
           </div>
           <button

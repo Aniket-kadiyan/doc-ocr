@@ -9,6 +9,7 @@ import {
 } from "@/lib/project";
 import { makeAnnotation } from "@/test/annotationFixture";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 const retainedCandidate: ScanCandidate = {
   id: "candidate-1",
@@ -36,6 +37,32 @@ const retainedCandidate: ScanCandidate = {
   valueBox: { x: 100, y: 200, width: 40, height: 12 },
   createdAt: 10,
   updatedAt: 10,
+};
+
+const retainedReferenceTable: PageReferenceTable = {
+  page: 2,
+  bbox: { x: 10, y: 20, width: 300, height: 120 },
+  headerBox: { x: 10, y: 20, width: 300, height: 20 },
+  axes: ["X", "Y", "Z"],
+  nameHeader: "POINT",
+  points: [
+    {
+      symbol: "A",
+      coordinates: [
+        { axis: "X", value: "1.0" },
+        { axis: "Y", value: "2.0" },
+      ],
+      nameBox: { x: 10, y: 40, width: 30, height: 20 },
+      rowBox: { x: 10, y: 40, width: 300, height: 20 },
+      markers: [
+        {
+          bbox: { x: 400, y: 200, width: 12, height: 14 },
+          score: 0.94,
+          margin: 0.21,
+        },
+      ],
+    },
+  ],
 };
 
 describe("legacy annotation migration", () => {
@@ -270,7 +297,7 @@ describe("project and integration exports", () => {
       bundle.projectName
     );
 
-    expect(bundle.version).toBe(2);
+    expect(bundle.version).toBe(3);
     expect(bundle.scanCandidates).toEqual([retainedCandidate]);
     expect(exported.items).toHaveLength(values.length);
     expect(JSON.stringify(exported)).not.toContain("candidate-1");
@@ -299,6 +326,28 @@ describe("project and integration exports", () => {
     expect(
       parseProjectBundle(JSON.stringify(legacyBundle)).scanCandidates
     ).toEqual([]);
+    expect(
+      parseProjectBundle(JSON.stringify(legacyBundle)).referenceTables
+    ).toEqual([]);
+  });
+
+  it("round-trips page-aware reference tables", () => {
+    const serialized = buildProjectBundle({
+      projectName: "Reference persistence",
+      source: {
+        fileName: "drawing.pdf",
+        mimeType: "application/pdf",
+        fileType: "pdf",
+        dataUrl: "data:application/pdf;base64,AA==",
+      },
+      annotations: values,
+      referenceTables: [retainedReferenceTable],
+      savedAt: 123,
+    });
+
+    const bundle = parseProjectBundle(serialized);
+    expect(bundle.version).toBe(3);
+    expect(bundle.referenceTables).toEqual([retainedReferenceTable]);
   });
 
   it("persists individual visibility without removing hidden values from exports", () => {

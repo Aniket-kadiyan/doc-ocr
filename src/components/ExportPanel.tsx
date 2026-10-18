@@ -14,6 +14,7 @@ import {
   type ExcelExportOptions,
 } from "@/lib/excelExport";
 import { renderBalloonedPages } from "@/lib/balloonedPageExport";
+import { renderReferencePages } from "@/lib/referencePageExport";
 import { createChecksheet } from "@/lib/checksheetClient";
 import { buildChecksheetCreationSnapshot } from "@/lib/checksheetSnapshot";
 import { getProject } from "@/lib/db";
@@ -41,10 +42,12 @@ import {
 } from "@/components/ExcelExportDialog";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface ExportPanelProps {
   disabled?: boolean;
   scanCandidates?: ScanCandidate[];
+  referenceTables?: PageReferenceTable[];
 }
 
 async function loadCompanyLogo(): Promise<string> {
@@ -62,6 +65,7 @@ async function loadCompanyLogo(): Promise<string> {
 export function ExportPanel({
   disabled = false,
   scanCandidates = [],
+  referenceTables = [],
 }: ExportPanelProps) {
   const { style: balloonStyle, artworkImage } = useBalloonStyle();
   const annotations = useAnnotationStore((s) => s.annotations);
@@ -201,6 +205,7 @@ export function ExportPanel({
         project,
         metadata,
         scanCandidates,
+        referenceTables,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(
@@ -266,7 +271,7 @@ export function ExportPanel({
   }: ExcelExportValues) => {
     setActionStatus({
       kind: "exporting",
-      message: "Rendering ballooned pages and generating Excel…",
+      message: "Rendering balloon and reference pages for Excel…",
     });
     try {
       if (!projectId) {
@@ -281,8 +286,13 @@ export function ExportPanel({
       const pages = await renderBalloonedPages({
         project,
         annotations,
+        additionalPages: referenceTables.map((table) => table.page),
         style: balloonStyle,
         artworkImage,
+      });
+      const referencePages = await renderReferencePages({
+        project,
+        referenceTables,
       });
       const options: ExcelExportOptions = {
         partCount,
@@ -293,6 +303,8 @@ export function ExportPanel({
       const downloadedFile = await downloadInspectionWorkbook({
         annotations,
         pages,
+        referenceTables,
+        referencePages,
         options,
       });
       setActionStatus({
@@ -490,7 +502,7 @@ export function ExportPanel({
           >
             <span className="font-medium">Excel</span>
             <span className="block text-[11px] text-slate-400">
-              Formatted checksheet with ballooned page images
+              Checksheet and separate reference worksheet
             </span>
           </button>
           <button

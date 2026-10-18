@@ -8,12 +8,29 @@ import type {
 } from "@/types/annotation";
 import type { DocumentMetadata } from "@/types/documentMetadata";
 import type { ScanCandidateState } from "@/types/scanCandidate";
+import type {
+  ReferenceCoordinate,
+  ReferenceMarker,
+} from "@/types/referencePoint";
 
 export type ChecksheetRunStatus = "draft" | "completed";
+export type ChecksheetItemKind = "balloon" | "reference";
+
+export interface ChecksheetReferenceValue {
+  symbol: string;
+  axis: "X" | "Y" | "Z";
+  point_index: number;
+  name_box: BBox;
+  row_box: BBox;
+  coordinates: ReferenceCoordinate[];
+  markers: ReferenceMarker[];
+}
 
 export interface ChecksheetSnapshotItem {
   annotation_id: string;
   balloon_number: number;
+  item_kind: ChecksheetItemKind;
+  reference?: ChecksheetReferenceValue | null;
   page: number;
   bbox: BBox;
   oriented_box?: (BBox & { rotation: number }) | null;
@@ -86,6 +103,8 @@ export interface ChecksheetRow {
   id: string;
   annotation_id: string;
   balloon_number: number;
+  item_kind: ChecksheetItemKind;
+  reference: ChecksheetReferenceValue | null;
   page: number;
   bbox: BBox;
   oriented_box?: (BBox & { rotation: number }) | null;

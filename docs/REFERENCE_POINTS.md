@@ -1,19 +1,35 @@
-# Reference-point backend
+# Reference-point detection and review
 
-This milestone adds a backend-only reference-point pass. It reads a ruled
-coordinate table, rebuilds its named rows, and locates matching point-name
-glyphs elsewhere on the drawing.
+The reference-point pass reads a ruled coordinate table, rebuilds its named
+rows, and locates matching point-name glyphs elsewhere on the drawing. The UI
+shows the reconstructed table and places selectable markers on the drawing.
 
 Reference points remain separate from the dimension pipeline:
 
 - they do not become balloons or scan candidates;
-- they do not receive tolerances, methods, tools, or balloon numbers;
-- they are not saved in projects or included in exports;
+- they do not receive tolerances, methods, or tools;
+- one result per page is saved in the local project and portable project file;
+- Excel exports place the X/Y/Z values and reference-only drawing images on a
+  dedicated `References` worksheet in the same workbook; other inspection
+  exports remain unchanged;
+- checksheet snapshots append X/Y/Z rows after the balloon rows and retain the
+  point name, axis, coordinate row, name cell, and every detected marker;
+- checksheet review identifies those rows with a `REF` badge, keeps missing
+  axes visible as `Not detected`, and links the active row to its source table
+  row, name cell, marker rings, and coordinate tags without drawing a balloon;
 - a point read from the table but not located in a view is returned in
   `unmatchedSymbols` instead of being discarded.
+- Auto Balloon runs the reference pass once for each successfully scanned page,
+  after its balloon results have been saved. Section scans on the same page do
+  not repeat the reference pass;
+- reference failures never roll back balloons or stop later pages. The UI keeps
+  actionable failures and unmatched point names visible for review, while the
+  ordinary absence of a reference table is silent.
 
-The UI command, reference table/sidebar, drawing markers, and row/marker
-highlighting belong to the next milestone.
+Each saved point has a shared export-neutral representation with exactly three
+rows in X, Y, Z order. Missing axes remain explicit blank values rather than
+being discarded in storage and export, while checksheet review presents those
+blanks as `Not detected`.
 
 ## Endpoint
 
@@ -24,8 +40,8 @@ highlighting belong to the next milestone.
 | `file` | A high-resolution rendered image of one complete drawing page |
 | `display_scale` | Submitted image pixels per annotation-space pixel |
 
-The backend divides all returned boxes by `display_scale`, so the next UI
-milestone can place them directly in the drawing's existing coordinate space.
+The backend divides all returned boxes by `display_scale`, so the UI can place
+them directly in the drawing's existing coordinate space.
 
 The response distinguishes three cases:
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ChecksheetBBox(BaseModel):
@@ -18,15 +18,44 @@ class ChecksheetOrientedBox(ChecksheetBBox):
     rotation: float = 0
 
 
+class ChecksheetReferenceCoordinate(BaseModel):
+    axis: str = Field(min_length=1, max_length=20)
+    value: str = Field(default="", max_length=2000)
+
+
+class ChecksheetReferenceMarker(BaseModel):
+    bbox: ChecksheetBBox
+    score: float = 0
+    margin: float = 0
+
+
+class ChecksheetReferenceValue(BaseModel):
+    symbol: str = Field(min_length=1, max_length=200)
+    axis: Literal["X", "Y", "Z"]
+    point_index: int = Field(ge=0)
+    name_box: ChecksheetBBox
+    row_box: ChecksheetBBox
+    coordinates: list[ChecksheetReferenceCoordinate] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    markers: list[ChecksheetReferenceMarker] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+
+
 class ChecksheetSnapshotItem(BaseModel):
     annotation_id: str = Field(min_length=1, max_length=128)
     balloon_number: int = Field(ge=1)
+    item_kind: Literal["balloon", "reference"] = "balloon"
+    reference: ChecksheetReferenceValue | None = None
     page: int = Field(ge=1)
     bbox: ChecksheetBBox
     oriented_box: ChecksheetOrientedBox | None = None
     rotation: float = 0
     label: str = Field(default="", max_length=500)
-    specification: str = Field(min_length=1, max_length=2000)
+    specification: str = Field(default="", max_length=2000)
     tolerance: str = Field(default="", max_length=1000)
     method: str = Field(default="", max_length=500)
     tool: str = Field(default="", max_length=500)
@@ -35,6 +64,16 @@ class ChecksheetSnapshotItem(BaseModel):
     engineering_symbol: dict[str, Any] | None = None
     engineering_parse: dict[str, Any] | None = None
     engineering_disposition: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_item_kind(self) -> "ChecksheetSnapshotItem":
+        if self.item_kind == "reference" and self.reference is None:
+            raise ValueError("reference items must include reference geometry")
+        if self.item_kind == "balloon" and self.reference is not None:
+            raise ValueError("balloon items must not include reference geometry")
+        if self.item_kind == "balloon" and not self.specification.strip():
+            raise ValueError("balloon specifications must not be blank")
+        return self
 
 
 class ChecksheetScanCandidate(BaseModel):

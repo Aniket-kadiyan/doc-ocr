@@ -248,6 +248,9 @@ class ChecksheetStorage:
                         method TEXT NOT NULL,
                         tool TEXT NOT NULL,
                         dimension_type TEXT NOT NULL,
+                        item_kind TEXT NOT NULL DEFAULT 'balloon'
+                            CHECK (item_kind IN ('balloon', 'reference')),
+                        reference_json TEXT,
                         assembly_json TEXT,
                         engineering_symbol_json TEXT,
                         engineering_parse_json TEXT,
@@ -324,6 +327,15 @@ class ChecksheetStorage:
                     connection.execute(
                         "ALTER TABLE checksheet_items "
                         "ADD COLUMN engineering_disposition_json TEXT"
+                    )
+                if "item_kind" not in item_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_items ADD COLUMN item_kind "
+                        "TEXT NOT NULL DEFAULT 'balloon'"
+                    )
+                if "reference_json" not in item_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_items ADD COLUMN reference_json TEXT"
                     )
                 connection.commit()
             finally:
@@ -509,10 +521,11 @@ class ChecksheetStorage:
                     oriented_x, oriented_y, oriented_width, oriented_height,
                     oriented_rotation,
                     label, specification, tolerance, method, tool,
-                    dimension_type, assembly_json, engineering_symbol_json, engineering_parse_json,
+                    dimension_type, item_kind, reference_json,
+                    assembly_json, engineering_symbol_json, engineering_parse_json,
                     engineering_disposition_json,
                     position
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid4()),
@@ -536,6 +549,15 @@ class ChecksheetStorage:
                     item.method,
                     item.tool,
                     item.dimension_type,
+                    item.item_kind,
+                    (
+                        json.dumps(
+                            item.reference.model_dump(mode="json"),
+                            ensure_ascii=False,
+                        )
+                        if item.reference is not None
+                        else None
+                    ),
                     (
                         json.dumps(item.assembly, ensure_ascii=False)
                         if item.assembly is not None
@@ -989,6 +1011,12 @@ class ChecksheetStorage:
                     "id": str(item["id"]),
                     "annotation_id": str(item["annotation_id"]),
                     "balloon_number": int(item["balloon_number"]),
+                    "item_kind": str(item["item_kind"]),
+                    "reference": (
+                        json.loads(str(item["reference_json"]))
+                        if item["reference_json"]
+                        else None
+                    ),
                     "page": int(item["page"]),
                     "bbox": {
                         "x": float(item["bbox_x"]),
@@ -1380,10 +1408,11 @@ class ChecksheetStorage:
                         oriented_x, oriented_y, oriented_width, oriented_height,
                         oriented_rotation,
                         label, specification, tolerance, method, tool,
-                        dimension_type, assembly_json, engineering_symbol_json,
+                        dimension_type, item_kind, reference_json,
+                        assembly_json, engineering_symbol_json,
                         engineering_parse_json, engineering_disposition_json,
                         position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
@@ -1407,6 +1436,8 @@ class ChecksheetStorage:
                         item["method"],
                         item["tool"],
                         item["dimension_type"],
+                        item["item_kind"],
+                        item["reference_json"],
                         item["assembly_json"],
                         item["engineering_symbol_json"],
                         item["engineering_parse_json"],

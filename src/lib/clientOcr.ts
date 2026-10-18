@@ -110,7 +110,7 @@ export async function runPageTitleFields(pageCanvas: HTMLCanvasElement) {
   return runTitleFields(pageCanvas);
 }
 
-/** Read the current page's coordinate table and point-name markers. */
+/** Read one page's coordinate table and point-name markers. */
 export async function runPageReferencePoints(
   pageCanvas: HTMLCanvasElement,
   displayScale = 1

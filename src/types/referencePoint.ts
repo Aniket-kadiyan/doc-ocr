@@ -44,7 +44,7 @@ export interface ReferencePointsResult {
   unmatchedSymbols: string[];
 }
 
-/** Temporary reference data bound to the page from which it was read. */
+/** Persisted reference data bound to the page from which it was read. */
 export interface PageReferenceTable extends ReferenceTable {
   page: number;
 }
