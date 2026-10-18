@@ -19,12 +19,17 @@ Reference points remain separate from the dimension pipeline:
   row, name cell, marker rings, and coordinate tags without drawing a balloon;
 - a point read from the table but not located in a view is returned in
   `unmatchedSymbols` instead of being discarded.
+- Auto Balloon runs the reference pass once for each successfully scanned page,
+  after its balloon results have been saved. Section scans on the same page do
+  not repeat the reference pass;
+- reference failures never roll back balloons or stop later pages. The UI keeps
+  actionable failures and unmatched point names visible for review, while the
+  ordinary absence of a reference table is silent.
 
 Each saved point has a shared export-neutral representation with exactly three
 rows in X, Y, Z order. Missing axes remain explicit blank values rather than
 being discarded in storage and export, while checksheet review presents those
-blanks as `Not detected`. Auto-balloon integration is handled by the next
-milestone.
+blanks as `Not detected`.
 
 ## Endpoint
 
@@ -35,8 +40,8 @@ milestone.
 | `file` | A high-resolution rendered image of one complete drawing page |
 | `display_scale` | Submitted image pixels per annotation-space pixel |
 
-The backend divides all returned boxes by `display_scale`, so the next UI
-milestone can place them directly in the drawing's existing coordinate space.
+The backend divides all returned boxes by `display_scale`, so the UI can place
+them directly in the drawing's existing coordinate space.
 
 The response distinguishes three cases:
 

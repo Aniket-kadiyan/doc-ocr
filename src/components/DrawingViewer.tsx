@@ -41,6 +41,10 @@ import {
   type ScanRunOutcome,
   type SectionQueuePosition,
 } from "@/lib/sectionScanQueue";
+import {
+  referenceScanNotices,
+  runReferenceScanQueue,
+} from "@/lib/referenceScanQueue";
 import { deriveRange } from "@/lib/valueFields";
 import {
   areAllValueBalloonsHidden,
@@ -1304,6 +1308,115 @@ export function DrawingViewer() {
     );
   }, [balloonsVisible, projectId, setAllBalloonVisibility]);
 
+  const renderReferencePage = useCallback(
+    async (
+      page: number
+    ): Promise<{ canvas: HTMLCanvasElement; displayScale: number }> => {
+      const displayedCanvas =
+        page === currentPage ? sourceCanvasRef.current : null;
+
+      if (pdfDoc) {
+        const pdfPage = await pdfDoc.getPage(page);
+        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const pixelBudgetScale = Math.sqrt(
+          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
+        );
+        const renderScale = Math.min(
+          REFERENCE_RENDER_SCALE,
+          pixelBudgetScale
+        );
+
+        if (renderScale > PDF_RENDER_SCALE) {
+          try {
+            const rendered = await renderPdfPage(pdfDoc, page, renderScale);
+            return {
+              canvas: rendered.canvas,
+              displayScale: renderScale / PDF_RENDER_SCALE,
+            };
+          } catch {
+            // Fall through to the displayed or standard-resolution page.
+          }
+        }
+
+        if (displayedCanvas) {
+          return { canvas: displayedCanvas, displayScale: 1 };
+        }
+        const fallbackScale = Math.min(PDF_RENDER_SCALE, pixelBudgetScale);
+        const rendered = await renderPdfPage(pdfDoc, page, fallbackScale);
+        return {
+          canvas: rendered.canvas,
+          displayScale: fallbackScale / PDF_RENDER_SCALE,
+        };
+      }
+
+      if (displayedCanvas) {
+        return { canvas: displayedCanvas, displayScale: 1 };
+      }
+      if (rasterFile) {
+        const rendered = await loadImageFile(rasterFile, page);
+        return { canvas: rendered.canvas, displayScale: 1 };
+      }
+      throw new Error("No drawing is available for reference detection.");
+    },
+    [currentPage, pdfDoc, rasterFile]
+  );
+
+  /**
+   * Run after balloon results have been committed. The queue intentionally
+   * absorbs per-page reference failures so it cannot roll back balloons or
+   * prevent another successfully scanned page from being checked.
+   */
+  const runAutomaticReferencePass = useCallback(
+    async (pages: readonly number[]) => {
+      if (pages.length === 0) return;
+
+      const projectAtStart = projectIdRef.current;
+      setSelectedReferenceSymbol(null);
+      setFindingReferencePoints(true);
+      try {
+        const outcomes = await runReferenceScanQueue({
+          pages,
+          runPage: async (page) => {
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed before reference detection.");
+            }
+            const { canvas, displayScale } = await renderReferencePage(page);
+            const result = await runPageReferencePoints(canvas, displayScale);
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed during reference detection.");
+            }
+            return result;
+          },
+          applyResult: async (page, result) => {
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed before references were saved.");
+            }
+            const otherPages = referenceTablesRef.current.filter(
+              (table) => table.page !== page
+            );
+            await persistReferenceTables(
+              result.found && result.table
+                ? [...otherPages, { ...result.table, page }]
+                : otherPages,
+              projectAtStart
+            );
+          },
+        });
+
+        if (projectIdRef.current !== projectAtStart) return;
+        const notices = referenceScanNotices(outcomes);
+        if (notices.length > 0) {
+          setSelectionError((current) =>
+            [...new Set([...(current ? [current] : []), ...notices])].join(" ")
+          );
+        }
+      } finally {
+        setFindingReferencePoints(false);
+      }
+    },
+    [persistReferenceTables, renderReferencePage]
+  );
+
   const finishSegmentBox = useCallback(
     (bbox: BBox) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
@@ -1349,12 +1462,18 @@ export function DrawingViewer() {
       });
       if (result.completedSections > 0) {
         setScanSummary(result.summary);
+        await runAutomaticReferencePass(
+          sections
+            .slice(0, result.completedSections)
+            .map((section) => section.page)
+        );
       }
     } finally {
       setIsProcessing(false);
     }
   }, [
     runAutoBalloon,
+    runAutomaticReferencePass,
     selectedScanSections,
     setIsDrawingValue,
     setIsProcessing,
@@ -1369,12 +1488,28 @@ export function DrawingViewer() {
     setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
-    await runAutoBalloon(
-      { x: 0, y: 0, width: source.width, height: source.height },
-      "page",
-      currentPage
-    );
-  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]);
+    setIsProcessing(true);
+    try {
+      const result = await runAutoBalloon(
+        { x: 0, y: 0, width: source.width, height: source.height },
+        "page",
+        currentPage,
+        { manageProcessing: false }
+      );
+      if (result.status === "succeeded") {
+        await runAutomaticReferencePass([currentPage]);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [
+    currentPage,
+    runAutoBalloon,
+    runAutomaticReferencePass,
+    setIsDrawingValue,
+    setIsProcessing,
+    setIsSegmenting,
+  ]);
 
   const selectReferenceSymbol = useCallback(
     (symbol: string | null) => {
@@ -1398,110 +1533,6 @@ export function DrawingViewer() {
     });
     setSelectedReferenceSymbol(null);
   }, [currentPage, persistReferenceTables]);
-
-  /** Read the current sheet's coordinate table and locate its point names. */
-  const findReferencePoints = useCallback(async () => {
-    const source = sourceCanvasRef.current;
-    if (!source) return;
-
-    setSelectionError(null);
-    setScanSummary(null);
-    setSelectedScanSections([]);
-    setActiveMetadataField(null);
-    setIsDrawingValue(false);
-    setIsSegmenting(false);
-    setSelectedId(null);
-    setSelectedScanCandidateId(null);
-    setEditingValueId(null);
-    setSelectedReferenceSymbol(null);
-    setPending(null);
-    setFindingReferencePoints(true);
-    setIsProcessing(true);
-
-    const projectAtStart = projectIdRef.current;
-    const page = currentPage;
-    try {
-      let readCanvas = source;
-      let displayScale = 1;
-
-      if (pdfDoc) {
-        const pdfPage = await pdfDoc.getPage(page);
-        const unscaled = pdfPage.getViewport({ scale: 1 });
-        const pixelBudgetScale = Math.sqrt(
-          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
-        );
-        const renderScale = Math.min(
-          REFERENCE_RENDER_SCALE,
-          pixelBudgetScale
-        );
-        if (renderScale > PDF_RENDER_SCALE) {
-          try {
-            const rendered = await renderPdfPage(pdfDoc, page, renderScale);
-            readCanvas = rendered.canvas;
-            displayScale = renderScale / PDF_RENDER_SCALE;
-          } catch {
-            // The displayed page is a safe lower-resolution fallback.
-            readCanvas = source;
-            displayScale = 1;
-          }
-        }
-      }
-
-      const result = await runPageReferencePoints(readCanvas, displayScale);
-      if (projectIdRef.current !== projectAtStart) return;
-
-      if (!result.found || !result.table) {
-        await persistReferenceTables(
-          referenceTablesRef.current.filter((table) => table.page !== page),
-          projectAtStart
-        );
-        setSelectionError(
-          result.tableCount === 0
-            ? "No ruled table was found on this sheet."
-            : "None of this sheet's tables has a point column with at least two X/Y/Z coordinate columns."
-        );
-        return;
-      }
-
-      await persistReferenceTables(
-        [
-          ...referenceTablesRef.current.filter((table) => table.page !== page),
-          { ...result.table, page },
-        ],
-        projectAtStart
-      );
-      const located =
-        result.table.points.length - result.unmatchedSymbols.length;
-      if (located === 0) {
-        setSelectionError(
-          "The coordinate table was read, but none of its point names could be located in the drawing views."
-        );
-      } else if (result.unmatchedSymbols.length > 0) {
-        setSelectionError(
-          `Not located in the drawing views: ${result.unmatchedSymbols.join(", ")}.`
-        );
-      }
-    } catch (error) {
-      if (projectIdRef.current !== projectAtStart) return;
-      setSelectionError(
-        error instanceof Error
-          ? error.message
-          : "Reading the coordinate reference table failed."
-      );
-    } finally {
-      setFindingReferencePoints(false);
-      setIsProcessing(false);
-    }
-  }, [
-    currentPage,
-    pdfDoc,
-    persistReferenceTables,
-    setEditingValueId,
-    setIsDrawingValue,
-    setIsProcessing,
-    setIsSegmenting,
-    setPending,
-  ]);
 
   const openScanCandidate = useCallback(
     (candidate: ScanCandidate) => {
@@ -1906,7 +1937,6 @@ export function DrawingViewer() {
           setIsSegmenting(true);
         }}
         onScanWholePage={() => void scanWholePage()}
-        onFindReferencePoints={() => void findReferencePoints()}
         findingReferencePoints={findingReferencePoints}
         onToggleDrawValue={() => {
           setSelectionError(null);
