@@ -118,6 +118,25 @@ def _hole_subtype(kws: list[str]) -> str | None:
     return None
 
 
+_HOLE_GLYPH_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("↧", "DEPTH"),
+    ("⌇", "DEPTH"),
+    ("⌷", "DEPTH"),
+    ("⌴", "CBORE"),
+    ("⌵", "CSK"),
+)
+
+
+def _hole_glyph_keywords(raw: str, active: frozenset[str]) -> list[str]:
+    """Return active hole keywords represented by standard drawing glyphs."""
+
+    return [
+        keyword
+        for glyph, keyword in _HOLE_GLYPH_KEYWORDS
+        if glyph in raw and keyword in active
+    ]
+
+
 def _quantity(text: str) -> int | None:
     """Leading ``4X``. Off by default — spec section 24 is out of scope."""
     if not rules.is_enabled(rules.QUANTITY_PREFIX):
@@ -293,7 +312,13 @@ def classify_feature(
         return feat
 
     # ── Priority 6: Hole Feature (modifiers) ────────────────────────────────
-    hole_kws = _found_keywords(upper, rules.active_hole_modifiers())
+    active_modifiers = rules.active_hole_modifiers()
+    hole_kws = _found_keywords(upper, active_modifiers)
+    hole_kws.extend(
+        keyword
+        for keyword in _hole_glyph_keywords(raw, active_modifiers)
+        if keyword not in hole_kws
+    )
     if hole_kws:
         feat.category = fd.CAT_HOLE
         feat.keywords = hole_kws

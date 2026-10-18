@@ -1,0 +1,67 @@
+QTracX selective integration — SI-2.1
+======================================
+
+Base branch
+-----------
+Apply this package to the selective-integration branch after commit:
+
+55aaffc Fix table occupancy detection near cell borders
+
+No commit or push was made by Codex.
+
+What this changes
+-----------------
+- Preserves and normalizes depth, counterbore, countersink, and diameter glyphs.
+- Accepts complete hole callouts such as:
+  - Ø2.50 ↧13
+  - M3x0.5 - 6H ↧3
+  - 2 x Ø2.50 THRU ALL
+  - Ø4 H7 ↧10
+  - Ø6.50 ⌴Ø11 ↧4.40
+  - Ø3.50 ⌵Ø7 X 90°
+- Accepts and structurally parses ISO fits such as Ø4 H7, Ø18h6, and 20 JS9.
+- Keeps lowercase shaft-fit letters lowercase because case is meaningful.
+- Repairs a depth glyph read as T only when the repaired text is a complete
+  hole callout; part numbers and ordinary text are left unchanged.
+- Records complete hole/depth structures in engineering_parse so they become
+  eligible instead of being reduced to a leading number or sent to review.
+- Enables Depth and Counterbore classification for these complete values.
+
+Apply
+-----
+1. Confirm you are on selective-integration and have no uncommitted work:
+
+   git branch --show-current
+   git status --short
+
+2. Extract the ZIP into the doc-ocr repository root and allow it to overwrite
+   the matching backend files.
+
+3. Review the files before testing:
+
+   git status --short
+   git diff --check
+   git diff --stat
+
+Targeted tests (PowerShell, from doc-ocr\backend)
+-------------------------------------------------
+   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+     test_page_value_filters.py `
+     test_engineering_value_parser.py `
+     test_feature_classifier.py `
+     test_feature_rules.py `
+     test_angle_utils.py
+
+Recommended existing regression test
+------------------------------------
+   .\.venv-gpu\Scripts\python.exe -m pytest -q test_page_layout.py
+
+Suggested commit message
+------------------------
+feat(ocr): support structured hole callouts and ISO fits
+
+Scope note
+----------
+This is SI-2.1 only. Stacked standalone deviations, FCF tolerance-plus-datum
+parsing, punctuation repair, and DETAIL/SECTION/SCALE context handling remain
+for SI-2.2 and SI-2.3.

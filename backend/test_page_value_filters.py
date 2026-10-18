@@ -286,3 +286,42 @@ def test_short_chamfer_rule_does_not_accept_bare_or_zone_letters() -> None:
     for text in ("C", "CHF", "A3", "B2"):
         decision = evaluate_page_value(candidate(text))
         assert not decision.accepted, text
+
+
+def test_hole_callouts_and_iso_fits_are_complete_values() -> None:
+    values = (
+        "Ø2.50 ↧13",
+        "M3x0.5 - 6H ↧3",
+        "M3x0.5 - 6H THRU ALL",
+        "2 x Ø2.50 ↧8.50",
+        "2 x Ø2.50 THRU ALL",
+        "Ø4 H7 ↧10",
+        "Ø6.50 ⌴Ø11 ↧4.40",
+        "Ø3.50 ⌵Ø7 X 90°",
+        "Ø3.50 X 90° NEAR SIDE",
+        "13 DEEP",
+        "↧0.90",
+        "Ø4 H7",
+        "Ø18h6",
+        "20 JS9",
+    )
+
+    for text in values:
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_hole_glyph_normalization_preserves_meaning() -> None:
+    assert normalize_page_value_text("2.50 ↓13") == "2.50 ↧13"
+    assert normalize_page_value_text("2 x ∅2.50 THRU") == "2 x Ø2.50 THRU"
+    assert normalize_page_value_text("↧ 0.90") == "↧0.90"
+    assert normalize_page_value_text("M3x0.5-6H T4.50") == "M3x0.5-6H↧4.50"
+
+
+def test_hole_repairs_do_not_change_arrows_prose_or_identifiers() -> None:
+    assert normalize_page_value_text("→ 25") == "25"
+    assert normalize_page_value_text("↑25") == "25"
+    for text in ("Ø50T7", "ISD-600T500", "20 TO 25", "PART T5", "T10"):
+        assert normalize_page_value_text(text) == text
+    for text in ("3 PLACES", "DO NOT SCALE", "REMOVE ALL BURRS 0.2"):
+        assert not evaluate_page_value(candidate(text)).accepted

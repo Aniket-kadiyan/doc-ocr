@@ -18,8 +18,6 @@ from feature_classifier import classify_feature
 
 OUT_OF_SCOPE_SECTIONS = {
     rules.FILLET,
-    rules.COUNTERBORE,
-    rules.DEPTH,
     rules.QUANTITY_PREFIX,
     rules.REFERENCE,
 }
@@ -52,7 +50,8 @@ def test_overall_dimensions_is_off_for_a_different_reason():
 def test_the_working_sections_are_on():
     for section in (
         rules.LINEAR, rules.DIAMETER, rules.RADIUS, rules.CHAMFER, rules.ANGLE,
-        rules.TAPER, rules.THREAD, rules.THRU, rules.COUNTERSINK, rules.SPOTFACE,
+        rules.TAPER, rules.THREAD, rules.THRU, rules.COUNTERBORE,
+        rules.COUNTERSINK, rules.SPOTFACE, rules.DEPTH,
         rules.GDT, rules.DATUM, rules.SURFACE_FINISH, rules.WELD, rules.MATERIAL,
         rules.HEAT_TREATMENT, rules.COATING, rules.DEBURRING, rules.BASIC,
         rules.GENERAL_NOTES,
@@ -68,10 +67,10 @@ def test_describe_lists_every_section():
 
 # --- hole keywords follow their sections -------------------------------------
 
-def test_disabled_hole_sections_drop_their_keywords():
+def test_required_hole_sections_keep_their_keywords():
     active = rules.active_hole_modifiers()
     for word in ("CBORE", "COUNTERBORE", "C'BORE", "DEEP", "DP", "DEPTH"):
-        assert word not in active, word
+        assert word in active, word
 
 
 def test_enabled_hole_sections_keep_theirs():
@@ -82,8 +81,8 @@ def test_enabled_hole_sections_keep_theirs():
 
 def test_subtypes_follow_the_same_rule():
     names = [name for _, name in rules.active_hole_subtypes()]
-    assert "Counterbore" not in names
-    assert "Blind Hole" not in names
+    assert "Counterbore" in names
+    assert "Blind Hole" in names
     assert "Through Hole" in names and "Countersink" in names
 
 
@@ -92,8 +91,6 @@ def test_subtypes_follow_the_same_rule():
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),   # 12 Counterbore, off
-        ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),   # 15 Depth, off
         ("25 REF", fd.CAT_LINEAR),            # 25 Reference, off
         ("(25)", fd.CAT_LINEAR),
     ],
@@ -125,6 +122,8 @@ def test_quantity_prefix_is_not_read():
         ("TAPER 1:20", fd.CAT_TAPER, "Taper"),
         ("M6×1", fd.CAT_THREAD, "Thread M6×1"),
         ("Ø8 THRU", fd.CAT_HOLE, "Through Hole"),
+        ("Ø6.50 ⌴Ø11 ↧4.40", fd.CAT_HOLE, "Counterbore"),
+        ("Ø2.50 ↧13", fd.CAT_HOLE, "Blind Hole"),
         ("Ø10 CSK", fd.CAT_HOLE, "Countersink"),
         ("Ø12 SF", fd.CAT_HOLE, "Spotface"),
         ("Ra 1.6", fd.CAT_SURFACE, "Surface Finish"),

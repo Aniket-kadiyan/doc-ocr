@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 
 from angle_utils import normalize_primes
+from page_value_filters import canonical_hole_glyphs
 
 
 def count_engineering_symbols(text: str) -> int:
-    return len(re.findall(r"[±°Ø'\"]", text))
+    return len(re.findall(r"[±°Ø∅⌀↧⌴⌵'\"]", text))
 
 
 def engineering_quality_score(text: str, confidence: float) -> float:
@@ -25,7 +26,7 @@ def fix_engineering_symbols_light(text: str) -> str:
     if not text:
         return ""
 
-    t = normalize_primes(text.strip())
+    t = canonical_hole_glyphs(normalize_primes(text.strip()))
     t = t.replace("+/−", "±").replace("+/-", "±").replace("＋", "+")
     # Leading diameter / radius markers only (not φ inside numbers). ``⊕`` is
     # the GD&T position symbol, not a diameter glyph, and must stay distinct.

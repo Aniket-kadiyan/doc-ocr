@@ -36,12 +36,10 @@ from feature_classifier import classify_feature
         # Hole features
         ("Ø8 THRU", fd.CAT_HOLE),
         ("4X Ø10 THRU", fd.CAT_HOLE),
-        # Counterbore (12), Depth (15) and GD&T (16) are switched off in
-        # feature_rules, so these fall through to the diameter they carry.
-        # test_feature_rules.py covers that decision; this file records what
-        # the classifier does with the sections that are on.
-        ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),
-        ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),
+        ("Ø12 CBORE Ø20", fd.CAT_HOLE),
+        ("Ø10 × 15 DEEP", fd.CAT_HOLE),
+        ("Ø6.50 ⌴Ø11 ↧4.40", fd.CAT_HOLE),
+        ("Ø3.50 ⌵Ø7 X 90°", fd.CAT_HOLE),
         ("POSITION Ø0.1 A B", fd.CAT_GDT),
         ("FLATNESS 0.05", fd.CAT_GDT),
         ("ROUNDNESS(2PT./180)", fd.CAT_GDT),

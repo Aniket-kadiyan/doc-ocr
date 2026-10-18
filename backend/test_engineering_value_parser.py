@@ -112,6 +112,54 @@ def test_iso_fit_is_not_misread_as_malformed_tolerance() -> None:
     assert parsed.components["tolerance"] is None
 
 
+def test_spaced_and_lowercase_iso_fits_preserve_their_semantics() -> None:
+    cases = {
+        "Ø4 H7": "H7",
+        "Ø18h6": "h6",
+        "20 JS9": "JS9",
+    }
+
+    for text, fit in cases.items():
+        parsed = parse_engineering_value(text)
+        assert parsed.complete, text
+        assert parsed.kind == "linear", text
+        assert parsed.components["fit"] == fit, text
+
+
+def test_hole_callouts_are_complete_and_keep_modifier_values() -> None:
+    depth = parse_engineering_value("Ø4 H7 ↧10")
+    counterbore = parse_engineering_value("Ø6.50 ⌴Ø11 ↧4.40")
+    countersink = parse_engineering_value("Ø3.50 ⌵Ø7 X 90°")
+    thread = parse_engineering_value("M3x0.5 - 6H ↧3")
+
+    for parsed in (depth, counterbore, countersink, thread):
+        assert parsed.complete
+        assert parsed.kind == "hole"
+        assert "".join(token.text for token in parsed.tokens) == parsed.normalized_text
+
+    assert depth.components["feature"]["fit"] == "H7"
+    assert depth.components["depths"] == ["10"]
+    assert counterbore.components["counterbores"] == [
+        {"diameter": "11", "diameter_symbol": True}
+    ]
+    assert counterbore.components["depths"] == ["4.40"]
+    assert countersink.components["countersinks"] == [
+        {"diameter": "7", "diameter_symbol": True}
+    ]
+    assert thread.components["feature"]["fit"] == "6H"
+
+
+def test_standalone_depth_and_hole_glyph_variants_are_lossless() -> None:
+    parsed = parse_engineering_value("↓ 0.90")
+
+    assert parsed.raw_text == "↓ 0.90"
+    assert parsed.normalized_text == "↧0.90"
+    assert parsed.complete
+    assert parsed.kind == "depth"
+    assert parsed.components["depth"] == "0.90"
+    assert "hole_glyph_variant" in parsed.normalization_steps
+
+
 def test_incomplete_tolerance_is_partial_and_nothing_is_deleted() -> None:
     parsed = parse_engineering_value("R0.6-0.")
 
