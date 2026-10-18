@@ -212,7 +212,7 @@ def _sheet_with_a_margin_legend() -> Image.Image:
         draw.line((x, top, x, top + rows * row_height), fill="black", width=2)
     for index in range(rows):
         draw.text((left + 8, top + index * row_height + 20), "12", fill="black")
-        draw.text((middle + 8, top + index * row_height + 20), "A", fill="black")
+        draw.text((middle + 8, top + index * row_height + 20), "12", fill="black")
 
     # Ordinary drawing geometry in the centre must remain available to OCR.
     draw.rectangle((700, 300, 1500, 900), outline="black", width=2)

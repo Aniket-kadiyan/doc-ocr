@@ -581,7 +581,11 @@ def _group_has_table_text(
             content,
             cell,
             page_height=page_height,
-            inset=max(2, tolerance),
+            # Group connectivity deliberately uses twice the line-detection
+            # tolerance. Using that enlarged value as the content inset clips
+            # text printed close to a cell rule, so restore the original
+            # line-scale tolerance for occupancy measurement.
+            inset=max(2, tolerance // 2),
         )
         if count is None:
             return True
@@ -603,6 +607,7 @@ def _group_is_table(
     page_height: int,
     tolerance: int,
     content: np.ndarray | None = None,
+    occupancy_ink: np.ndarray | None = None,
 ) -> bool:
     """
     Whether a connected group of closed cells is a table rather than drawing.
@@ -631,19 +636,24 @@ def _group_is_table(
         if all(abs(cell.y - row) > tolerance for row in rows):
             rows.append(cell.y)
     width = max(cell.x1 for cell in group) - min(cell.x for cell in group)
-    # A table's tall cells hold text (a multi-line specification, a title).
-    # A part view crossed by its extension lines closes into boxes the size
-    # of the view itself, and those hold drawing: on one sheet four of the
-    # group's ten boxes were 167 to 280 px tall and held either nothing or an
-    # arc or leader far longer than a glyph.
-    if content is not None:
+    # Measure population on the original ink inside each cell. The inset keeps
+    # the surrounding rules out without allowing line-removal morphology to
+    # damage the glyphs used as positive table evidence.
+    if occupancy_ink is not None:
         if not _group_has_table_text(
             group,
-            content,
+            occupancy_ink,
             page_height=page_height,
             tolerance=tolerance,
         ):
             return False
+    # A table's tall cells hold text (a multi-line specification, a title).
+    # A part view crossed by its extension lines closes into boxes the size
+    # of the view itself, and those hold drawing: on one sheet four of the
+    # group's ten boxes were 167 to 280 px tall and held either nothing or an
+    # arc or leader far longer than a glyph. This check deliberately uses the
+    # separate map with long axis-aligned rules removed.
+    if content is not None:
         tall_limit = max(TABLE_TALL_CELL_HEIGHT_RATIO * page_height, TABLE_TALL_CELL_MIN_PX)
         drawing = sum(
             1
@@ -670,14 +680,16 @@ def _retain_repeated_cell_groups(
     tolerance: int,
     page_size: tuple[int, int] | None = None,
     content: np.ndarray | None = None,
+    occupancy_ink: np.ndarray | None = None,
 ) -> list[LayoutBox]:
     """
     Discard isolated drawing rectangles while retaining repeated grids.
 
     With ``page_size`` each connected group is also judged by
     :func:`_group_is_table`, which drops the grids a drawing makes by accident;
-    ``content`` (the ink map without the grid lines) lets it look inside the
-    tall cells.
+    ``content`` (the ink map without the grid lines) lets it inspect drawing
+    strokes in tall cells, while ``occupancy_ink`` retains the original glyphs
+    used to confirm table-like population.
     """
 
     parent = list(range(len(cells)))
@@ -714,6 +726,7 @@ def _retain_repeated_cell_groups(
                 page_height=page_size[1],
                 tolerance=tolerance,
                 content=content,
+                occupancy_ink=occupancy_ink,
             )
         )
     }
@@ -826,6 +839,7 @@ def _grid_masks(
             ink,
             max(20, int(round(min(full_width, full_height) * 0.02))),
         ),
+        occupancy_ink=ink,
     )
     return _discard_mostly_contained_boxes(
         _merge_rectangular_cells(
