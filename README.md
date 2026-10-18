@@ -70,7 +70,7 @@ npm run ocr-api
 npm run dev
 ```
 
-Open `http://localhost:3000`. Check `http://127.0.0.1:8000/health` if the
+Open `http://localhost:3002`. Check `http://127.0.0.1:8000/health` if the
 frontend cannot reach OCR. A healthy configured service reports
 `"paddleocr": true`.
 

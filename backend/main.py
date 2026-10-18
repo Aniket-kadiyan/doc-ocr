@@ -31,7 +31,7 @@ from checksheet_index import (
 )
 from checksheet_routes import router as checksheet_router
 from checksheet_storage import initialize_checksheet_storage
-from config_env import get_cors_origins, load_env_files
+from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from ocr_pipeline import get_pipeline
 from page_layout import (
@@ -65,6 +65,7 @@ from starlette.concurrency import run_in_threadpool
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
 load_env_files()
+runtime_config = load_runtime_config()
 
 app = FastAPI(
     title="Doc OCR Box — PaddleOCR + TrOCR",
@@ -84,7 +85,7 @@ MAX_SOURCE_PDF_BYTES = 64 * 1024 * 1024
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
 # frontend on :3000, :4000, etc. all work without editing this file.
-_cors_origins = get_cors_origins()
+_cors_origins = runtime_config.cors_origins
 if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -1287,11 +1288,9 @@ if __name__ == "__main__":
     # Run from this directory so uvicorn's reloader can import "main:app".
     import uvicorn
 
-    from config_env import get_bool, get_int, get_str
-
     uvicorn.run(
         "main:app",
-        host=get_str("OCR_HOST", "127.0.0.1"),
-        port=get_int("OCR_PORT", 8000),
-        reload=get_bool("OCR_RELOAD", True),
+        host=runtime_config.backend_host,
+        port=runtime_config.backend_port,
+        reload=runtime_config.backend_reload,
     )

@@ -34,6 +34,7 @@ const fastTests = [
   "backend/test_benchmark_suite.py",
   "backend/test_checksheet_converter.py",
   "backend/test_checksheet_storage.py",
+  "backend/test_config_env.py",
   "backend/test_detection_passes.py",
   "backend/test_engineering_object_assembly.py",
   "backend/test_engineering_disposition.py",
