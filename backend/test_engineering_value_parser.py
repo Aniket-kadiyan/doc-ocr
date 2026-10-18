@@ -102,6 +102,49 @@ def test_common_ascii_plus_minus_and_compact_pairs_are_explicit_normalization() 
     assert pair.components["tolerance"]["lower"] == "-0.2"
 
 
+def test_stacked_deviation_pairs_keep_both_explicit_bounds() -> None:
+    cases = {
+        "Ø33 +0.012 0": ("linear", "+0.012", "0"),
+        "+0.012 0": ("standalone_tolerance", "+0.012", "0"),
+        "+0.05 -0.05": ("standalone_tolerance", "+0.05", "-0.05"),
+        "-0.05 -0.10": ("standalone_tolerance", "-0.05", "-0.10"),
+    }
+
+    for text, (kind, upper, lower) in cases.items():
+        parsed = parse_engineering_value(text)
+        assert parsed.complete, text
+        assert parsed.kind == kind, text
+        tolerance = parsed.components["tolerance"]
+        assert tolerance["mode"] == "deviation_pair", text
+        assert tolerance["upper"] == upper, text
+        assert tolerance["lower"] == lower, text
+        assert "single_bound_tolerance" not in parsed.warnings, text
+
+
+def test_two_plain_numbers_are_not_reinterpreted_as_deviations() -> None:
+    for text in ("33 0.5", "25 40", "12.5 0.25", "+0.0120.0"):
+        assert not parse_engineering_value(text).complete, text
+
+
+def test_diametral_tolerance_with_datums_is_structured_gdt() -> None:
+    parsed = parse_engineering_value("Ø0.02Ⓜ A B")
+
+    assert parsed.complete
+    assert parsed.kind == "gdt"
+    assert parsed.components["tolerance_zone"] == {
+        "diameter": True,
+        "value": "0.02",
+        "material_condition": "Ⓜ",
+    }
+    assert parsed.components["datums"] == ["A", "B"]
+    assert "".join(token.text for token in parsed.tokens) == parsed.normalized_text
+
+
+def test_datum_sequence_requires_diameter_and_valid_uppercase_letters() -> None:
+    for text in ("25 A", "0.5 m", "Ø0.02 a", "Ø0.02 I", "Ø0.02 A B C D"):
+        assert not parse_engineering_value(text).complete, text
+
+
 def test_iso_fit_is_not_misread_as_malformed_tolerance() -> None:
     parsed = parse_engineering_value("2N9")
 

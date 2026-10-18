@@ -118,20 +118,23 @@ _ANGLE_VALUE = _compile(
     rf"\s*-\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?))?"
     r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
 )
+# Stacked deviations are flattened by OCR into one line.  The first bound must
+# carry a sign; the second may be signed or the unsigned nominal-zero bound.
+# An unsigned second bound also needs whitespace or '/', which prevents a
+# malformed double decimal from being split into two convenient numbers.
+_DEVIATION_PAIR = (
+    rf"[+-]\s*{_NUMBER}(?:"
+    rf"\s*/\s*(?:[+-]\s*)?{_NUMBER}"
+    rf"|\s+[+-]?\s*{_NUMBER}"
+    rf"|\s*[+-]\s*{_NUMBER}"
+    rf")"
+)
 _LINEAR_VALUE = _compile(
     rf"^(?:\d+\s*[X×]\s*)?"
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
     rf"(?:\s*{_FIT_CLASS})?"
     rf"(?:\s*±\s*{_NUMBER}"
-    rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
-    # A stacked unilateral tolerance commonly omits the sign on its zero
-    # limit: ``Ø8 +0.2 / 0``.  Once assembled, keep that exact notation.
-    rf"|\s*[+-]\s*{_NUMBER}\s*/\s*(?:[+-]\s*)?{_NUMBER}"
-    # Two stacked deviations, printed one above the other on the drawing and
-    # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
-    # a shaft or hole limit often has upper AND lower below nominal. Listed
-    # before the single-deviation branch so the longer form wins.
-    rf"|\s*[+-]\s*{_NUMBER}\s*[+-]\s*{_NUMBER}"
+    rf"|\s*{_DEVIATION_PAIR}"
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
@@ -155,7 +158,11 @@ _SHORT_CHAMFER_VALUE = _compile(
     rf"^(?:CHF|C)\s*{_NUMBER}(?:\s*(?:MM|MAX|MIN|TYP|REF)\.?)?$"
 )
 _STANDALONE_TOLERANCE = _compile(
-    rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
+    rf"^(?:±\s*{_NUMBER}\s*°?"
+    rf"|[+-]\s*{_NUMBER}\s*°?(?:"
+    rf"\s+[+-]?\s*{_NUMBER}\s*°?"
+    rf"|\s*[+-]\s*{_NUMBER}\s*°?"
+    rf")?)$"
 )
 
 # Hole callouts combine a diameter or thread with one or more machining
@@ -191,6 +198,15 @@ _ONE_HOLE_CALLOUT = (
 _HOLE_CALLOUT_VALUE = _compile(
     rf"^{_ONE_HOLE_CALLOUT}(?:{_HOLE_SEPARATOR}{_ONE_HOLE_CALLOUT})?$"
 )
+# Text read from the tolerance and datum cells of a feature-control frame.
+# Requiring Ø plus valid uppercase datum letters keeps a nearby section label
+# such as "25 A" from being accepted as GD&T.
+_DATUM_LETTER = r"[A-HJ-NP-Z]"
+_DIAMETRAL_TOLERANCE_WITH_DATUM = re.compile(
+    rf"^Ø\s*{_NUMBER}"
+    r"(?:\s*[ⓂⓁⓈ])?"
+    rf"(?:\s*-?\s*{_DATUM_LETTER}\b){{1,3}}$"
+)
 _STANDALONE_DEPTH_VALUE = _compile(
     rf"^{_DEPTH_TERM}(?:\s*(?:MIN|MAX|TYP|REF)\.?)?$"
 )
@@ -204,7 +220,10 @@ _STANDALONE_DEPTH_VALUE = _compile(
 _BOUNDARY_NOISE_START = re.compile(
     r"^[?¦|;,\u2190-\u21A6\u21A8-\u21FF\u25B6\u25C0]+\s*"
 )
-_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,\-\u2010-\u2015~]+$")
+# An unmatched ')' is a common crop/OCR remnant.  It is removed only when the
+# remaining whole string passes the complete-value grammar below, so balanced
+# reference dimensions and arbitrary text remain unchanged.
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,)\-\u2010-\u2015~]+$")
 _KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
 _KEYWORD_CONFUSABLES = str.maketrans(
     {
@@ -341,6 +360,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _HOLE_CALLOUT_VALUE.fullmatch(value):
         return True
     if _STANDALONE_DEPTH_VALUE.fullmatch(value):
+        return True
+    if _DIAMETRAL_TOLERANCE_WITH_DATUM.fullmatch(value):
         return True
     if _is_dual_unit_value(value):
         return True

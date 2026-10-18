@@ -100,7 +100,11 @@ _SHORT_CHAMFER_RE = re.compile(
     re.IGNORECASE,
 )
 _STANDALONE_TOLERANCE_RE = re.compile(
-    rf"^(?P<sign>±|\+|-)\s*(?P<value>{_NUMBER})\s*(?P<degree>°)?$"
+    rf"^(?:±\s*{_NUMBER}\s*°?"
+    rf"|[+-]\s*{_NUMBER}\s*°?(?:"
+    rf"\s+[+-]?\s*{_NUMBER}\s*°?"
+    rf"|\s*[+-]\s*{_NUMBER}\s*°?"
+    rf")?)$"
 )
 _ANGLE_RE = re.compile(
     rf"^(?P<degrees>{_NUMBER})\s*°"
@@ -113,14 +117,23 @@ _ANGLE_RE = re.compile(
     rf"(?P<qualifiers>(?:\s*{_QUALIFIER})*)$",
     re.IGNORECASE,
 )
+# The OCR line assembler places an upper and lower deviation side by side.
+# The explicit first sign is the guard that distinguishes this from two
+# unrelated values merged into one crop.
+_DEVIATION_PAIR = (
+    rf"[+-]\s*{_NUMBER}(?:"
+    rf"\s*/\s*(?:[+-]\s*)?{_NUMBER}"
+    rf"|\s+[+-]?\s*{_NUMBER}"
+    rf"|\s*[+-]\s*{_NUMBER}"
+    rf")"
+)
 _DIMENSION_RE = re.compile(
     rf"^(?:(?P<quantity>\d+)\s*[X×]\s*)?"
     r"(?P<prefix>SR|SØ|Ø|R)?\s*"
     rf"(?P<nominal>[+-]?{_NUMBER})"
     rf"(?:\s*(?P<fit>{_FIT_CLASS}))?"
     rf"(?P<tolerance>\s*(?:±\s*{_NUMBER}\s*°?"
-    rf"|[+-]\s*{_NUMBER}\s*(?:/\s*(?:[+-]\s*)?{_NUMBER}"
-    rf"|\s*[+-]\s*{_NUMBER})"
+    rf"|{_DEVIATION_PAIR}"
     rf"|[+-]\s*{_NUMBER}"
     rf"|(?:/|\bTO\b|:)\s*{_NUMBER}))?"
     r"\s*(?P<unit>MM|CM|INCHES|INCH|IN|\")?"
@@ -213,6 +226,15 @@ _GDT_TEXT_RE = re.compile(
     r"ROUNDNESS|CYLINDRICITY|PARALLELISM|PERPENDICULARITY|ANGULARITY|POSITION|"
     r"CONCENTRICITY|SYMMETRY|RUNOUT)\b", re.IGNORECASE,
 )
+# A narrow textual representation of the tolerance-zone and datum cells from
+# a feature-control frame.  I, O and Q are not valid datum letters.
+_DATUM_LETTER = r"[A-HJ-NP-Z]"
+_DIAMETRAL_TOLERANCE_WITH_DATUM_RE = re.compile(
+    rf"^Ø\s*(?P<tolerance>{_NUMBER})"
+    r"(?:\s*(?P<material_condition>[ⓂⓁⓈ]))?"
+    rf"(?P<datum_text>(?:\s*-?\s*{_DATUM_LETTER}\b){{1,3}})$"
+)
+_DATUM_TOKEN_RE = re.compile(_DATUM_LETTER)
 
 _SYMBOL_REPLACEMENTS = (
     ("+/-", "±", "ascii_plus_minus"),
@@ -455,14 +477,23 @@ def _parse_tolerance(text: str | None) -> dict[str, Any] | None:
         }
 
     pair = re.fullmatch(
-        rf"(?P<first_sign>[+-])\s*(?P<first>{_NUMBER})\s*"
-        rf"(?:(?P<slash>/)\s*(?P<slash_sign>[+-])?"
-        rf"|(?P<second_sign>[+-]))\s*(?P<second>{_NUMBER})",
+        rf"(?P<first_sign>[+-])\s*(?P<first>{_NUMBER})"
+        rf"(?P<first_degree>\s*°)?"
+        rf"(?:(?P<slash>\s*/\s*)(?P<slash_sign>[+-])?"
+        rf"|(?P<spaced>\s+)(?P<spaced_sign>[+-])?"
+        rf"|(?P<compact_sign>\s*[+-]))\s*"
+        rf"(?P<second>{_NUMBER})(?P<second_degree>\s*°)?",
         value,
     )
     if pair:
         first = _signed(pair.group("first_sign"), pair.group("first"))
-        second_sign = pair.group("slash_sign") or pair.group("second_sign") or ""
+        compact_sign = str(pair.group("compact_sign") or "").strip()
+        second_sign = (
+            pair.group("slash_sign")
+            or pair.group("spaced_sign")
+            or compact_sign
+            or ""
+        )
         second = f"{second_sign}{pair.group('second')}"
         return {
             "mode": "deviation_pair",
@@ -470,6 +501,9 @@ def _parse_tolerance(text: str | None) -> dict[str, Any] | None:
             "upper": first,
             "lower": second,
             "separator": "/" if pair.group("slash") else "",
+            "degree": bool(
+                pair.group("first_degree") or pair.group("second_degree")
+            ),
         }
 
     single = re.fullmatch(
@@ -599,6 +633,30 @@ def parse_engineering_value(
                 "unit": surface.group("unit").upper() if surface.group("unit") else None,
                 "grade": surface.group("grade").upper() if surface.group("grade") else None},
             normalization_steps=normalization_steps)
+
+    diametral_tolerance = _DIAMETRAL_TOLERANCE_WITH_DATUM_RE.fullmatch(value)
+    if diametral_tolerance:
+        return _result(
+            raw_text=raw,
+            normalized_text=normalized,
+            status="complete",
+            kind="gdt",
+            components={
+                **base_components,
+                "tolerance_zone": {
+                    "diameter": True,
+                    "value": diametral_tolerance.group("tolerance"),
+                    "material_condition": diametral_tolerance.group(
+                        "material_condition"
+                    ),
+                },
+                "datums": _DATUM_TOKEN_RE.findall(
+                    diametral_tolerance.group("datum_text")
+                ),
+            },
+            normalization_steps=normalization_steps,
+        )
+
     if (feature_category == "GD&T"
             or (_GDT_TEXT_RE.search(value) and _HAS_DIGIT_RE.search(value))
             or (value.count("|") >= 2 and _HAS_DIGIT_RE.search(value))):
@@ -735,7 +793,7 @@ def parse_engineering_value(
         tolerance = _parse_tolerance(value)
         warnings = (
             ("single_bound_tolerance",)
-            if standalone.group("sign") in {"+", "-"}
+            if tolerance and tolerance.get("mode") == "single_deviation"
             else ()
         )
         return _result(

@@ -325,3 +325,44 @@ def test_hole_repairs_do_not_change_arrows_prose_or_identifiers() -> None:
         assert normalize_page_value_text(text) == text
     for text in ("3 PLACES", "DO NOT SCALE", "REMOVE ALL BURRS 0.2"):
         assert not evaluate_page_value(candidate(text)).accepted
+
+
+def test_stacked_deviations_are_complete_values() -> None:
+    for text in (
+        "Ø33 +0.012 0",
+        "Ø33 -0.05 -0.10",
+        "+0.012 0",
+        "+0.05 -0.05",
+        "-0.05 -0.10",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_stacked_deviation_grammar_does_not_accept_two_plain_numbers() -> None:
+    for text in ("33 0.5", "25 40", "12.5 0.25", "+0.0120.0"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_diametral_tolerance_with_datums_is_a_complete_value() -> None:
+    for text in (
+        "Ø0.02A",
+        "Ø0.02 A",
+        "Ø0.1 A B",
+        "Ø0.3 A B C",
+        "Ø0.02Ⓜ A B",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_datum_grammar_does_not_fuse_an_ordinary_length_and_label() -> None:
+    for text in ("25 A", "0.5 m", "12.5 B", "Ø0.02 a", "Ø0.02 I"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_orphaned_closing_parenthesis_is_guarded_boundary_noise() -> None:
+    assert normalize_page_value_text("Ø20.86)") == "Ø20.86"
+    assert normalize_page_value_text("(20.86)") == "(20.86)"
+    assert normalize_page_value_text("1.00[25.40]") == "1.00[25.40]"
+    assert normalize_page_value_text("ZONE A 25)") == "ZONE A 25)"
