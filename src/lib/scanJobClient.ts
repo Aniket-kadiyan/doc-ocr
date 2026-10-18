@@ -21,6 +21,13 @@ import {
   isOcrDebugDumpEnabled,
   isOcrDebugDumpForce,
 } from "@/lib/ocrDebugDump";
+import {
+  apiRequestError,
+  ApiRequestError,
+  appendRequestReference,
+  fetchWithRequestId,
+  responseRequestId,
+} from "@/lib/requestDiagnostics";
 
 const POLL_INTERVAL_MS = 400;
 
@@ -251,13 +258,16 @@ function scanRequestOptions(): {
 export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
   if (!jobId) throw new Error("Cannot stop a scan before it has started");
 
-  const response = await fetch(
+  const response = await fetchWithRequestId(
     `${getOcrApiUrl()}/ocr/scan-jobs/${encodeURIComponent(jobId)}/cancel`,
-    { method: "POST", cache: "no-store" }
+    { method: "POST", cache: "no-store" },
+    { operation: "scan.cancel" }
   );
   if (!response.ok) {
-    throw new Error(
-      await readError(response, `Could not stop scan: ${response.status}`)
+    throw apiRequestError(
+      response,
+      await readError(response, `Could not stop scan: ${response.status}`),
+      "scan.cancel"
     );
   }
   return toProgress((await response.json()) as ApiScanJobSnapshot);
@@ -323,16 +333,23 @@ export async function runScanJob({
   const createUrl = query
     ? `${baseUrl}/ocr/scan-jobs?${query}`
     : `${baseUrl}/ocr/scan-jobs`;
-  const created = await fetch(createUrl, {
-    method: "POST",
-    headers,
-    body: form,
-  });
+  const created = await fetchWithRequestId(
+    createUrl,
+    {
+      method: "POST",
+      headers,
+      body: form,
+    },
+    { operation: "scan.create" }
+  );
   if (!created.ok) {
-    throw new Error(
-      await readError(created, `Could not start scan: ${created.status}`)
+    throw apiRequestError(
+      created,
+      await readError(created, `Could not start scan: ${created.status}`),
+      "scan.create"
     );
   }
+  const scanRequestId = responseRequestId(created);
 
   let snapshot = (await created.json()) as ApiScanJobSnapshot;
   onProgress?.(toProgress(snapshot, displayScale));
@@ -343,13 +360,16 @@ export async function runScanJob({
     snapshot.status === "cancelling"
   ) {
     await sleep(POLL_INTERVAL_MS);
-    const response = await fetch(
+    const response = await fetchWithRequestId(
       `${baseUrl}/ocr/scan-jobs/${encodeURIComponent(snapshot.job_id)}`,
-      { method: "GET", cache: "no-store" }
+      { method: "GET", cache: "no-store" },
+      { operation: "scan.progress" }
     );
     if (!response.ok) {
-      throw new Error(
-        await readError(response, `Could not read scan progress: ${response.status}`)
+      throw apiRequestError(
+        response,
+        await readError(response, `Could not read scan progress: ${response.status}`),
+        "scan.progress"
       );
     }
     snapshot = (await response.json()) as ApiScanJobSnapshot;
@@ -357,7 +377,16 @@ export async function runScanJob({
   }
 
   if (snapshot.status === "failed") {
-    throw new Error(snapshot.error || "Auto-balloon scan failed");
+    throw new ApiRequestError(
+      appendRequestReference(
+        snapshot.error || "Auto-balloon scan failed",
+        scanRequestId
+      ),
+      {
+        requestId: scanRequestId,
+        operation: "scan.run",
+      }
+    );
   }
   if (snapshot.status === "cancelled") {
     throw new ScanJobCancelledError(

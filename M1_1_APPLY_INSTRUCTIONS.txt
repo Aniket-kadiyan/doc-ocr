@@ -1,0 +1,110 @@
+QTracX M1.1 — Validated Runtime Configuration
+================================================
+
+BASE
+----
+Prepared from origin/MVP1 commit:
+a66404e8525b4eb4acae8f291aed65751039156e
+
+This package does not contain a git commit and nothing has been pushed.
+
+
+BRANCH
+------
+From the repository root in PowerShell:
+
+git switch MVP1
+git pull origin MVP1
+git switch -c m1-1-runtime-config
+
+
+APPLY
+-----
+Extract this ZIP and copy its contents over the repository root. Preserve the
+backend and scripts folders. Do not copy M1_1_APPLY_INSTRUCTIONS.txt into the
+repository unless you want to keep it as project documentation.
+
+Changed files:
+
+  .env.local.example
+  README.md
+  backend/config_env.py
+  backend/main.py
+  backend/test_config_env.py       (new)
+  scripts/run-python-tests.mjs
+
+
+WHAT CHANGED
+------------
+1. Adds one validated RuntimeConfig contract for current and future settings.
+2. Keeps OCR_HOST, OCR_PORT, OCR_RELOAD, OCR_DEVICE and the existing backend
+   launch commands compatible.
+3. Changes the documented/default UI port from 3000 to 3002.
+4. Adds configuration placeholders for the later database, logging and HTTPS
+   milestones. M1.1 does not activate database migration, file logging or TLS.
+5. Rejects malformed ports, booleans, log levels and CORS origins at startup.
+6. Prevents DATABASE_URL credentials from appearing in RuntimeConfig repr or
+   the public configuration summary.
+
+
+LOCAL .env.local
+----------------
+Your existing .env.local is not overwritten by this package.
+
+To use port 3002 now, change or add:
+
+QTRACX_ENV=development
+PORT=3002
+
+Your existing backend and GPU values remain valid, for example:
+
+OCR_HOST=127.0.0.1
+OCR_PORT=8000
+OCR_DEVICE=gpu:0
+OCR_RELOAD=false
+
+Do not add DATABASE_URL or enable HTTPS yet unless you are only reserving the
+values. Those features are implemented in later milestones.
+
+
+FOCUSED TEST
+------------
+From doc-ocr\backend:
+
+.\.venv-gpu\Scripts\python.exe -m unittest -v `
+  test_config_env.py test_ocr_runtime.py
+
+Expected result: 13 tests pass.
+
+
+FULL VERIFICATION
+-----------------
+From the repository root:
+
+npm run verify
+
+Then start the backend using the normal GPU commands and confirm /health:
+
+cd backend
+$env:CUDA_VISIBLE_DEVICES="0"
+$env:OCR_DEVICE="gpu:0"
+$env:OCR_RELOAD="false"
+.\.venv-gpu\Scripts\python.exe main.py
+
+In another PowerShell window:
+
+Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Depth 6
+
+
+COMMIT MESSAGE
+--------------
+feat(config): add validated QTracX runtime settings
+
+Suggested commit commands after verification:
+
+git add .env.local.example README.md backend/config_env.py backend/main.py `
+  backend/test_config_env.py scripts/run-python-tests.mjs
+git commit -m "feat(config): add validated QTracX runtime settings"
+
+After merging this branch back into MVP1, create m1-2-backend-logging from the
+updated MVP1 branch.

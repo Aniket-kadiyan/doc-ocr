@@ -6,6 +6,10 @@ import type {
   ChecksheetSummary,
   ReadingPatch,
 } from "@/types/checksheet";
+import {
+  apiRequestError,
+  fetchWithRequestId,
+} from "@/lib/requestDiagnostics";
 
 const endpoint = (path: string) => `${getOcrApiUrl()}${path}`;
 
@@ -36,10 +40,13 @@ async function responseError(response: Response): Promise<string> {
 
 async function jsonRequest<T>(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  operation = "checksheet.request"
 ): Promise<T> {
-  const response = await fetch(endpoint(path), init);
-  if (!response.ok) throw new Error(await responseError(response));
+  const response = await fetchWithRequestId(endpoint(path), init, { operation });
+  if (!response.ok) {
+    throw apiRequestError(response, await responseError(response), operation);
+  }
   return (await response.json()) as T;
 }
 
@@ -184,11 +191,18 @@ export async function duplicateChecksheet(
 export async function permanentlyDeleteChecksheet(
   checksheetId: string
 ): Promise<void> {
-  const response = await fetch(
+  const response = await fetchWithRequestId(
     endpoint(`/checksheets/${encodeURIComponent(checksheetId)}`),
-    { method: "DELETE" }
+    { method: "DELETE" },
+    { operation: "checksheet.delete" }
   );
-  if (!response.ok) throw new Error(await responseError(response));
+  if (!response.ok) {
+    throw apiRequestError(
+      response,
+      await responseError(response),
+      "checksheet.delete"
+    );
+  }
 }
 
 export function checksheetDocumentUrl(documentId: string): string {

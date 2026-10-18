@@ -12,6 +12,10 @@ import {
 } from "@/components/ReferenceMarker";
 import { checksheetDocumentUrl } from "@/lib/checksheetClient";
 import {
+  apiRequestError,
+  fetchWithRequestId,
+} from "@/lib/requestDiagnostics";
+import {
   checksheetFocusBox,
   checksheetItemCaption,
   isChecksheetReferenceRow,
@@ -126,11 +130,17 @@ export function ChecksheetDrawingPreview({
     setDrawingImage(null);
     void (async () => {
       try {
-        const response = await fetch(checksheetDocumentUrl(document.id), {
-          signal: controller.signal,
-        });
+        const response = await fetchWithRequestId(
+          checksheetDocumentUrl(document.id),
+          { signal: controller.signal },
+          { operation: "checksheet.document" }
+        );
         if (!response.ok) {
-          throw new Error(`Drawing request failed with HTTP ${response.status}.`);
+          throw apiRequestError(
+            response,
+            `Drawing request failed with HTTP ${response.status}.`,
+            "checksheet.document"
+          );
         }
         const blob = await response.blob();
         if (controller.signal.aborted) return;

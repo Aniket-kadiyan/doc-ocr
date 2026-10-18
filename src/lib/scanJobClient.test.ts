@@ -13,29 +13,42 @@ afterEach(() => {
 
 describe("scan job cancellation", () => {
   it("posts to the encoded cancellation endpoint and maps its state", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        job_id: "job/one",
-        status: "cancelling",
-        stage: "cancelling",
-        message: "Stopping after the current OCR operation",
-        percent: 72,
-        completed: 3,
-        total: 5,
-        liveness: "cancelling",
-        result: null,
-      }),
-    }));
+    const fetchMock = vi.fn(async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit
+    ) => {
+      void _input;
+      void _init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          job_id: "job/one",
+          status: "cancelling",
+          stage: "cancelling",
+          message: "Stopping after the current OCR operation",
+          percent: 72,
+          completed: 3,
+          total: 5,
+          liveness: "cancelling",
+          result: null,
+        }),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const progress = await cancelScanJob("job/one");
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/ocr\/scan-jobs\/job%2Fone\/cancel$/),
-      { method: "POST", cache: "no-store" }
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.any(Headers),
+      })
     );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("X-Request-ID")).toBeTruthy();
     expect(progress).toMatchObject({
       jobId: "job/one",
       status: "cancelling",

@@ -1,58 +1,37 @@
-REPLACEMENT M0 PACKAGE — MVP1 f82c907
-======================================
+QTracX M1.3 — Frontend diagnostics and request correlation
+===========================================================
 
-This package replaces the earlier M0 ZIP. Do not use the earlier package.
+Branch: Configuration-and-logging
 
-Correct baseline
-----------------
-  Branch: MVP1
-  Commit: f82c90789d5535434e3f8f9d23a09e59c368c8d5
-  Subject: feat(ocr): add native PDF evidence with OCR provenance
+Prerequisite
+------------
+M1.2 backend structured logging must already be applied and committed.
 
-This baseline also contains the persistent Review/Other candidate lifecycle
-from commit 046f67f. The replacement DrawingViewer preserves scanCandidates,
-native-PDF sourceDocument handling, and recognitionEvidence.
+Apply
+-----
+Copy this folder's contents over the doc-ocr repository root and allow Windows
+to merge folders and replace existing files. Do not revert M1.1 or M1.2.
 
+Test from doc-ocr/backend
+-------------------------
+  .\.venv-gpu\Scripts\python.exe -m unittest -v `
+    test_config_env.py test_app_logging.py `
+    test_client_diagnostics.py test_ocr_runtime.py
 
-Apply over the current erroneous M0 files
------------------------------------------
-1. Extract this replacement ZIP into a temporary folder.
-2. Copy its backend, scripts, and src folders into the doc-ocr repository root.
-3. Allow Windows to merge folders and replace files.
-4. The corrected files can be copied directly over the earlier M0 package.
-5. Review:
+Expected: 21 tests pass.
 
-     git status --short
-     git diff --check
-
-Do not restore the entire repository and do not delete the Review/Other files.
-
-
-Run tests on Windows
---------------------
-From doc-ocr/backend:
-
-  .\.venv-gpu\Scripts\python.exe -m unittest -v test_source_images.py
-
-From the repository root:
-
-  npm run typecheck
+Test from the repository root
+-----------------------------
   npm run lint
+  npm run typecheck
   npm run test:frontend
 
+Expected frontend result: 28 test files and 148 tests pass.
 
-Run the backend
----------------
-From doc-ocr/backend:
-
-  $env:CUDA_VISIBLE_DEVICES="0"
-  $env:OCR_DEVICE="gpu:0"
-  $env:OCR_RELOAD="false"
-  .\.venv-gpu\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
-
-The backend must be running while opening or previewing a TIFF file.
-
+The previously observed six test_symbol_markers.py failures are separate from
+this diagnostics package.
 
 Suggested commit message
 ------------------------
-feat(source): add multi-page TIFF and validated image loading
+  feat(logging): correlate frontend and backend diagnostics
+
