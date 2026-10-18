@@ -1,79 +1,46 @@
-QTracX Milestone 1 — Backend Logging Slice
-===========================================
+QTracX M1.2 Windows logging-test correction
+============================================
 
-Apply this incremental package to the existing branch:
+Branch
+------
+Remain on: Configuration-and-logging
 
-  Configuration-and-logging
+How to apply
+------------
+Copy the backend folder from this package over the repository root.
+Allow Windows to replace:
 
-Expected base commit:
-
-  06b73f50cbe54bd2ba359dca8a9a948f23008b6b
-  feat(config): add validated QTracX runtime settings
-
-Nothing has been committed or pushed by Codex.
-
-
-APPLY TO THE SAME BRANCH
-------------------------
-From the repository root:
-
-git switch Configuration-and-logging
-git pull origin Configuration-and-logging
-
-Extract this ZIP and copy its contents over the repository root while
-preserving the backend and scripts folders. Do not create another branch.
-
-Changed files:
-
-  .gitignore
-  README.md
-  backend/main.py
-  backend/scan_jobs.py
-  scripts/run-python-tests.mjs
-
-New files:
-
-  backend/app_logging.py
   backend/test_app_logging.py
 
+This is an incremental correction for the previously supplied M1.2 package.
+Do not revert the earlier M1.2 files.
 
-FOCUSED TESTS
+What it fixes
 -------------
-From doc-ocr\backend:
+The three logging tests now close the RotatingFileHandler before their
+TemporaryDirectory is removed. Windows locks open log files, which caused
+WinError 32 even though the actual logging assertions succeeded.
 
-.\.venv-gpu\Scripts\python.exe -m unittest -v `
-  test_config_env.py test_app_logging.py test_ocr_runtime.py
+Validation
+----------
+From doc-ocr/backend:
 
-Expected: 18 tests pass.
+  .\.venv-gpu\Scripts\python.exe -m unittest -v `
+    test_config_env.py test_app_logging.py test_ocr_runtime.py
 
-From the repository root:
+Expected result: Ran 18 tests ... OK
 
-npm run verify
+Then, from the repository root:
 
+  npm run verify
 
-RUNTIME CHECK
--------------
-Start the backend normally. In another PowerShell window run:
+The six test_symbol_markers.py failures shown in the supplied output are
+separate from this logging change and are not modified by this package.
 
-$response = Invoke-WebRequest http://127.0.0.1:8000/health
-$response.StatusCode
-$response.Headers["X-Request-ID"]
-Get-Content .\backend\logs\qtracx-backend.log -Tail 20
+Commit
+------
+Do not create a separate commit for this correction if the M1.2 commit has not
+yet been made. Include it in:
 
-Expected:
+  feat(logging): add structured backend diagnostics
 
-  StatusCode is 200.
-  X-Request-ID contains a UUID.
-  The log contains backend_starting and backend_ready events.
-
-Run an Auto Balloon scan and check the log again. Events for that scan should
-share one job_id and include scan_job_queued, scan_job_started, scan_job_stage,
-and a terminal scan_job_completed, scan_job_failed, or scan_job_cancelled event.
-
-
-COMMIT MESSAGE
---------------
-feat(logging): add structured backend diagnostics
-
-After testing, commit and push this to Configuration-and-logging. The frontend
-diagnostic slice will continue on that same branch.
