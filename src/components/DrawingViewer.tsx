@@ -42,7 +42,9 @@ import {
   type SectionQueuePosition,
 } from "@/lib/sectionScanQueue";
 import {
+  completedReferencePages,
   referenceScanNotices,
+  referenceTablesAfterPageResult,
   runReferenceScanQueue,
 } from "@/lib/referenceScanQueue";
 import { deriveRange } from "@/lib/valueFields";
@@ -1391,13 +1393,12 @@ export function DrawingViewer() {
             if (projectIdRef.current !== projectAtStart) {
               throw new Error("The drawing changed before references were saved.");
             }
-            const otherPages = referenceTablesRef.current.filter(
-              (table) => table.page !== page
-            );
             await persistReferenceTables(
-              result.found && result.table
-                ? [...otherPages, { ...result.table, page }]
-                : otherPages,
+              referenceTablesAfterPageResult(
+                referenceTablesRef.current,
+                page,
+                result
+              ),
               projectAtStart
             );
           },
@@ -1463,9 +1464,7 @@ export function DrawingViewer() {
       if (result.completedSections > 0) {
         setScanSummary(result.summary);
         await runAutomaticReferencePass(
-          sections
-            .slice(0, result.completedSections)
-            .map((section) => section.page)
+          completedReferencePages(sections, result.completedSections)
         );
       }
     } finally {

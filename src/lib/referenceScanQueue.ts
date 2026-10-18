@@ -1,4 +1,8 @@
-import type { ReferencePointsResult } from "@/types/referencePoint";
+import { normalizePageReferenceTables } from "@/lib/referenceValues";
+import type {
+  PageReferenceTable,
+  ReferencePointsResult,
+} from "@/types/referencePoint";
 
 export type ReferenceScanOutcome =
   | {
@@ -9,6 +13,37 @@ export type ReferenceScanOutcome =
     }
   | { page: number; status: "not_found"; tableCount: number }
   | { page: number; status: "failed"; error: string };
+
+/**
+ * Return each page represented by a successfully completed section exactly
+ * once. A failed or cancelled section and everything queued after it are not
+ * included because `completedSections` is the queue's committed prefix.
+ */
+export function completedReferencePages(
+  sections: readonly { page: number }[],
+  completedSections: number
+): number[] {
+  const completedCount = Math.max(
+    0,
+    Math.min(sections.length, Math.floor(completedSections))
+  );
+  return [...new Set(sections.slice(0, completedCount).map(({ page }) => page))]
+    .filter((page) => Number.isInteger(page) && page > 0);
+}
+
+/** Replace, or explicitly clear, the saved reference result for one page. */
+export function referenceTablesAfterPageResult(
+  current: readonly PageReferenceTable[],
+  page: number,
+  result: ReferencePointsResult
+): PageReferenceTable[] {
+  const otherPages = current.filter((table) => table.page !== page);
+  return normalizePageReferenceTables(
+    result.found && result.table
+      ? [...otherPages, { ...result.table, page }]
+      : otherPages
+  );
+}
 
 /**
  * Read each page once and in order. A failed reference pass is recorded and
