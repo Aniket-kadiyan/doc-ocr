@@ -93,6 +93,7 @@ describe("inspection workbook", () => {
     const worksheet = workbook.getWorksheet("Checksheet");
     expect(worksheet).toBeDefined();
     if (!worksheet) throw new Error("Checksheet worksheet was not created.");
+    expect(workbook.getWorksheet("References")).toBeUndefined();
 
     expect(worksheet.getCell("C1").value).toBe("Senior Flexonics");
     expect(worksheet.getCell("A2").value).toBe("Punch Inspection");
@@ -147,7 +148,7 @@ describe("inspection workbook", () => {
     expect(worksheet.getCell("I4").value).toBe("C");
   });
 
-  it("appends X/Y/Z reference values and a reference-only image", async () => {
+  it("writes reference values and images to a separate worksheet", async () => {
     const workbook = await buildInspectionWorkbook({
       annotations: [
         makeAnnotation({
@@ -170,10 +171,18 @@ describe("inspection workbook", () => {
       },
     });
     const worksheet = workbook.getWorksheet("Checksheet");
+    const referenceWorksheet = workbook.getWorksheet("References");
     expect(worksheet).toBeDefined();
+    expect(referenceWorksheet).toBeDefined();
     if (!worksheet) throw new Error("Checksheet worksheet was not created.");
+    if (!referenceWorksheet) {
+      throw new Error("References worksheet was not created.");
+    }
 
-    expect(workbook.worksheets).toHaveLength(1);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      "Checksheet",
+      "References",
+    ]);
     expect(worksheet.getRow(8).values).toEqual([
       undefined,
       "1",
@@ -185,7 +194,13 @@ describe("inspection workbook", () => {
       "",
       "",
     ]);
-    expect(worksheet.getRow(9).values).toEqual([
+    expect(worksheet.getColumn(2).values).not.toContain("A_X");
+    expect(worksheet.getImages()).toHaveLength(1);
+
+    expect(referenceWorksheet.getCell("A2").value).toBe(
+      "Reference export — References"
+    );
+    expect(referenceWorksheet.getRow(8).values).toEqual([
       undefined,
       "2",
       "A_X",
@@ -196,7 +211,7 @@ describe("inspection workbook", () => {
       "",
       "",
     ]);
-    expect(worksheet.getRow(10).values).toEqual([
+    expect(referenceWorksheet.getRow(9).values).toEqual([
       undefined,
       "3",
       "A_Y",
@@ -207,7 +222,7 @@ describe("inspection workbook", () => {
       "",
       "",
     ]);
-    expect(worksheet.getRow(11).values).toEqual([
+    expect(referenceWorksheet.getRow(10).values).toEqual([
       undefined,
       "4",
       "A_Z",
@@ -218,20 +233,21 @@ describe("inspection workbook", () => {
       "",
       "",
     ]);
-    expect(worksheet.getImages()).toHaveLength(2);
+    expect(referenceWorksheet.getImages()).toHaveLength(1);
 
-    const captions: string[] = [];
-    worksheet.eachRow((row) => {
-      row.eachCell((cell) => {
-        if (typeof cell.value === "string" && cell.value.startsWith("Page ")) {
-          captions.push(cell.value);
-        }
+    const captions = (sheet: typeof worksheet): string[] => {
+      const values: string[] = [];
+      sheet.eachRow((row) => {
+        row.eachCell((cell) => {
+          if (typeof cell.value === "string" && cell.value.startsWith("Page ")) {
+            values.push(cell.value);
+          }
+        });
       });
-    });
-    expect(captions).toEqual([
-      "Page 1 — Balloons",
-      "Page 1 — References",
-    ]);
+      return values;
+    };
+    expect(captions(worksheet)).toEqual(["Page 1 — Balloons"]);
+    expect(captions(referenceWorksheet)).toEqual(["Page 1 — References"]);
 
     const buffer = await workbook.xlsx.writeBuffer();
     expect(buffer.byteLength).toBeGreaterThan(1000);

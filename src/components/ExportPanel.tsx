@@ -502,7 +502,7 @@ export function ExportPanel({
           >
             <span className="font-medium">Excel</span>
             <span className="block text-[11px] text-slate-400">
-              Checksheet with balloon-only and reference-only images
+              Checksheet and separate reference worksheet
             </span>
           </button>
           <button

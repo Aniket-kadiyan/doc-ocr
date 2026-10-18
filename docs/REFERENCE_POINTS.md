@@ -9,8 +9,9 @@ Reference points remain separate from the dimension pipeline:
 - they do not become balloons or scan candidates;
 - they do not receive tolerances, methods, or tools;
 - one result per page is saved in the local project and portable project file;
-- Excel exports append X/Y/Z values after balloons and include a separate
-  reference-only drawing image; other inspection exports remain unchanged;
+- Excel exports place the X/Y/Z values and reference-only drawing images on a
+  dedicated `References` worksheet in the same workbook; other inspection
+  exports remain unchanged;
 - checksheet snapshots append X/Y/Z rows after the balloon rows and retain the
   point name, axis, coordinate row, name cell, and every detected marker;
 - a point read from the table but not located in a view is returned in
