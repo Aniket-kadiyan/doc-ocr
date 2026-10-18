@@ -6,12 +6,24 @@ import { Image as KonvaImage, Layer, Rect, Stage } from "react-konva";
 import type Konva from "konva";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Balloon } from "@/components/Balloon";
+import {
+  ReferenceMarker,
+  referenceTagSize,
+} from "@/components/ReferenceMarker";
 import { checksheetDocumentUrl } from "@/lib/checksheetClient";
+import {
+  checksheetFocusBox,
+  checksheetItemCaption,
+  isChecksheetReferenceRow,
+  referenceDisplayCoordinates,
+} from "@/lib/checksheetReference";
 import {
   loadImageFile,
   loadPdfDocument,
   renderPdfPage,
 } from "@/lib/pdfLoader";
+import { referenceColor } from "@/lib/referenceColors";
+import { layoutReferenceTags } from "@/lib/referenceTagLayout";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetRunResponse, ChecksheetRow } from "@/types/checksheet";
 
@@ -60,13 +72,15 @@ function focusTransform(
   page: { width: number; height: number },
   row: ChecksheetRow
 ): Transform {
+  const focusBox = checksheetFocusBox(row);
+  const reference = isChecksheetReferenceRow(row);
   const contextWidth = Math.min(
     page.width,
-    Math.max(280, row.bbox.width * 5.5)
+    Math.max(280, focusBox.width * (reference ? 1.25 : 5.5))
   );
   const contextHeight = Math.min(
     page.height,
-    Math.max(190, row.bbox.height * 7)
+    Math.max(190, focusBox.height * (reference ? 1.4 : 7))
   );
   const scale = Math.max(
     0.05,
@@ -76,8 +90,8 @@ function focusTransform(
       4
     )
   );
-  const centerX = row.bbox.x + row.bbox.width / 2;
-  const centerY = row.bbox.y + row.bbox.height / 2;
+  const centerX = focusBox.x + focusBox.width / 2;
+  const centerY = focusBox.y + focusBox.height / 2;
   return {
     scale,
     x: viewport.width / 2 - centerX * scale,
@@ -224,7 +238,7 @@ export function ChecksheetDrawingPreview({
   }, [expanded]);
 
   const annotation = useMemo<Annotation | null>(() => {
-    if (!row) return null;
+    if (!row || isChecksheetReferenceRow(row)) return null;
     return {
       id: row.annotation_id,
       number: row.balloon_number,
@@ -243,6 +257,36 @@ export function ChecksheetDrawingPreview({
       tool: row.tool,
     };
   }, [row]);
+
+  const referenceCoordinates = useMemo(
+    () => (row ? referenceDisplayCoordinates(row) : []),
+    [row]
+  );
+  const selectedReference =
+    row && isChecksheetReferenceRow(row) ? row.reference : null;
+  const selectedReferenceColor = selectedReference
+    ? referenceColor(selectedReference.point_index)
+    : null;
+  const referenceTagPlacements = useMemo(() => {
+    if (!selectedReference || selectedReference.markers.length === 0) {
+      return new Map<string, { x: number; y: number }>();
+    }
+    const size = referenceTagSize(referenceCoordinates);
+    return layoutReferenceTags(
+      selectedReference.markers.map((marker, index) => ({
+        id: `marker:${index}`,
+        glyph: marker.bbox,
+      })),
+      {
+        width: size.width / transform.scale,
+        height: size.height / transform.scale,
+        gap: 7 / transform.scale,
+        bounds: pageSize,
+      }
+    );
+  }, [pageSize, referenceCoordinates, selectedReference, transform.scale]);
+
+  const itemCaption = row ? checksheetItemCaption(row) : "No row selected";
 
   const zoom = useCallback(
     (factor: number) => {
@@ -272,7 +316,7 @@ export function ChecksheetDrawingPreview({
     >
       {!row && (
         <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500">
-          Select a checksheet row to focus its drawing balloon.
+          Select a checksheet row to review its drawing location.
         </div>
       )}
       {row && loading && (
@@ -285,7 +329,7 @@ export function ChecksheetDrawingPreview({
           {error}
         </div>
       )}
-      {drawingImage && annotation && (
+      {drawingImage && row && (
         <Stage
           ref={stageRef}
           width={viewport.width}
@@ -332,20 +376,68 @@ export function ChecksheetDrawingPreview({
               height={pageSize.height}
               listening={false}
             />
-            <Rect
-              {...(annotation.orientedBox ?? annotation.bbox)}
-              rotation={annotation.orientedBox?.rotation ?? 0}
-              stroke="#dc2626"
-              strokeWidth={2.5 / transform.scale}
-              dash={[7 / transform.scale, 4 / transform.scale]}
-              listening={false}
-            />
-            <Balloon
-              annotation={annotation}
-              scale={transform.scale}
-              selected
-              listening={false}
-            />
+            {annotation && (
+              <>
+                <Rect
+                  {...(annotation.orientedBox ?? annotation.bbox)}
+                  rotation={annotation.orientedBox?.rotation ?? 0}
+                  stroke="#dc2626"
+                  strokeWidth={2.5 / transform.scale}
+                  dash={[7 / transform.scale, 4 / transform.scale]}
+                  listening={false}
+                />
+                <Balloon
+                  annotation={annotation}
+                  scale={transform.scale}
+                  selected
+                  listening={false}
+                />
+              </>
+            )}
+            {selectedReference && selectedReferenceColor && (
+              <>
+                <Rect
+                  {...selectedReference.row_box}
+                  fill={selectedReferenceColor.wash}
+                  stroke={selectedReferenceColor.fill}
+                  strokeWidth={2 / transform.scale}
+                  listening={false}
+                />
+                <Rect
+                  {...selectedReference.name_box}
+                  stroke={selectedReferenceColor.fill}
+                  strokeWidth={3 / transform.scale}
+                  dash={[6 / transform.scale, 3 / transform.scale]}
+                  listening={false}
+                />
+                {selectedReference.markers.map((marker, index) => {
+                  const placement = referenceTagPlacements.get(
+                    `marker:${index}`
+                  ) ?? {
+                    x:
+                      marker.bbox.x +
+                      marker.bbox.width +
+                      7 / transform.scale,
+                    y: marker.bbox.y,
+                  };
+                  return (
+                    <ReferenceMarker
+                      key={`${row.annotation_id}:marker:${index}`}
+                      symbol={selectedReference.symbol}
+                      coordinates={referenceCoordinates}
+                      marker={marker}
+                      placement={placement}
+                      color={selectedReferenceColor}
+                      scale={transform.scale}
+                      selected
+                      dimmed={false}
+                      listening={false}
+                      onSelect={() => undefined}
+                    />
+                  );
+                })}
+              </>
+            )}
           </Layer>
         </Stage>
       )}
@@ -362,7 +454,7 @@ export function ChecksheetDrawingPreview({
                 {document.file_name}
               </p>
               <p className="text-xs text-slate-500">
-                {row ? `Balloon ${row.balloon_number} · Page ${row.page}` : "No row selected"}
+                {row ? `${itemCaption} · Page ${row.page}` : itemCaption}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -378,7 +470,9 @@ export function ChecksheetDrawingPreview({
                 onClick={() => applyView("focus")}
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               >
-                Focus Balloon
+                {row && isChecksheetReferenceRow(row)
+                  ? "Focus Reference"
+                  : "Focus Balloon"}
               </button>
               <button
                 type="button"
@@ -419,7 +513,7 @@ export function ChecksheetDrawingPreview({
         <div>
           <p className="text-sm font-semibold text-slate-800">Drawing preview</p>
           <p className="text-xs text-slate-400">
-            {row ? `Balloon ${row.balloon_number} · Page ${row.page}` : "Select a row"}
+            {row ? `${itemCaption} · Page ${row.page}` : "Select a row"}
           </p>
         </div>
         <button

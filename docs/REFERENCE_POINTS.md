@@ -14,13 +14,17 @@ Reference points remain separate from the dimension pipeline:
   exports remain unchanged;
 - checksheet snapshots append X/Y/Z rows after the balloon rows and retain the
   point name, axis, coordinate row, name cell, and every detected marker;
+- checksheet review identifies those rows with a `REF` badge, keeps missing
+  axes visible as `Not detected`, and links the active row to its source table
+  row, name cell, marker rings, and coordinate tags without drawing a balloon;
 - a point read from the table but not located in a view is returned in
   `unmatchedSymbols` instead of being discarded.
 
 Each saved point has a shared export-neutral representation with exactly three
 rows in X, Y, Z order. Missing axes remain explicit blank values rather than
-being discarded. Checksheet preview and auto-balloon integration are handled by
-later milestones.
+being discarded in storage and export, while checksheet review presents those
+blanks as `Not detected`. Auto-balloon integration is handled by the next
+milestone.
 
 ## Endpoint
 

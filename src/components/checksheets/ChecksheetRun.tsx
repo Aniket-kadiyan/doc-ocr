@@ -10,6 +10,7 @@ import {
   completeChecksheetRun,
   getChecksheetRun,
 } from "@/lib/checksheetClient";
+import { checksheetItemCaption } from "@/lib/checksheetReference";
 import { isNoteText } from "@/lib/notes";
 import type { ChecksheetRunResponse, ChecksheetRow } from "@/types/checksheet";
 import {
@@ -289,7 +290,7 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-600">
               {rows.length} inspection {rows.length === 1 ? "row" : "rows"}
-              {activeRow && ` · Active balloon ${activeRow.balloon_number}`}
+              {activeRow && ` · Active ${checksheetItemCaption(activeRow)}`}
             </p>
             <div className="flex items-center gap-2">
               <button

@@ -1,4 +1,5 @@
 import { buildChecksheetRowChartData } from "@/lib/checksheetChartData";
+import { checksheetItemCaption } from "@/lib/checksheetReference";
 import type {
   ChecksheetColumn,
   ChecksheetRow,
@@ -50,6 +51,7 @@ export function ChecksheetRowCharts({
   row,
 }: ChecksheetRowChartsProps) {
   const chart = buildChecksheetRowChartData(row, columns);
+  const itemCaption = checksheetItemCaption(row);
   const { min, max } = chart.domain;
   const yTicks = Array.from(
     { length: 5 },
@@ -123,7 +125,7 @@ export function ChecksheetRowCharts({
             <div>
               <h2 className="text-sm font-semibold text-slate-800">X̄ chart</h2>
               <p className="text-xs text-slate-400">
-                Balloon {row.balloon_number} · {chart.readings.length} numeric reading
+                {itemCaption} · {chart.readings.length} numeric reading
                 {chart.readings.length === 1 ? "" : "s"}
               </p>
             </div>
@@ -151,7 +153,7 @@ export function ChecksheetRowCharts({
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             className="block h-auto w-full"
             role="img"
-            aria-label={`X-bar chart for balloon ${row.balloon_number}`}
+            aria-label={`X-bar chart for ${itemCaption.toLowerCase()}`}
           >
             {acceptableBand("horizontal")}
             {yTicks.map((tick) => {
@@ -309,7 +311,7 @@ export function ChecksheetRowCharts({
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             className="block h-auto w-full"
             role="img"
-            aria-label={`Histogram for balloon ${row.balloon_number}`}
+            aria-label={`Histogram for ${itemCaption.toLowerCase()}`}
           >
             {acceptableBand("vertical")}
             {histogramYTicks.map((tick) => {
