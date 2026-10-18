@@ -89,7 +89,10 @@ STEP_CATALOG: dict[str, dict[str, Any]] = {
             "phi_detected": "true when diameter_score ≥ 0.32",
             "phi_score": "0..1 confidence from circle+slash template/Hough (best strip)",
             "phi_strips": "per-strip scores (vertical_bottom/top, oriented_*_prefix)",
-            "pm_scores": "± template match scores on prefix vs body (threshold 0.34)",
+            "pm_scores": (
+                "± template match scores on ink-scoped prefix vs body "
+                "(threshold 0.60)"
+            ),
             "degree_detected": "small ring in upper band without slash (° not Ø)",
             "prefix_ocr": "Paddle read of prefix_clahe only (often 'O', '0', or empty)",
             "prefix_hints": "symbols inferred from prefix_ocr text",

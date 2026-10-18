@@ -1,0 +1,243 @@
+{
+  "note": "Real CAD-rendered crops from the repository's own drawing. has_plus_minus is ground truth taken from the glyph visible in the crop.",
+  "crops": [
+    {
+      "file": "pos_0_30_3.png",
+      "has_plus_minus": true,
+      "ocr_text": "30\u00b0\u00b13\u00b0",
+      "size": [
+        108,
+        51
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 214.0,
+        "y": 431.0,
+        "width": 108.0,
+        "height": 51.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_1_30_3.png",
+      "has_plus_minus": true,
+      "ocr_text": "30\u00b0\u00b13\u00b0",
+      "size": [
+        106,
+        53
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1395.0,
+        "y": 378.0,
+        "width": 106.0,
+        "height": 53.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_2_3_41_0_30.png",
+      "has_plus_minus": true,
+      "ocr_text": "3,41\u00b10.30",
+      "size": [
+        139,
+        42
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1331.0,
+        "y": 135.0,
+        "width": 139.0,
+        "height": 42.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_3_2_02_0_15.png",
+      "has_plus_minus": true,
+      "ocr_text": "\u00d82.02\u00b10.15",
+      "size": [
+        42,
+        142
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 60.0,
+        "y": 852.0,
+        "width": 42.0,
+        "height": 142.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_4_12_3.png",
+      "has_plus_minus": true,
+      "ocr_text": "12\u00b0\u00b13",
+      "size": [
+        107,
+        57
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1226.0,
+        "y": 233.0,
+        "width": 107.0,
+        "height": 57.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_5_2_25_0_20.png",
+      "has_plus_minus": true,
+      "ocr_text": "\u00d82.25\u00b10.20",
+      "size": [
+        43,
+        144
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1676.0,
+        "y": 348.0,
+        "width": 43.0,
+        "height": 144.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "pos_6_3_81_0_20.png",
+      "has_plus_minus": true,
+      "ocr_text": "\u00d83.81\u00b10.20",
+      "size": [
+        44,
+        143
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 64.0,
+        "y": 349.0,
+        "width": 44.0,
+        "height": 143.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_0_3_245.png",
+      "has_plus_minus": false,
+      "ocr_text": "3,245",
+      "size": [
+        101,
+        47
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 2143.0,
+        "y": 1022.0,
+        "width": 101.0,
+        "height": 47.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_1_203_20.png",
+      "has_plus_minus": false,
+      "ocr_text": "\u00d8203.20",
+      "size": [
+        47,
+        144
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1181.0,
+        "y": 1053.0,
+        "width": 47.0,
+        "height": 144.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_2_32_204011.png",
+      "has_plus_minus": false,
+      "ocr_text": "32\u00b0204011",
+      "size": [
+        157,
+        46
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 906.0,
+        "y": 1125.0,
+        "width": 157.0,
+        "height": 46.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_3_50_30NOM.png",
+      "has_plus_minus": false,
+      "ocr_text": "50,30NOM.",
+      "size": [
+        104,
+        72
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 2011.0,
+        "y": 94.0,
+        "width": 104.0,
+        "height": 72.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_4_45.png",
+      "has_plus_minus": false,
+      "ocr_text": "45\u00b0",
+      "size": [
+        128,
+        70
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1591.0,
+        "y": 709.0,
+        "width": 128.0,
+        "height": 70.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_5_R1_50.png",
+      "has_plus_minus": false,
+      "ocr_text": "R1,50",
+      "size": [
+        102,
+        97
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 1587.0,
+        "y": 115.0,
+        "width": 102.0,
+        "height": 97.0
+      },
+      "render_width_px": 2924
+    },
+    {
+      "file": "neg_6_R5_00.png",
+      "has_plus_minus": false,
+      "ocr_text": "R5.00",
+      "size": [
+        103,
+        97
+      ],
+      "source": "TS2 32224 CUP TURNING DRAWING.pdf page 1",
+      "bbox": {
+        "x": 58.0,
+        "y": 130.0,
+        "width": 103.0,
+        "height": 97.0
+      },
+      "render_width_px": 2924
+    }
+  ]
+}

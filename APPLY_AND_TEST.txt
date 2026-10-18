@@ -1,64 +1,76 @@
-QTracX selective integration SI-2.3
+QTracX selective integration SI-2.4
 ==================================
 
 Purpose
 -------
-Prevent nearby DETAIL, SECTION, and SCALE captions from hiding drawing
-dimensions. Direct caption text and genuine split-caption fragments remain
-excluded. Valid values continue to the balloon workflow; malformed numeric
-values continue to Reviews through the existing invalid-value disposition.
+Correct the visual plus/minus detector without changing OCR text, native PDF
+text extraction, dimension composition, page filtering, or export.
+
+The previous template used the opposite polarity from the processed drawing
+ink and scored the padded background. This package:
+
+* matches the template polarity to the processed image;
+* crops matching to the detected ink rather than the white page border;
+* uses template sizes relative to the ink height;
+* raises the operating threshold to the calibrated high-precision value 0.60;
+* adds real positive and negative CAD crops as regression fixtures.
 
 Expected baseline
 -----------------
 Branch: selective-integration
-Commit: 3f4bc95730d8b019e3409b667c8a6a74b84f33f6
+Apply after SI-2.3 (caption proximity safety).
+
+At package creation, the remote branch still pointed to:
+3f4bc95730d8b019e3409b667c8a6a74b84f33f6
+
+SI-2.4 touches different files from SI-2.3, so applying it after the SI-2.3
+package does not overwrite the previous milestone.
 
 Files in this package
 ---------------------
-backend/page_value_filters.py
-backend/test_page_value_filters.py
+backend/symbol_vision.py
+backend/debug_steps_catalog.py
+backend/test_plus_minus_vision.py
+backend/benchmarks/fixtures/plus_minus/*
 
 Apply on Windows PowerShell
 ---------------------------
 1. Open the doc-ocr repository root in PowerShell.
-2. Confirm you are on selective-integration and have no uncommitted changes:
+2. Confirm you are on selective-integration and review local state:
 
    git status --short --branch
 
-3. Extract this ZIP over the repository root and allow the two files above to
-   be replaced. From PowerShell, for example:
+3. Extract this ZIP over the repository root:
 
-   Expand-Archive -Path "<download-folder>\QTracX_SI2_3_caption_proximity_safety.zip" `
+   Expand-Archive -Path "<download-folder>\QTracX_SI2_4_plus_minus_vision.zip" `
      -DestinationPath . -Force
 
-4. Review the exact changes:
+4. Review this milestone only:
 
-   git diff -- backend/page_value_filters.py backend/test_page_value_filters.py
+   git diff -- backend/symbol_vision.py backend/debug_steps_catalog.py
+   git status --short backend/test_plus_minus_vision.py backend/benchmarks/fixtures/plus_minus
 
 Tests
 -----
-Run from doc-ocr\backend:
+Run from doc-ocr\backend using the GPU environment, which contains OpenCV:
 
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_page_value_filters.py `
-     test_engineering_value_parser.py `
-     test_engineering_disposition.py `
-     test_page_layout.py `
-     test_angle_utils.py
+     test_plus_minus_vision.py
 
-Optional wider regression set:
+The dedicated suite should execute the synthetic checks and all 14 real crop
+fixtures. It must not be skipped because cv2 is required for this milestone.
+
+Then run the adjacent OCR regressions:
 
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_page_layout.py `
-     test_page_value_filters.py `
-     test_engineering_value_parser.py `
-     test_engineering_disposition.py `
-     test_feature_classifier.py `
-     test_feature_rules.py `
-     test_angle_utils.py
+     test_plus_minus_vision.py `
+     test_phi_evidence.py `
+     test_compose_minus.py `
+     test_page_candidate_recovery.py `
+     test_ocr_runtime.py
 
 Suggested commit message
 ------------------------
-fix(ocr): prevent view captions from hiding dimensions
+fix(ocr): correct plus-minus visual detection
 
 This package does not contain or create a Git commit.
