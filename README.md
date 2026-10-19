@@ -106,6 +106,17 @@ does not accept error messages, stack traces, drawing values, filenames,
 browser URLs, or uploaded content. Client reporting is rate-limited and never
 interrupts the drawing workflow if the backend itself is unavailable.
 
+## Graphical GD&T frames in Auto Balloon
+
+Set `GDT_PAGE_SCAN_ENABLED=1` in `.env.local` and restart the backend to add
+graphically detected feature-control frames to whole-page Auto Balloon. The
+existing native-PDF/text-first and OCR scan completes first. The GD&T pass then
+reads only detected frame compartments, preserves exact native text as the
+preferred evidence, and publishes each complete frame as one balloon. An
+uncertain symbol, unreadable or implausible tolerance, or native/OCR numeric
+conflict is retained under Reviews. The `/health` response reports the resolved
+setting as `gdt_page_scan_enabled`.
+
 ## Internal checksheets
 
 Choose **Export → Checksheet / Web** after ballooning a drawing. Enter a

@@ -20,6 +20,7 @@ def test_default_thresholds_preserve_review_band(monkeypatch) -> None:
 
 def test_environment_overrides_are_loaded(monkeypatch) -> None:
     monkeypatch.setenv("GDT_ENABLED", "false")
+    monkeypatch.setenv("GDT_PAGE_SCAN_ENABLED", "true")
     monkeypatch.setenv("GDT_ACCEPT_CONFIDENCE", "0.73")
     monkeypatch.setenv("GDT_AMBIGUOUS_CONFIDENCE", "0.51")
     monkeypatch.setenv("GDT_MIN_GLYPH_PX", "12")
@@ -27,6 +28,7 @@ def test_environment_overrides_are_loaded(monkeypatch) -> None:
 
     config = gdt_config.load()
     assert config.enabled is False
+    assert config.page_scan_enabled is True
     assert config.accept_confidence == 0.73
     assert config.ambiguous_confidence == 0.51
     assert config.min_glyph_px == 12
@@ -60,5 +62,6 @@ def test_config_cache_can_be_reset(monkeypatch) -> None:
 def test_config_serializes_as_plain_data() -> None:
     payload = gdt_config.GdtConfig().to_dict()
     assert payload["enabled"] is True
+    assert payload["page_scan_enabled"] is False
     assert payload["accept_confidence"] == 0.62
     assert payload["tile_px"] == 1400

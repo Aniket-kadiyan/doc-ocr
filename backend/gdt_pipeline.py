@@ -7,11 +7,12 @@ rules, and returns one structured result in the page's own coordinates.
 
 Where it sits
 -------------
-It is **additive**. ``ocr_pipeline`` keeps doing exactly what it did; this runs
-alongside and its output arrives in new response fields. Nothing here changes
-an existing contract, and a failure here degrades the GD&T section of a
-response to an error record rather than failing the document — which is what
-the brief asks for and what a local operator mid-inspection needs.
+It is **additive**. ``ocr_pipeline`` keeps doing exactly what it did. The
+production whole-page route calls this through ``gdt_scan_integration`` only
+after native-PDF/text-first and raster-OCR results have been resolved, and only
+when ``GDT_PAGE_SCAN_ENABLED`` is on. A failure there retains the original scan
+and adds a diagnostic error record rather than failing the document — which is
+what the brief asks for and what a local operator mid-inspection needs.
 
 Two paths, one annotation
 -------------------------

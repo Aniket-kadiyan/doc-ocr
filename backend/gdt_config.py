@@ -42,6 +42,12 @@ class GdtConfig:
     #: Run the GD&T pass at all.
     enabled: bool = True
 
+    #: Add graphical feature-control frames to the production whole-page
+    #: auto-balloon scan.  This stays separate from ``enabled`` so the
+    #: standalone detector and its benchmark can be exercised without
+    #: changing a user's scan results before the integration is validated.
+    page_scan_enabled: bool = False
+
     #: Publish a named symbol at or above this confidence.
     accept_confidence: float = 0.62
     #: Report nothing at all below this.
@@ -90,6 +96,9 @@ def load() -> GdtConfig:
     defaults = GdtConfig()
     return GdtConfig(
         enabled=get_bool("GDT_ENABLED", defaults.enabled),
+        page_scan_enabled=get_bool(
+            "GDT_PAGE_SCAN_ENABLED", defaults.page_scan_enabled
+        ),
         accept_confidence=_get_float(
             "GDT_ACCEPT_CONFIDENCE", defaults.accept_confidence
         ),

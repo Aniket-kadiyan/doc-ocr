@@ -44,6 +44,10 @@ from app_logging import (
 )
 from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
+from gdt_scan_integration import (
+    augment_page_scan_result,
+    page_scan_enabled as gdt_page_scan_enabled,
+)
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -353,6 +357,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         **pipeline.status,
+        "gdt_page_scan_enabled": gdt_page_scan_enabled(),
         "debug_dump": dump_status(),
         "ocr_workers": workers,
     }
@@ -566,6 +571,7 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "structured_symbol_stats": dict(seg.get("structured_symbol_stats", {})),
         "engineering_parse_stats": dict(seg.get("engineering_parse_stats", {})),
         "engineering_disposition_stats": dict(seg.get("engineering_disposition_stats", {})),
+        "gdt_integration": dict(seg.get("gdt_integration", {})),
         "regions": regions,
         "review_candidates": review_candidates,
         "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
@@ -1077,6 +1083,57 @@ async def create_scan_job(
                 )
                 if native_seg is not None:
                     seg = merge_native_and_ocr_results(native_seg, seg)
+
+            if gdt_page_scan_enabled():
+                report_progress(
+                    stage="gdt",
+                    message="Detecting graphical feature-control frames",
+                    percent=99,
+                    completed=0,
+                    total=1,
+                    candidate_count=int(seg.get("eligible_count", 0)),
+                    operation_label="GD&T frame detection",
+                )
+
+                def recognize_gdt_compartment(
+                    crop: Image.Image,
+                ) -> tuple[str, float]:
+                    # This is deliberately lazy. A native-PDF page still skips
+                    # full-page raster OCR; only a visually detected frame's
+                    # small compartments reach the existing recognizer.
+                    recognized = get_pipeline().recognize(
+                        crop,
+                        compute_text_bbox=False,
+                        max_paddle_predictions=3,
+                        allow_prefix_ocr=False,
+                    )
+                    return (
+                        str(recognized.get("text") or ""),
+                        float(recognized.get("confidence") or 0.0),
+                    )
+
+                seg = augment_page_scan_result(
+                    image,
+                    seg,
+                    ocr_fn=recognize_gdt_compartment,
+                    page=page,
+                    existing_value_boxes=saved_value_boxes,
+                )
+                integration = dict(seg.get("gdt_integration") or {})
+                report_progress(
+                    stage="gdt",
+                    message=(
+                        f"Added {int(integration.get('published_frame_count', 0))} "
+                        "feature-control frames"
+                        if integration.get("status") == "completed"
+                        else "GD&T frame detection was unavailable; kept the original scan"
+                    ),
+                    percent=99,
+                    completed=1,
+                    total=1,
+                    candidate_count=int(seg.get("eligible_count", 0)),
+                    operation_label="GD&T frame detection complete",
+                )
             seg["coordinate_space"] = "page"
         else:
             section_image, section_origin, _clipped_scope = crop_section(
