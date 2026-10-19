@@ -1,70 +1,66 @@
-QTracX selective integration — SI-3.4
-Feature-control-frame parsing and compartment validation
+QTracX selective integration — SI-3.5
+GD&T contextual association and standards validation
 
 Base branch verified:
-  selective-integration @ 07ff5c3
+  selective-integration @ 33fe712
 
 What this package adds
 ----------------------
-1. backend/fcf_parse.py
-   Detects ruled feature-control frames, separates composite-frame segments,
-   splits compartments, and returns structured GD&T data rather than a
-   flattened OCR string.
+1. backend/gdt_context.py
+   Applies drawing context to already-detected GD&T objects without replacing
+   visual evidence. It associates nearby values, resolves shared-glyph ties,
+   links datum references, demotes loose characteristic false positives, and
+   reports standards observations.
 
-2. backend/benchmarks/gdt_synthetic.py
-   Deterministic synthetic drawing/frame generation with exact ground truth.
-   It is test support and a regression baseline—not a claim of real-world
-   accuracy.
+2. backend/test_gdt_context.py
+   Pure-logic regression tests for ambiguity resolution, value attachment,
+   radius parsing, datum association, confidence demotion, audit evidence,
+   and standards consistency.
 
-3. backend/test_fcf_parse.py
-   Covers frame geometry, compartment splitting, rule erasure, composite
-   frames, tolerance/modifier parsing, datum precedence, schema validation,
-   visual diameter-zone recovery, OCR failure isolation, and false-frame
-   rejection.
+Governing safety rule
+---------------------
+Context may resolve an existing ambiguity, attach information, or add a
+warning. It may not replace a confident visual detection with a different
+symbol. If position and visual evidence disagree, the detection is retained,
+downgraded to ambiguous, and given a recorded conflict reason.
 
-Structured output
------------------
-Each parsed frame keeps separate fields for:
-- geometric characteristic and its confidence/status
-- tolerance value
-- diametral-zone marker
-- material-condition modifier
-- other modifiers
-- ordered datum references
-- composite segment identity
-- original compartment text and bounding boxes
-- warnings and evidence
-
-Safety behavior
----------------
-- Missing information distinguishes absent, unreadable, and not-applicable.
-- An OCR failure in one compartment does not remove the complete frame.
-- Ambiguous characteristic symbols retain the frame for review.
-- Datum precedence follows physical compartment order, even when one datum
-  cannot be read.
-- No drawing unit is invented; the unit remains "drawing_unit".
-- Boxes without a geometric characteristic are not published as valid FCFs.
-- Composite controls retain their segment relationship.
+Behavior added
+--------------
+- Distinguishes shared glyphs by valid position/context:
+  profile-of-line vs arc length, counterbore vs spotface, circularity vs
+  diameter vs all-around, diameter vs spherical diameter, and datum marker
+  vs datum feature.
+- Parses R, CR and SR values while rejecting Ra, Rc, REF, REV and similar
+  false friends.
+- Associates only sufficiently close text, preferring text on the right in
+  the same row. It does not attach the nearest arbitrary number on the page.
+- Preserves drawing units instead of assuming millimetres or inches.
+- Links FCF datum references by letter and reports missing datum features as
+  unresolved findings rather than silently dropping them.
+- Demotes geometric characteristics found outside a frame instead of deleting
+  them, retaining their evidence for review.
+- Reports standard-family mismatches and retired controls as observations;
+  it does not claim overall drawing compliance.
 
 Scope boundary
 --------------
-This milestone adds the standalone FCF parser only. It does NOT invoke it from
-production page scanning, alter the auto-ballooning pipeline, expose new API
-fields, or change the UI/review/export flows. Those connections remain a
-separate controlled integration milestone.
+This milestone adds standalone contextual logic only. It does NOT invoke the
+GD&T pipeline from production page scanning, change auto-balloon results,
+add API response fields, or alter UI/review/export behavior.
 
 How to apply
 ------------
 1. Confirm you are on selective-integration and have no unrelated local
    changes that these paths would overwrite.
 2. Extract this ZIP into the doc-ocr repository root, preserving paths.
-3. Review the three added files.
+3. Review the two added backend files.
 
 PowerShell verification (from doc-ocr\backend)
 ------------------------------------------------
-Focused SI-3.4 suite:
+Focused SI-3.5 suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_context.py `
     test_fcf_parse.py `
     test_gdt_config.py `
     test_gdt_detect.py `
@@ -77,6 +73,7 @@ Focused SI-3.4 suite:
 Broader regression suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_context.py `
     test_fcf_parse.py `
     test_dimensions.py `
     test_engineering_value_parser.py `
@@ -102,12 +99,12 @@ Broader regression suite:
     test_structured_symbol_vision.py `
     test_engineering_object_assembly.py
 
-Validated by Codex with the project's pinned OpenCV 4.10.0.84:
-  Focused: 400 passed
-  Broader: 600 passed, 1 skipped
+Validated by Codex:
+  Focused: 438 passed
+  Broader: 638 passed, 1 skipped
 
 Suggested commit message
 ------------------------
-feat(ocr): add structured feature-control-frame parsing
+feat(ocr): add contextual GD&T association rules
 
 No commit or push was performed by Codex.
