@@ -165,29 +165,23 @@ class GdtTextRejection:
 # ── Recognition ──────────────────────────────────────────────────────────────
 
 
-_SYMBOL_IDS = {
-    "Straightness": "straightness",
-    "Flatness": "flatness",
-    "Circularity": "circularity",
-    "Cylindricity": "cylindricity",
-    "Profile of a Line": "profile_of_a_line",
-    "Profile of a Surface": "profile_of_a_surface",
-    "Profile": "profile_of_a_surface",
-    "Parallelism": "parallelism",
-    "Perpendicularity": "perpendicularity",
-    "Angularity": "angularity",
-    "Position": "position",
-    "Concentricity": "concentricity",
-    "Symmetry": "symmetry",
-    "Runout": "circular_runout",
-    "Total Runout": "total_runout",
-}
-
-
 def _name_to_symbol_id(name: str) -> str | None:
-    """Return the stable id used by the later graphical GD&T milestone."""
+    """Map a dictionary display name onto the shared GD&T registry."""
 
-    return _SYMBOL_IDS.get(name)
+    import gdt_registry as reg
+
+    direct = reg.by_name(name)
+    if direct is not None:
+        return direct.id
+
+    # These dictionary labels name a family rather than one exact control.
+    # Preserve SI-3.1's established result until graphical/context evidence can
+    # safely distinguish the members of each family.
+    return {
+        "Runout": "circular_runout",
+        "Profile": "profile_of_a_surface",
+        "Total Runout": "total_runout",
+    }.get(name)
 
 
 #: ``looks_like_note_block`` is only consulted above this many words.

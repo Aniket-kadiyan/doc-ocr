@@ -1,90 +1,73 @@
-QTracX selective integration SI-3.1
-==================================
+QTracX selective integration — SI-3.2
+GD&T symbol registry and procedural template foundation
 
-Purpose
--------
-Replace broad GD&T keyword matching with guarded textual GD&T recognition.
+Base branch verified:
+  selective-integration @ 5c4d254
 
-The previous classifier treated a GD&T word by itself as sufficient evidence.
-That could label measurement notes such as ROUNDNESS(2PT./180)50µm MAX. or
-SQUARENESS WITH FACE 50µm MAX. as GD&T inspection controls.
-
-The new text recognizer accepts a result only when the text has the shape of a
-callout: a short unambiguous glyph callout, a pipe-delimited frame, or a GD&T
-name followed by a tolerance value. Prose, measurement specifications, and
-ambiguous glyphs are refused. Accepted results carry their source text,
-confidence, evidence, value, datum sequence, and diametral-zone flag.
-
-Compatibility boundary
+What this package adds
 ----------------------
-* Existing geometry-backed feature-control frames remain authoritative.
-* Native PDF text and OCR text are not replaced or modified.
-* No changes are made to scanning, image detection, persistence, or export.
-* The extra gdt_text result field is additive and appears only when this rule
-  accepts a textual GD&T callout.
+1. backend/gdt_registry.py
+   One authoritative, ambiguity-aware registry for GD&T, datum,
+   material-condition, dimensioning, manufacturing, and frame symbols.
 
-Expected baseline
------------------
-Branch: selective-integration
-Apply after SI-2.3 and SI-2.4.
+2. backend/gdt_templates.py
+   Procedurally rendered OpenCV templates for symbols that have reliable
+   geometric artwork. Templates are generated in code; no binary artwork or
+   model files are added.
 
-At package creation, origin/selective-integration still pointed to:
-3f4bc95730d8b019e3409b667c8a6a74b84f33f6
+3. backend/gdt_text.py
+   SI-3.1 textual GD&T now resolves stable symbol IDs through the registry
+   instead of maintaining a second hard-coded ID map. Existing Runout and
+   Profile family fallbacks are preserved.
 
-Files in this package
----------------------
-backend/gdt_text.py
-backend/feature_classifier.py
-backend/feature_rules.py
-backend/test_gdt_text.py
-backend/test_feature_classifier.py
-backend/test_feature_rules.py
+4. Tests
+   Registry integrity, ambiguity handling, standards metadata, template
+   coverage, rendering polarity, caching, scale selection, and contact-sheet
+   construction.
 
-Apply on Windows PowerShell
----------------------------
-1. Open the doc-ocr repository root in PowerShell.
-2. Confirm you are on selective-integration and review local state:
+Scope boundary
+--------------
+This milestone does NOT enable page-level graphical GD&T detection and does
+not change the auto-ballooning workflow, API payloads, UI, or exports. It is
+the tested foundation for the next graphical-detection milestone.
 
-   git status --short --branch
+How to apply
+------------
+1. Confirm you are on the selective-integration branch and have no unrelated
+   local changes that these files would overwrite.
+2. Extract this ZIP into the doc-ocr repository root, preserving paths.
+3. Review the five changed/added backend files.
 
-3. Extract this ZIP over the repository root:
+PowerShell verification (from doc-ocr\backend)
+------------------------------------------------
+Run the focused SI-3.2 suite:
 
-   Expand-Archive -Path "<download-folder>\QTracX_SI3_1_guarded_textual_gdt.zip" `
-     -DestinationPath . -Force
+  .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_registry.py `
+    test_gdt_templates.py `
+    test_gdt_text.py `
+    test_feature_classifier.py `
+    test_feature_rules.py
 
-4. Review the milestone:
+Run the selective-integration regression set:
 
-   git diff -- backend/gdt_text.py backend/feature_classifier.py backend/feature_rules.py
-   git status --short backend/test_gdt_text.py backend/test_feature_classifier.py backend/test_feature_rules.py
-
-Tests
------
-Run from doc-ocr\backend:
-
-   .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_gdt_text.py `
-     test_feature_classifier.py `
-     test_feature_rules.py `
-     test_structured_symbol_vision.py
-
-Recommended surrounding regressions:
-
-   .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_gdt_text.py `
-     test_feature_classifier.py `
-     test_feature_rules.py `
-     test_structured_symbol_vision.py `
-     test_page_value_filters.py `
-     test_engineering_value_parser.py `
-     test_engineering_disposition.py `
-     test_page_candidate_recovery.py `
-     test_detection_passes.py `
-     test_page_layout.py `
-     test_angle_utils.py `
-     test_compose_minus.py
+  .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_dimensions.py `
+    test_engineering_value_parser.py `
+    test_native_symbol_enrichment.py `
+    test_stacked_tolerance.py `
+    test_plus_minus_vision.py `
+    test_feature_classifier.py `
+    test_feature_rules.py `
+    test_gdt_registry.py `
+    test_gdt_templates.py `
+    test_gdt_text.py `
+    test_pdf_text_first.py `
+    test_candidate_lifecycle.py `
+    test_engineering_disposition.py
 
 Suggested commit message
 ------------------------
-fix(ocr): guard textual GD&T recognition
+feat(ocr): add GD&T registry and template foundation
 
-This package does not contain or create a Git commit.
+No commit or push was performed by Codex.
