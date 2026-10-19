@@ -1031,11 +1031,19 @@ def resolve_authoritative_hypotheses(
             and authoritative_signature is not None
             and preliminary_signature != authoritative_signature
         )
+        # The preliminary pass is a fast cost gate, while this target-locked
+        # pass is the same full recognition path used for a manually drawn
+        # value. A complete target-owned reread is therefore the deciding
+        # value; disagreement with the preliminary text remains diagnostic
+        # evidence, but is not by itself a reason to stop the user.
+        from page_value_filters import is_complete_engineering_value
+
+        authoritative_doubtful = not is_complete_engineering_value(
+            authoritative_text
+        )
         # A reversal is the authoritative orientation classifier reading the
         # same crop in the opposite direction. Preserve the detector-informed
         # preliminary value, but keep the disagreement visible for review.
-        from page_value_filters import is_complete_engineering_value
-
         half_turn_conflict = (
             numeric_conflict
             and reads_are_a_half_turn_apart(
@@ -1050,9 +1058,7 @@ def resolve_authoritative_hypotheses(
                 "Preliminary and authoritative OCR read the same characters "
                 "in opposite order; the crop's reading direction is ambiguous"
             )
-        # All other numeric disagreements retain MVP1's conservative policy:
-        # use the target-locked read and require review even when it is valid.
-        elif numeric_conflict:
+        elif numeric_conflict and authoritative_doubtful:
             final_text = authoritative_text
             review_reason = (
                 "Preliminary and target-locked authoritative OCR disagree on "
@@ -1064,11 +1070,16 @@ def resolve_authoritative_hypotheses(
                 preliminary_text,
             )
             review_reason = ""
+        needs_confirmation = bool(
+            half_turn_conflict
+            or (numeric_conflict and authoritative_doubtful)
+        )
         resolved.update(
             text=final_text,
-            needs_review=numeric_conflict,
+            needs_review=needs_confirmation,
             numeric_conflict=numeric_conflict,
-            authoritative_review_required=numeric_conflict,
+            unresolved_numeric_conflict=needs_confirmation,
+            authoritative_review_required=needs_confirmation,
             review_reason=review_reason,
             authoritative_reread=True,
             preliminary_text=preliminary_text,
@@ -1097,6 +1108,7 @@ def resolve_authoritative_hypotheses(
         text=final_text,
         needs_review=True,
         numeric_conflict=False,
+        unresolved_numeric_conflict=False,
         authoritative_review_required=True,
         authoritative_target_owned=bool(owned_attempts),
         authoritative_valid=False,

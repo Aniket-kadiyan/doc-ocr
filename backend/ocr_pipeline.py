@@ -60,7 +60,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-m9-candidate-accounting"
+OCR_CHANGESET_ID = "mvp1-integration-parity-p1-authoritative-routing"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -5884,6 +5884,9 @@ class OcrPipeline:
                 ),
                 source_conflict=bool(classified_region.get("source_conflict")),
                 numeric_conflict=bool(classified_region.get("numeric_conflict")),
+                unresolved_numeric_conflict=classified_region.get(
+                    "unresolved_numeric_conflict"
+                ),
                 recognition_review_required=bool(
                     classified_region.get("authoritative_review_required")
                 ),
@@ -8305,6 +8308,9 @@ class OcrPipeline:
                 ),
                 source_conflict=bool(result.get("source_conflict")),
                 numeric_conflict=bool(result.get("numeric_conflict")),
+                unresolved_numeric_conflict=result.get(
+                    "unresolved_numeric_conflict"
+                ),
                 recognition_review_required=bool(
                     result.get("authoritative_review_required")
                 ),
@@ -8350,6 +8356,9 @@ class OcrPipeline:
                     result.get("authoritative_target_owned")
                 ),
                 "numeric_conflict": bool(result.get("numeric_conflict")),
+                "unresolved_numeric_conflict": result.get(
+                    "unresolved_numeric_conflict"
+                ),
                 "recognition_source": result.get(
                     "recognition_source", "ocr"
                 ),
@@ -8419,6 +8428,10 @@ class OcrPipeline:
                 ),
                 "authoritative_review_required": bool(
                     result.get("authoritative_review_required")
+                ),
+                "numeric_conflict": bool(result.get("numeric_conflict")),
+                "unresolved_numeric_conflict": result.get(
+                    "unresolved_numeric_conflict"
                 ),
                 "recognition_source": result.get(
                     "recognition_source", "ocr"
@@ -8957,6 +8970,9 @@ class OcrPipeline:
                     ),
                     source_conflict=bool(item.get("source_conflict")),
                     numeric_conflict=bool(item.get("numeric_conflict")),
+                    unresolved_numeric_conflict=item.get(
+                        "unresolved_numeric_conflict"
+                    ),
                     recognition_review_required=bool(
                         item.get("authoritative_review_required")
                     ),

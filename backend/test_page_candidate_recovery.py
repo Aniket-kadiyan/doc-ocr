@@ -278,7 +278,7 @@ def test_authoritative_target_lock_rejects_an_adjacent_value() -> None:
     assert authoritative_result_needs_retry(neighbour)
 
 
-def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> None:
+def test_authoritative_resolution_preserves_symbols_and_trusts_complete_reread() -> None:
     equivalent = resolve_authoritative_hypotheses(
         _result("30°±3°", confidence=0.40),
         [
@@ -314,7 +314,9 @@ def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> N
     assert not equivalent["needs_review"]
     assert conflict["text"] == "105"
     assert conflict["numeric_conflict"]
-    assert conflict["authoritative_review_required"]
+    assert not conflict["unresolved_numeric_conflict"]
+    assert not conflict["authoritative_review_required"]
+    assert not conflict["needs_review"]
     assert untargeted["text"] == ""
     assert untargeted["needs_review"]
 
@@ -343,6 +345,7 @@ def test_half_turn_conflict_keeps_preliminary_value_for_review() -> None:
 
     assert resolved["text"] == "10"
     assert resolved["numeric_conflict"]
+    assert resolved["unresolved_numeric_conflict"]
     assert resolved["needs_review"]
     assert resolved["authoritative_review_required"]
     assert "opposite order" in resolved["review_reason"]

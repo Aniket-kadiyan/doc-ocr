@@ -105,6 +105,7 @@ def disposition_engineering_object(
     assembly_review_reason: str = "",
     source_conflict: bool = False,
     numeric_conflict: bool = False,
+    unresolved_numeric_conflict: bool | None = None,
     recognition_review_required: bool = False,
     recognition_needs_review: bool = False,
     recognition_review_reason: str = "",
@@ -141,7 +142,16 @@ def disposition_engineering_object(
             parse_kind=parse_kind,
         )
 
-    if source_conflict or numeric_conflict:
+    # Older recognition paths only expose ``numeric_conflict``. Treat those
+    # conservatively until they explicitly report whether the conflict was
+    # resolved. The target-locked page reread reports False when its complete
+    # authoritative value safely supersedes the preliminary cost-gate read.
+    numeric_conflict_requires_review = (
+        numeric_conflict
+        if unresolved_numeric_conflict is None
+        else unresolved_numeric_conflict
+    )
+    if source_conflict or numeric_conflict_requires_review:
         return _decision(
             "review",
             "recognition_conflict",

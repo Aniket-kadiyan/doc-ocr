@@ -53,19 +53,36 @@ def test_incomplete_or_unknown_numeric_objects_require_review() -> None:
     assert unknown.rule == "incomplete_engineering_object"
 
 
-def test_conflicts_require_review_even_when_parse_is_complete() -> None:
+def test_unresolved_conflicts_require_review_even_when_parse_is_complete() -> None:
     assembly = decide(
         "Ø8 +0.2/0",
         assembly_conflict=True,
         assembly_review_reason="Fragments disagree",
     )
     source = decide("25", source_conflict=True)
-    numeric = decide("25", numeric_conflict=True)
+    unresolved = decide(
+        "25",
+        numeric_conflict=True,
+        unresolved_numeric_conflict=True,
+    )
+    legacy = decide("25", numeric_conflict=True)
 
     assert assembly.state == "review"
     assert assembly.reason == "Fragments disagree"
     assert source.rule == "recognition_conflict"
-    assert numeric.rule == "recognition_conflict"
+    assert unresolved.rule == "recognition_conflict"
+    assert legacy.rule == "recognition_conflict"
+
+
+def test_resolved_authoritative_disagreement_is_diagnostic_only() -> None:
+    result = decide(
+        "105",
+        numeric_conflict=True,
+        unresolved_numeric_conflict=False,
+    )
+
+    assert result.state == "eligible"
+    assert result.rule == "complete_engineering_object"
 
 
 def test_isolated_confusable_value_requires_review() -> None:
