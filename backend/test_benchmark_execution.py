@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from PIL import Image
 
 from benchmarks import execution
+from gdt_config import GdtConfig
 from pdf_evidence import PdfPageEvidence
 
 
@@ -125,3 +126,120 @@ def test_hybrid_pdf_keeps_native_result_and_merges_ocr_additively(monkeypatch):
     assert len(pipeline.calls) == 1
     assert seen == {"native": native, "ocr": ocr}
     assert result["eligible_count"] == 2
+
+
+def test_gdt_flag_off_does_not_change_established_page_result(monkeypatch):
+    established = {
+        "eligible_count": 1,
+        "review_count": 0,
+        "candidate_outcomes": [{"text": "R2", "state": "eligible"}],
+    }
+    monkeypatch.setattr(execution, "analyze_page_layout", lambda image: _Layout())
+    monkeypatch.setattr(
+        execution,
+        "augment_page_scan_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("disabled GD&T hook was called")
+        ),
+    )
+    pipeline = _Pipeline(established)
+    result = execution.segment_production_page(
+        Image.new("RGB", (100, 80), "white"),
+        page_number=1,
+        pipeline=pipeline,
+        gdt_config=GdtConfig(page_scan_enabled=False),
+    )
+    assert result == {**established, "coordinate_space": "page"}
+    assert len(pipeline.calls) == 1
+
+
+def test_gdt_hook_runs_after_native_selection_without_full_page_ocr(monkeypatch):
+    native = {
+        "eligible_count": 1,
+        "review_count": 0,
+        "candidate_outcomes": [{"text": "25", "state": "eligible"}],
+    }
+    monkeypatch.setattr(execution, "analyze_page_layout", lambda image: _Layout())
+    monkeypatch.setattr(
+        execution, "_native_pdf_inputs",
+        lambda *args, **kwargs: ({"usable": True}, _evidence("vector")),
+    )
+    monkeypatch.setattr(
+        execution, "native_text_segment_result", lambda *args, **kwargs: dict(native)
+    )
+    monkeypatch.setattr(
+        execution, "enrich_native_result_with_geometry",
+        lambda image, result: result,
+    )
+    seen = {}
+
+    def augment(image, result, **kwargs):
+        seen["result"] = result
+        seen["page"] = kwargs["page"]
+        seen["config"] = kwargs["config"]
+        return {
+            **result,
+            "gdt_integration": {
+                "status": "completed",
+                "published_frame_count": 1,
+            },
+        }
+
+    monkeypatch.setattr(execution, "augment_page_scan_result", augment)
+    pipeline = _Pipeline()
+    result = execution.segment_production_page(
+        Image.new("RGB", (100, 80), "white"),
+        page_number=2,
+        pipeline=pipeline,
+        source_pdf_bytes=b"pdf",
+        gdt_config=GdtConfig(page_scan_enabled=True),
+    )
+    assert pipeline.calls == []
+    assert seen["result"] is native or seen["result"] == native
+    assert seen["page"] == 2
+    assert seen["config"].page_scan_enabled is True
+    assert result["gdt_integration"]["published_frame_count"] == 1
+    assert result["coordinate_space"] == "page"
+
+
+def test_forced_gdt_policy_is_recorded_in_document_snapshot(monkeypatch, tmp_path):
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"not-read-by-mocked-renderer")
+    monkeypatch.setattr(
+        execution,
+        "render_pages",
+        lambda path, dpi: iter((Image.new("RGB", (100, 80), "white"),)),
+    )
+    seen = {}
+
+    def segment(image, **kwargs):
+        seen["config"] = kwargs["gdt_config"]
+        return {
+            "detected_count": 0,
+            "recognized_count": 0,
+            "eligible_count": 0,
+            "review_count": 0,
+            "excluded_count": 0,
+            "unread_count": 0,
+            "skipped_existing_count": 0,
+            "regions": [],
+            "review_candidates": [],
+            "candidate_outcomes": [],
+            "gdt_integration": {"status": "completed"},
+        }
+
+    monkeypatch.setattr(execution, "segment_production_page", segment)
+    snapshot = execution.segment_document(
+        source,
+        250,
+        pipeline=_Pipeline(),
+        gdt_page_scan=True,
+    )
+    assert seen["config"].page_scan_enabled is True
+    assert snapshot["gdt_page_scan"] == {
+        "policy": "forced_on",
+        "enabled": True,
+        "configured_enabled": True,
+        "gdt_enabled": True,
+        "page_scan_enabled": True,
+    }

@@ -12,12 +12,27 @@ _SUM_FIELDS = (
     "noise_detections", "unexpected_detections", "unmatched_review_or_other",
 )
 
+_GDT_COUNT_FIELDS = (
+    "detected_frame_count",
+    "published_frame_count",
+    "eligible_frame_count",
+    "review_frame_count",
+    "absorbed_candidate_count",
+    "skipped_existing_count",
+    "duplicate_frame_count",
+    "native_evidence_frame_count",
+)
+
 
 def snapshot_execution_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Summarize which recognition source actually produced each page."""
     profiles: Counter[str] = Counter()
     strategies: Counter[str] = Counter()
     recognition_sources: Counter[str] = Counter()
+    gdt_statuses: Counter[str] = Counter()
+    gdt_totals: Counter[str] = Counter()
+    gdt_policy = snapshot.get("gdt_page_scan") or {}
+    gdt_enabled = bool(gdt_policy.get("enabled"))
     pages: list[dict[str, Any]] = []
     for page in snapshot.get("pages", ()):
         result = page.get("result") or {}
@@ -28,6 +43,14 @@ def snapshot_execution_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         strategies[strategy] += 1
         for source, count in (result.get("recognition_source_counts") or {}).items():
             recognition_sources[str(source)] += int(count)
+        gdt_integration = result.get("gdt_integration") or {}
+        gdt_status = str(
+            gdt_integration.get("status")
+            or ("disabled" if not gdt_enabled else "missing")
+        )
+        gdt_statuses[gdt_status] += 1
+        for field in _GDT_COUNT_FIELDS:
+            gdt_totals[field] += int(gdt_integration.get(field, 0) or 0)
         pages.append({
             "page": int(page.get("page", len(pages) + 1)),
             "source_profile": kind,
@@ -35,6 +58,18 @@ def snapshot_execution_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "recognition_source_counts": dict(sorted(
                 (result.get("recognition_source_counts") or {}).items()
             )),
+            "gdt_integration": {
+                "status": gdt_status,
+                **{
+                    field: int(gdt_integration.get(field, 0) or 0)
+                    for field in _GDT_COUNT_FIELDS
+                },
+                **(
+                    {"error": str(gdt_integration.get("error") or "")}
+                    if gdt_status == "error"
+                    else {}
+                ),
+            },
         })
     return {
         "policy": snapshot.get("execution_policy", "unknown"),
@@ -42,8 +77,40 @@ def snapshot_execution_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "source_profile_pages": dict(sorted(profiles.items())),
         "text_layer_strategy_pages": dict(sorted(strategies.items())),
         "recognition_source_counts": dict(sorted(recognition_sources.items())),
+        "gdt_page_scan": {
+            "policy": str(gdt_policy.get("policy") or "unknown"),
+            "enabled": gdt_enabled,
+            "status_pages": dict(sorted(gdt_statuses.items())),
+            "completed_pages": gdt_statuses["completed"],
+            "error_pages": gdt_statuses["error"],
+            "missing_pages": gdt_statuses["missing"],
+            **{field: gdt_totals[field] for field in _GDT_COUNT_FIELDS},
+        },
         "pages": pages,
     }
+
+
+def required_gdt_execution_failures(
+    execution: Mapping[str, Any],
+) -> list[str]:
+    """Return gate failures for a benchmark that explicitly requires GD&T."""
+
+    gdt = execution.get("gdt_page_scan") or {}
+    if not bool(gdt.get("enabled")):
+        return ["GD&T production integration was not enabled for this run"]
+
+    page_count = len(execution.get("pages") or ())
+    if page_count == 0:
+        return ["GD&T production integration did not execute on any pages"]
+
+    completed = int(gdt.get("completed_pages", 0) or 0)
+    incomplete = max(0, page_count - completed)
+    if incomplete:
+        return [
+            "GD&T production integration did not complete on "
+            f"{incomplete} page(s)"
+        ]
+    return []
 
 
 def build_suite_report(
@@ -64,6 +131,9 @@ def build_suite_report(
     profiles: Counter[str] = Counter()
     strategies: Counter[str] = Counter()
     recognition_sources: Counter[str] = Counter()
+    gdt_statuses: Counter[str] = Counter()
+    gdt_totals: Counter[str] = Counter()
+    gdt_enabled_documents = 0
     dispositions = {
         state: {"expected": 0, "matched": 0, "semantic_exact": 0,
                 "disposition_correct": 0}
@@ -97,6 +167,11 @@ def build_suite_report(
         profiles.update(execution.get("source_profile_pages") or {})
         strategies.update(execution.get("text_layer_strategy_pages") or {})
         recognition_sources.update(execution.get("recognition_source_counts") or {})
+        gdt_execution = execution.get("gdt_page_scan") or {}
+        gdt_enabled_documents += int(bool(gdt_execution.get("enabled")))
+        gdt_statuses.update(gdt_execution.get("status_pages") or {})
+        for field in _GDT_COUNT_FIELDS:
+            gdt_totals[field] += int(gdt_execution.get(field, 0) or 0)
         failures = list(report.get("gate_failures") or ())
         rows.append({
             "fixture": report.get("fixture", ""),
@@ -144,6 +219,14 @@ def build_suite_report(
                 "source_profile_pages": dict(sorted(profiles.items())),
                 "text_layer_strategy_pages": dict(sorted(strategies.items())),
                 "recognition_source_counts": dict(sorted(recognition_sources.items())),
+                "gdt_page_scan": {
+                    "enabled_documents": gdt_enabled_documents,
+                    "status_pages": dict(sorted(gdt_statuses.items())),
+                    "completed_pages": gdt_statuses["completed"],
+                    "error_pages": gdt_statuses["error"],
+                    "missing_pages": gdt_statuses["missing"],
+                    **{field: gdt_totals[field] for field in _GDT_COUNT_FIELDS},
+                },
             },
         },
         "documents": rows,
@@ -169,6 +252,13 @@ def format_suite_text(suite: Mapping[str, Any]) -> str:
         f"  accounting: {accounting['pages_passed']}/{accounting['pages']} pages; "
         f"{accounting['issue_count']} issue(s); "
         f"{accounting['unavailable_documents']} unavailable document(s)",
+        (
+            "  GD&T frames: "
+            f"{summary['execution']['gdt_page_scan']['published_frame_count']} published; "
+            f"{summary['execution']['gdt_page_scan']['eligible_frame_count']} accepted; "
+            f"{summary['execution']['gdt_page_scan']['review_frame_count']} review; "
+            f"{summary['execution']['gdt_page_scan']['error_pages']} error page(s)"
+        ),
         f"  runtime: {summary['seconds']:.1f}s"
         if summary["seconds"] is not None else "  runtime: unavailable",
     ))
@@ -221,6 +311,15 @@ def format_suite_markdown(suite: Mapping[str, Any]) -> str:
         values = execution.get(key) or {}
         rendered = ", ".join(f"{name}: {count}" for name, count in values.items())
         lines.append(f"- **{heading}:** {rendered or 'unavailable'}")
+    gdt = execution.get("gdt_page_scan") or {}
+    lines.append(
+        "- **GD&T production pass:** "
+        f"{int(gdt.get('published_frame_count', 0))} published "
+        f"({int(gdt.get('eligible_frame_count', 0))} accepted, "
+        f"{int(gdt.get('review_frame_count', 0))} review); "
+        f"{int(gdt.get('native_evidence_frame_count', 0))} used native evidence; "
+        f"{int(gdt.get('error_pages', 0))} error page(s)"
+    )
     failed = [row for row in suite["documents"] if not row["passed"]]
     if failed:
         lines.extend(("", "## Gate failures", ""))

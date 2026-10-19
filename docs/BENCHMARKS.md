@@ -10,6 +10,10 @@ application: trustworthy native PDF text is authoritative, raster OCR is the
 fallback for image-only or untrusted pages, and OCR is additive on hybrid
 pages. The report records the page profile, text-layer strategy, and recognition
 source counts so a run cannot silently regress to OCR-everywhere behaviour.
+When graphical GD&T integration is enabled, the same post-merge frame pass used
+by the Auto Balloon API runs afterward. The report separately records detected,
+published, accepted, review, absorbed, skipped, duplicate, and native-evidence
+frame counts so GD&T cannot disappear inside the overall balloon total.
 
 ## Corpus
 
@@ -146,6 +150,35 @@ This creates one `*.scan.json` per drawing plus `combined-report.json` and
 `combined-report.md` under the chosen directory. The console also prints the
 combined pass/fail summary after all per-drawing details.
 
+For the SI-3.8 production-path validation, force the new hook on explicitly so
+the result does not depend on the workstation's `.env.local`. Start with the
+two drawings that contain curated GD&T ground truth:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe scripts\run_benchmark.py `
+  129E01-13300-ID ballwoon_drawing `
+  --gdt-page-scan `
+  --save-snapshot `
+  --output-dir benchmarks\results\si3-8-gdt
+```
+
+For a direct comparison with the same production route but without graphical
+frame integration:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe scripts\run_benchmark.py `
+  129E01-13300-ID ballwoon_drawing `
+  --no-gdt-page-scan `
+  --save-snapshot `
+  --output-dir benchmarks\results\si3-8-baseline
+```
+
+`--gdt-page-scan` and `--no-gdt-page-scan` override only the benchmark run.
+With neither option, the runner follows `GDT_PAGE_SCAN_ENABLED`. A forced-on
+run fails its benchmark gate if any page reports an integration error or does
+not report completion; finding zero frames is still a completed run and remains
+visible as a zero count rather than an error.
+
 With no fixture name, the runner processes all drawings. This loads OCR models
 and may take several minutes per drawing. `route: page` is the production
 whole-page Auto-Balloon path and is the default. `legacy_segment` exists only
@@ -166,6 +199,8 @@ Useful options:
 - `--output-dir PATH` writes the combined JSON and Markdown reports.
 - `--dpi 400` or `--dpi 600` measures source-fidelity sensitivity without a
   production architecture change.
+- `--gdt-page-scan` forces the production GD&T hook on; `--no-gdt-page-scan`
+  forces it off for an otherwise identical comparison.
 - `--save-regions` writes a compatibility accepted/review/other flat list;
   `--save-snapshot` is the authoritative format.
 - `--ignore-gates` is for inspecting historical accepted-only results whose
