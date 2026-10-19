@@ -8,6 +8,7 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
@@ -56,9 +57,10 @@ export interface InspectionJSON {
 export function buildInspectionJSON(
   annotations: Annotation[],
   extraColumns: string[] = [],
-  metadata?: Partial<DocumentMetadata> | null
+  metadata?: Partial<DocumentMetadata> | null,
+  referenceTables: readonly PageReferenceTable[] = []
 ): InspectionJSON {
-  const sheet = buildInspectionSheet(annotations, extraColumns);
+  const sheet = buildInspectionSheet(annotations, extraColumns, referenceTables);
   const data = sheet.rows.map((row) =>
     Object.fromEntries(sheet.headers.map((header, i) => [header, row[i]]))
   );
@@ -77,10 +79,11 @@ export function buildInspectionJSON(
 export function exportInspectionJSON(
   annotations: Annotation[],
   extraColumns: string[] = [],
-  metadata?: Partial<DocumentMetadata> | null
+  metadata?: Partial<DocumentMetadata> | null,
+  referenceTables: readonly PageReferenceTable[] = []
 ): string {
   return JSON.stringify(
-    buildInspectionJSON(annotations, extraColumns, metadata),
+    buildInspectionJSON(annotations, extraColumns, metadata, referenceTables),
     null,
     2
   );
@@ -99,7 +102,8 @@ export function inspectionSheetCSV(sheet: InspectionSheet): string {
 export function exportInspectionCSV(
   annotations: Annotation[],
   extraColumns: string[] = [],
-  metadata?: Partial<DocumentMetadata> | null
+  metadata?: Partial<DocumentMetadata> | null,
+  referenceTables: readonly PageReferenceTable[] = []
 ): string {
   const normalized = normalizeDocumentMetadata(metadata);
   const csv = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
@@ -112,7 +116,9 @@ export function exportInspectionCSV(
   return [
     ...metadataRows.map((row) => row.map(csv).join(",")),
     "",
-    inspectionSheetCSV(buildInspectionSheet(annotations, extraColumns)),
+    inspectionSheetCSV(
+      buildInspectionSheet(annotations, extraColumns, referenceTables)
+    ),
   ].join("\n");
 }
 
@@ -127,9 +133,10 @@ export function exportInspectionCSV(
 export function exportXML(
   annotations: Annotation[],
   extraColumns: string[] = [],
-  metadata?: Partial<DocumentMetadata> | null
+  metadata?: Partial<DocumentMetadata> | null,
+  referenceTables: readonly PageReferenceTable[] = []
 ): string {
-  const sheet = buildInspectionSheet(annotations, extraColumns);
+  const sheet = buildInspectionSheet(annotations, extraColumns, referenceTables);
   const normalizedMetadata = normalizeDocumentMetadata(metadata);
 
   const columns = sheet.headers

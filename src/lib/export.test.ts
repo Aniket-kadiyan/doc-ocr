@@ -6,6 +6,30 @@ import {
   findMalformedToleranceAnnotations,
 } from "@/lib/export";
 import { makeAnnotation } from "@/test/annotationFixture";
+import type { PageReferenceTable } from "@/types/referencePoint";
+
+const referenceBox = { x: 10, y: 20, width: 30, height: 12 };
+const referenceTables: PageReferenceTable[] = [
+  {
+    page: 1,
+    bbox: referenceBox,
+    headerBox: referenceBox,
+    axes: ["X", "Y", "Z"],
+    nameHeader: "POINT",
+    points: [
+      {
+        symbol: "A",
+        coordinates: [
+          { axis: "X", value: "1" },
+          { axis: "Z", value: "3" },
+        ],
+        nameBox: referenceBox,
+        rowBox: referenceBox,
+        markers: [],
+      },
+    ],
+  },
+];
 
 describe("tolerance export validation", () => {
   it("accepts supported default, symmetric, asymmetric, and one-sided tolerances", () => {
@@ -155,5 +179,28 @@ describe("inspection exports", () => {
     expect(xml).toContain('<cell name="Tolerance">+0.1, -0</cell>');
     expect(xml).toContain('<cell name="Tolerance">+0, -.5</cell>');
     expect(xml).toContain('<cell name="Tolerance">+0.05, -0</cell>');
+  });
+
+  it("includes X/Y/Z reference rows after balloons in JSON, CSV and XML", () => {
+    const json = JSON.parse(
+      exportInspectionJSON(annotations, [], undefined, referenceTables)
+    );
+    expect(json.data.slice(2, 5).map((row: Record<string, string>) => [
+      row["S.no"],
+      row.Label,
+      row.Value,
+    ])).toEqual([
+      ["3", "A_X", "1"],
+      ["4", "A_Y", ""],
+      ["5", "A_Z", "3"],
+    ]);
+
+    const csv = exportInspectionCSV(annotations, [], undefined, referenceTables);
+    expect(csv).toContain('"3","A_X","1","","",""');
+    expect(csv).toContain('"4","A_Y","","","",""');
+
+    const xml = exportXML(annotations, [], undefined, referenceTables);
+    expect(xml).toContain('<cell name="Label">A_Z</cell>');
+    expect(xml).toContain('<cell name="Value">3</cell>');
   });
 });

@@ -8,6 +8,30 @@ import {
   toleranceForExport,
 } from "@/lib/project";
 import { makeAnnotation } from "@/test/annotationFixture";
+import type { PageReferenceTable } from "@/types/referencePoint";
+
+const referenceBox = { x: 10, y: 20, width: 30, height: 12 };
+const referenceTables: PageReferenceTable[] = [
+  {
+    page: 1,
+    bbox: referenceBox,
+    headerBox: referenceBox,
+    axes: ["X", "Y", "Z"],
+    nameHeader: "POINT",
+    points: [
+      {
+        symbol: "A",
+        coordinates: [
+          { axis: "X", value: "12.5" },
+          { axis: "Z", value: "8" },
+        ],
+        nameBox: referenceBox,
+        rowBox: referenceBox,
+        markers: [{ bbox: referenceBox, score: 0.95, margin: 0.2 }],
+      },
+    ],
+  },
+];
 
 describe("legacy annotation migration", () => {
   it("merges a mapped label into its value and reports orphan labels", () => {
@@ -147,6 +171,18 @@ describe("project and integration exports", () => {
     );
   });
 
+  it("places X/Y/Z reference values immediately after balloon values", () => {
+    const sheet = buildInspectionSheet(values, [], referenceTables);
+
+    expect(sheet.rows.slice(0, 5).map((row) => row.slice(0, 4))).toEqual([
+      ["1", "", "25", "0"],
+      ["2", "Outer diameter", "58.21±0.05", "+0.05, -0.05"],
+      ["3", "A_X", "12.5", ""],
+      ["4", "A_Y", "", ""],
+      ["5", "A_Z", "8", ""],
+    ]);
+  });
+
   it("saves a values-only project without embedding balloon artwork", () => {
     const serialized = buildProjectBundle({
       projectName: "Test drawing",
@@ -162,6 +198,7 @@ describe("project and integration exports", () => {
         documentNumber: "DB-1042",
         revisionNumber: "C",
       },
+      referenceTables,
       savedAt: 123,
     });
     const bundle = parseProjectBundle(serialized);
@@ -172,6 +209,7 @@ describe("project and integration exports", () => {
       documentNumber: "DB-1042",
       revisionNumber: "C",
     });
+    expect(bundle.referenceTables).toEqual(referenceTables);
     expect(serialized).not.toContain("balloon-style");
     expect(serialized).not.toContain("artwork");
   });
@@ -196,6 +234,7 @@ describe("project and integration exports", () => {
       documentNumber: "",
       revisionNumber: "",
     });
+    expect(parseProjectBundle(serialized).referenceTables).toEqual([]);
   });
 
   it("persists individual visibility without removing hidden values from exports", () => {
@@ -249,5 +288,26 @@ describe("project and integration exports", () => {
     });
     expect(payload.sheet?.extraColumns).toEqual(["part1"]);
     expect(payload.metadata.documentNumber).toBe("DB-1042");
+  });
+
+  it("appends three reference items after the balloon items", () => {
+    const payload = buildVerificationPayload(
+      values,
+      "Test drawing",
+      "https://example.invalid/verify",
+      [],
+      undefined,
+      referenceTables
+    );
+
+    expect(payload.items.slice(2).map(({ number, label, value }) => ({
+      number,
+      label,
+      value,
+    }))).toEqual([
+      { number: 3, label: "A_X", value: "12.5" },
+      { number: 4, label: "A_Y", value: "" },
+      { number: 5, label: "A_Z", value: "8" },
+    ]);
   });
 });

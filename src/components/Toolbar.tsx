@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { ExportPanel } from "@/components/ExportPanel";
 import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface ToolbarProps {
   isSelectingScanArea: boolean;
@@ -22,7 +23,6 @@ interface ToolbarProps {
   hasBalloons: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
-  onFindReferencePoints: () => void;
   findingReferencePoints: boolean;
   onFindGdtSymbols: () => void;
   findingGdtSymbols: boolean;
@@ -37,6 +37,7 @@ interface ToolbarProps {
   onLoadProject: () => void;
   onRemoveDrawing: () => void;
   canSaveProject: boolean;
+  referenceTables: readonly PageReferenceTable[];
 }
 
 export function Toolbar({
@@ -51,7 +52,6 @@ export function Toolbar({
   hasBalloons,
   onSelectScanSection,
   onScanWholePage,
-  onFindReferencePoints,
   findingReferencePoints,
   onFindGdtSymbols,
   findingGdtSymbols,
@@ -66,6 +66,7 @@ export function Toolbar({
   onLoadProject,
   onRemoveDrawing,
   canSaveProject,
+  referenceTables,
 }: ToolbarProps) {
   const [debugDump, setDebugDump] = useState(false);
 
@@ -130,7 +131,10 @@ export function Toolbar({
         Saved Checksheets
       </a>
 
-      <ExportPanel disabled={isProcessing} />
+      <ExportPanel
+        disabled={isProcessing}
+        referenceTables={referenceTables}
+      />
 
       <KeywordSettings />
 
@@ -143,20 +147,6 @@ export function Toolbar({
         onSelectSection={onSelectScanSection}
         onScanWholePage={onScanWholePage}
       />
-
-      <button
-        type="button"
-        onClick={onFindReferencePoints}
-        disabled={isProcessing || !canSaveProject}
-        title="Read the sheet's X/Y/Z point table and tag each point where the views call it out. Auto Balloon ▸ Whole Page does this too."
-        className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-          findingReferencePoints
-            ? "bg-teal-600 text-white"
-            : "border border-slate-200 text-slate-700 hover:bg-slate-50"
-        } disabled:opacity-50`}
-      >
-        {findingReferencePoints ? "Reading table…" : "Reference Points"}
-      </button>
 
       <button
         type="button"
@@ -196,7 +186,13 @@ export function Toolbar({
         {balloonsVisible ? "Hide Balloons" : "Show Balloons"}
       </button>
 
-      {isProcessing && !isScanRunning && (
+      {findingReferencePoints && (
+        <span className="text-sm text-teal-700 animate-pulse">
+          Reading reference points…
+        </span>
+      )}
+
+      {isProcessing && !isScanRunning && !findingReferencePoints && (
         <span className="text-sm text-blue-600 animate-pulse">
           Running OCR…
         </span>

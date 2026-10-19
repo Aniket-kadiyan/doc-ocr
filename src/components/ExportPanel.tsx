@@ -28,6 +28,7 @@ import {
   renderBalloonedCanvas,
 } from "@/lib/ballooned";
 import { buildBalloonedPdf } from "@/lib/balloonedPdf";
+import { renderReferencePages } from "@/lib/referencePageExport";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { useDocumentMetadataStore } from "@/store/documentMetadataStore";
 import {
@@ -38,9 +39,11 @@ import {
   ExcelExportDialog,
   type ExcelExportValues,
 } from "@/components/ExcelExportDialog";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 interface ExportPanelProps {
   disabled?: boolean;
+  referenceTables?: readonly PageReferenceTable[];
 }
 
 async function loadCompanyLogo(): Promise<string> {
@@ -55,7 +58,10 @@ async function loadCompanyLogo(): Promise<string> {
   });
 }
 
-export function ExportPanel({ disabled = false }: ExportPanelProps) {
+export function ExportPanel({
+  disabled = false,
+  referenceTables = [],
+}: ExportPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
@@ -79,7 +85,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
-  const empty = annotations.length === 0;
+  const empty = annotations.length === 0 && referenceTables.length === 0;
   const busy =
     actionStatus.kind === "saving" ||
     actionStatus.kind === "exporting" ||
@@ -192,6 +198,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         projectName,
         project,
         metadata,
+        referenceTables,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(
@@ -226,7 +233,12 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportInspectionJSON(annotations, extraColumns, metadata),
+      exportInspectionJSON(
+        annotations,
+        extraColumns,
+        metadata,
+        referenceTables
+      ),
       `${base}_inspection.json`,
       "application/json"
     );
@@ -251,13 +263,20 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
       if (!pageCanvasProvider) {
         throw new Error("Open a drawing first — there is nothing to export.");
       }
-      const pages = await collectBalloonedPageImages(
-        pageCanvasProvider,
-        annotations,
-        pagesToExport(annotations, currentPage),
-        { projectName, metadata }
-      );
-      if (pages.length === 0) {
+      const pages =
+        annotations.length > 0
+          ? await collectBalloonedPageImages(
+              pageCanvasProvider,
+              annotations,
+              pagesToExport(annotations, currentPage),
+              { projectName, metadata }
+            )
+          : [];
+      const referencePages = await renderReferencePages({
+        renderPage: pageCanvasProvider,
+        referenceTables,
+      });
+      if (pages.length === 0 && referencePages.length === 0) {
         throw new Error("Could not render the drawing pages.");
       }
       const options: ExcelExportOptions = {
@@ -269,6 +288,8 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
       const downloadedFile = await downloadInspectionWorkbook({
         annotations,
         pages,
+        referenceTables,
+        referencePages,
         options,
       });
       setActionStatus({
@@ -301,10 +322,16 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
 
     setActionStatus({ kind: "rendering", message: "Rendering pages…" });
     try {
+      const exportPages = [
+        ...new Set([
+          ...pagesToExport(annotations, currentPage),
+          ...referenceTables.map((table) => table.page),
+        ]),
+      ].sort((left, right) => left - right);
       const pages = await collectBalloonedPages(
         pageCanvasProvider,
         annotations,
-        pagesToExport(annotations, currentPage)
+        exportPages
       );
       if (pages.length === 0) {
         throw new Error("Could not render the drawing pages.");
@@ -315,6 +342,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         pages,
         annotations,
         extraColumns,
+        referenceTables,
       });
       downloadBlob(pdf, `${base}_ballooned.pdf`);
       setActionStatus({
@@ -380,7 +408,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportXML(annotations, extraColumns, metadata),
+      exportXML(annotations, extraColumns, metadata, referenceTables),
       `${base}_inspection.xml`,
       "application/xml"
     );
@@ -403,7 +431,8 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         projectName,
         url,
         extraColumns,
-        metadata
+        metadata,
+        referenceTables
       );
       await sendForVerification(url, payload);
       setActionStatus({
@@ -464,7 +493,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           >
             <span className="font-medium">Excel</span>
             <span className="block text-[11px] text-slate-400">
-              Formatted checksheet with ballooned page images
+              Checksheet plus a separate References worksheet and image
             </span>
           </button>
           <button

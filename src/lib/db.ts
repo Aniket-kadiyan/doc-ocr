@@ -4,6 +4,8 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import { normalizePageReferenceTables } from "@/lib/referenceValues";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 export interface ProjectRecord {
   id: string;
@@ -15,6 +17,8 @@ export interface ProjectRecord {
   mimeType?: string;
   /** Optional for compatibility with projects saved before metadata support. */
   metadata?: DocumentMetadata;
+  /** Optional for compatibility with projects saved before reference support. */
+  referenceTables?: PageReferenceTable[];
   updatedAt: number;
 }
 
@@ -76,6 +80,17 @@ export async function saveProjectMetadata(
 ): Promise<void> {
   await db.projects.update(projectId, {
     metadata: normalizeDocumentMetadata(metadata),
+    updatedAt: Date.now(),
+  });
+}
+
+/** Replace the durable coordinate-reference result for every project page. */
+export async function saveProjectReferenceTables(
+  projectId: string,
+  referenceTables: readonly PageReferenceTable[]
+): Promise<void> {
+  await db.projects.update(projectId, {
+    referenceTables: normalizePageReferenceTables(referenceTables),
     updatedAt: Date.now(),
   });
 }

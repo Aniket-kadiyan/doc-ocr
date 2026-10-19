@@ -1,6 +1,11 @@
 "use client";
 
 import { validateChecksheetReading } from "@/lib/checksheetRange";
+import {
+  checksheetSpecificationText,
+  isChecksheetReferenceRow,
+} from "@/lib/checksheetReference";
+import { referenceColor } from "@/lib/referenceColors";
 import type { ChecksheetColumn, ChecksheetRow } from "@/types/checksheet";
 
 interface ChecksheetTableProps {
@@ -31,7 +36,7 @@ export function ChecksheetTable({
       <table className="w-full min-w-[900px] border-collapse text-left">
         <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_#e2e8f0]">
           <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            <th className="w-16 px-3 py-3">Balloon</th>
+            <th className="w-16 px-3 py-3">Item</th>
             <th className="px-3 py-3">Label</th>
             <th className="px-3 py-3">Specification</th>
             <th className="px-3 py-3">Tolerance</th>
@@ -47,6 +52,11 @@ export function ChecksheetTable({
         <tbody>
           {rows.map((row) => {
             const active = row.annotation_id === activeAnnotationId;
+            const reference = isChecksheetReferenceRow(row);
+            const referenceTone = row.reference
+              ? referenceColor(row.reference.point_index)
+              : null;
+            const specificationText = checksheetSpecificationText(row);
             return (
               <tr
                 key={row.annotation_id}
@@ -59,21 +69,54 @@ export function ChecksheetTable({
                 }`}
               >
                 <td className="px-3 py-2 text-center">
-                  <span
-                    className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-bold ${
-                      active
-                        ? "bg-blue-600 text-white"
-                        : "border border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    {row.balloon_number}
-                  </span>
+                  {reference ? (
+                    <span
+                      title={
+                        row.reference
+                          ? `Reference point ${row.reference.symbol}, ${row.reference.axis} coordinate`
+                          : "Reference value"
+                      }
+                      style={
+                        referenceTone
+                          ? {
+                              backgroundColor: referenceTone.fill,
+                              color: referenceTone.ink,
+                            }
+                          : undefined
+                      }
+                      className={`inline-flex h-7 min-w-10 items-center justify-center rounded-md px-2 text-[10px] font-bold tracking-wide ${
+                        referenceTone
+                          ? active
+                            ? "ring-2 ring-slate-900/60 ring-offset-1"
+                            : "ring-1 ring-slate-900/20"
+                          : "bg-slate-600 text-white"
+                      }`}
+                    >
+                      REF
+                    </span>
+                  ) : (
+                    <span
+                      className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full px-2 text-sm font-bold ${
+                        active
+                          ? "bg-blue-600 text-white"
+                          : "border border-slate-300 bg-white text-slate-700"
+                      }`}
+                    >
+                      {row.balloon_number}
+                    </span>
+                  )}
                 </td>
                 <td className="max-w-48 px-3 py-2 text-sm text-slate-700">
                   {row.label || <span className="text-slate-300">—</span>}
                 </td>
                 <td className="px-3 py-2 font-mono text-sm font-medium text-slate-900">
-                  {row.specification}
+                  {reference && !row.specification.trim() ? (
+                    <span className="font-sans text-xs font-semibold text-amber-700">
+                      {specificationText}
+                    </span>
+                  ) : (
+                    specificationText
+                  )}
                 </td>
                 <td className="px-3 py-2 font-mono text-sm text-slate-700">
                   {row.tolerance || <span className="text-slate-300">—</span>}
