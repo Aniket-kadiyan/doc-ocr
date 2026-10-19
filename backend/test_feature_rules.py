@@ -59,6 +59,10 @@ def test_the_working_sections_are_on():
         assert rules.is_enabled(section), rules.rule(section).name
 
 
+def test_gdt_section_records_its_evidence_guard() -> None:
+    assert rules.rule(rules.GDT).reason == rules.GUARDED
+
+
 def test_describe_lists_every_section():
     text = rules.describe()
     for r in rules.SPEC_RULES:

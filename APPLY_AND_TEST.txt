@@ -1,37 +1,44 @@
-QTracX selective integration SI-2.4
+QTracX selective integration SI-3.1
 ==================================
 
 Purpose
 -------
-Correct the visual plus/minus detector without changing OCR text, native PDF
-text extraction, dimension composition, page filtering, or export.
+Replace broad GD&T keyword matching with guarded textual GD&T recognition.
 
-The previous template used the opposite polarity from the processed drawing
-ink and scored the padded background. This package:
+The previous classifier treated a GD&T word by itself as sufficient evidence.
+That could label measurement notes such as ROUNDNESS(2PT./180)50µm MAX. or
+SQUARENESS WITH FACE 50µm MAX. as GD&T inspection controls.
 
-* matches the template polarity to the processed image;
-* crops matching to the detected ink rather than the white page border;
-* uses template sizes relative to the ink height;
-* raises the operating threshold to the calibrated high-precision value 0.60;
-* adds real positive and negative CAD crops as regression fixtures.
+The new text recognizer accepts a result only when the text has the shape of a
+callout: a short unambiguous glyph callout, a pipe-delimited frame, or a GD&T
+name followed by a tolerance value. Prose, measurement specifications, and
+ambiguous glyphs are refused. Accepted results carry their source text,
+confidence, evidence, value, datum sequence, and diametral-zone flag.
+
+Compatibility boundary
+----------------------
+* Existing geometry-backed feature-control frames remain authoritative.
+* Native PDF text and OCR text are not replaced or modified.
+* No changes are made to scanning, image detection, persistence, or export.
+* The extra gdt_text result field is additive and appears only when this rule
+  accepts a textual GD&T callout.
 
 Expected baseline
 -----------------
 Branch: selective-integration
-Apply after SI-2.3 (caption proximity safety).
+Apply after SI-2.3 and SI-2.4.
 
-At package creation, the remote branch still pointed to:
+At package creation, origin/selective-integration still pointed to:
 3f4bc95730d8b019e3409b667c8a6a74b84f33f6
-
-SI-2.4 touches different files from SI-2.3, so applying it after the SI-2.3
-package does not overwrite the previous milestone.
 
 Files in this package
 ---------------------
-backend/symbol_vision.py
-backend/debug_steps_catalog.py
-backend/test_plus_minus_vision.py
-backend/benchmarks/fixtures/plus_minus/*
+backend/gdt_text.py
+backend/feature_classifier.py
+backend/feature_rules.py
+backend/test_gdt_text.py
+backend/test_feature_classifier.py
+backend/test_feature_rules.py
 
 Apply on Windows PowerShell
 ---------------------------
@@ -42,35 +49,42 @@ Apply on Windows PowerShell
 
 3. Extract this ZIP over the repository root:
 
-   Expand-Archive -Path "<download-folder>\QTracX_SI2_4_plus_minus_vision.zip" `
+   Expand-Archive -Path "<download-folder>\QTracX_SI3_1_guarded_textual_gdt.zip" `
      -DestinationPath . -Force
 
-4. Review this milestone only:
+4. Review the milestone:
 
-   git diff -- backend/symbol_vision.py backend/debug_steps_catalog.py
-   git status --short backend/test_plus_minus_vision.py backend/benchmarks/fixtures/plus_minus
+   git diff -- backend/gdt_text.py backend/feature_classifier.py backend/feature_rules.py
+   git status --short backend/test_gdt_text.py backend/test_feature_classifier.py backend/test_feature_rules.py
 
 Tests
 -----
-Run from doc-ocr\backend using the GPU environment, which contains OpenCV:
+Run from doc-ocr\backend:
 
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_plus_minus_vision.py
+     test_gdt_text.py `
+     test_feature_classifier.py `
+     test_feature_rules.py `
+     test_structured_symbol_vision.py
 
-The dedicated suite should execute the synthetic checks and all 14 real crop
-fixtures. It must not be skipped because cv2 is required for this milestone.
-
-Then run the adjacent OCR regressions:
+Recommended surrounding regressions:
 
    .\.venv-gpu\Scripts\python.exe -m pytest -q `
-     test_plus_minus_vision.py `
-     test_phi_evidence.py `
-     test_compose_minus.py `
+     test_gdt_text.py `
+     test_feature_classifier.py `
+     test_feature_rules.py `
+     test_structured_symbol_vision.py `
+     test_page_value_filters.py `
+     test_engineering_value_parser.py `
+     test_engineering_disposition.py `
      test_page_candidate_recovery.py `
-     test_ocr_runtime.py
+     test_detection_passes.py `
+     test_page_layout.py `
+     test_angle_utils.py `
+     test_compose_minus.py
 
 Suggested commit message
 ------------------------
-fix(ocr): correct plus-minus visual detection
+fix(ocr): guard textual GD&T recognition
 
 This package does not contain or create a Git commit.
