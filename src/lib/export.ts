@@ -1,6 +1,7 @@
 import type { Annotation } from "@/types/annotation";
 import {
   buildInspectionSheet,
+  toleranceForExport,
   type InspectionSheet,
 } from "@/lib/project";
 import {
@@ -27,7 +28,10 @@ export function findMalformedToleranceAnnotations(
   return annotations.filter((annotation) => {
     if ((annotation.kind ?? "dimension") !== "dimension") return false;
 
-    const tolerance = (annotation.range ?? "").trim();
+    const tolerance = toleranceForExport(
+      annotation.range,
+      annotation.value
+    ).trim();
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);
 
     const value = annotation.value.trim();

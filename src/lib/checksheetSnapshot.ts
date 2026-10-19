@@ -1,6 +1,6 @@
 import type { ProjectRecord } from "@/lib/db";
 import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
-import { valueAnnotations } from "@/lib/project";
+import { toleranceForExport, valueAnnotations } from "@/lib/project";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetSnapshotPayload } from "@/types/checksheet";
 import {
@@ -73,7 +73,7 @@ export function buildChecksheetCreationSnapshot({
         rotation: annotation.rotation,
         label: annotation.label ?? "",
         specification: annotation.value,
-        tolerance: annotation.range ?? "",
+        tolerance: toleranceForExport(annotation.range, annotation.value),
         method: annotation.method ?? "",
         tool: annotation.tool ?? "",
         dimension_type: annotation.type,

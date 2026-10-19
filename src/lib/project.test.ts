@@ -5,6 +5,7 @@ import {
   buildVerificationPayload,
   normalizeLegacyAnnotations,
   parseProjectBundle,
+  toleranceForExport,
 } from "@/lib/project";
 import { makeAnnotation } from "@/test/annotationFixture";
 
@@ -98,6 +99,38 @@ describe("project and integration exports", () => {
         "Micrometer",
       ],
     ]);
+  });
+
+  it("completes one-sided tolerances only in exported data", () => {
+    const upperOnly = makeAnnotation({
+      id: "upper-only",
+      number: 1,
+      value: "25",
+      range: "+0.1",
+    });
+    const lowerOnly = makeAnnotation({
+      id: "lower-only",
+      number: 2,
+      value: "30",
+      range: "-.5",
+    });
+
+    expect(toleranceForExport(upperOnly.range)).toBe("+0.1, -0");
+    expect(toleranceForExport(lowerOnly.range)).toBe("+0, -.5");
+    expect(toleranceForExport("+0.1, -0.2")).toBe("+0.1, -0.2");
+    expect(toleranceForExport(undefined, "R0.6-0")).toBe("+0, -0");
+    expect(toleranceForExport(undefined, "0.1+0.1")).toBe("+0.1, -0");
+    expect(toleranceForExport(undefined, "R0.3+0.05")).toBe("+0.05, -0");
+    expect(toleranceForExport(undefined, "65-0.01")).toBe("+0, -0.01");
+    expect(toleranceForExport("0", "2N9")).toBe("0");
+    expect(toleranceForExport(undefined, "R-5")).toBe("");
+
+    const sheet = buildInspectionSheet([upperOnly, lowerOnly]);
+    expect(sheet.rows[0][3]).toBe("+0.1, -0");
+    expect(sheet.rows[1][3]).toBe("+0, -.5");
+
+    expect(upperOnly.range).toBe("+0.1");
+    expect(lowerOnly.range).toBe("-.5");
   });
 
   it("appends the configured title-block keywords under the value rows", () => {

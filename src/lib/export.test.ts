@@ -8,7 +8,7 @@ import {
 import { makeAnnotation } from "@/test/annotationFixture";
 
 describe("tolerance export validation", () => {
-  it("accepts supported default, symmetric, and asymmetric tolerances", () => {
+  it("accepts supported default, symmetric, asymmetric, and one-sided tolerances", () => {
     const annotations = [
       makeAnnotation({ id: "zero", value: "0.02", range: "0" }),
       makeAnnotation({
@@ -17,6 +17,8 @@ describe("tolerance export validation", () => {
         range: "+0.05, -0.05",
       }),
       makeAnnotation({ id: "asymmetric", value: "25", range: "+0.1, -0.2" }),
+      makeAnnotation({ id: "upper-only", value: "25", range: "+0.1" }),
+      makeAnnotation({ id: "lower-only", value: "25", range: "-.5" }),
     ];
 
     expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);
@@ -32,6 +34,18 @@ describe("tolerance export validation", () => {
     expect(
       findMalformedToleranceAnnotations(annotations).map(({ id }) => id)
     ).toEqual(["bad-field", "bad-value"]);
+  });
+
+  it("accepts embedded one-sided tolerances and fit designations", () => {
+    const annotations = [
+      makeAnnotation({ id: "radius-lower", value: "R0.6-0", range: undefined }),
+      makeAnnotation({ id: "linear-upper", value: "0.1+0.1", range: undefined }),
+      makeAnnotation({ id: "radius-upper", value: "R0.3+0.05", range: undefined }),
+      makeAnnotation({ id: "linear-lower", value: "65-0.01", range: undefined }),
+      makeAnnotation({ id: "fit", value: "2N9", range: "0" }),
+    ];
+
+    expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);
   });
 });
 
@@ -124,5 +138,22 @@ describe("inspection exports", () => {
     expect(xml).toContain("<columns>");
     expect(xml).toContain("<partName>Drive Bracket</partName>");
     expect(xml).toContain("<documentNumber>DB-1042 &amp; ALT</documentNumber>");
+  });
+
+  it("adds the missing zero bound to exported table formats", () => {
+    const oneSided = [
+      makeAnnotation({ id: "upper", number: 1, value: "25", range: "+0.1" }),
+      makeAnnotation({ id: "lower", number: 2, value: "30", range: "-.5" }),
+      makeAnnotation({ id: "embedded", number: 3, value: "R0.3+0.05", range: undefined }),
+    ];
+
+    const json = JSON.parse(exportInspectionJSON(oneSided));
+    expect(json.data.slice(0, 3).map((row: { Tolerance: string }) => row.Tolerance))
+      .toEqual(["+0.1, -0", "+0, -.5", "+0.05, -0"]);
+
+    const xml = exportXML(oneSided);
+    expect(xml).toContain('<cell name="Tolerance">+0.1, -0</cell>');
+    expect(xml).toContain('<cell name="Tolerance">+0, -.5</cell>');
+    expect(xml).toContain('<cell name="Tolerance">+0.05, -0</cell>');
   });
 });

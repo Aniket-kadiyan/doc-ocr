@@ -26,6 +26,14 @@ export interface BalloonedPage {
   annotations: Annotation[];
 }
 
+/** One page with its balloons burned into the PNG for spreadsheet embedding. */
+export interface BalloonedPageImage {
+  page: number;
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
 /** Draw one annotation's box, leader and balloon onto a 2D context at zoom 1. */
 function drawBalloon(
   ctx: CanvasRenderingContext2D,
@@ -169,6 +177,38 @@ export async function collectBalloonedPages(
       width: canvas.width,
       height: canvas.height,
       annotations: annotations.filter((a) => a.page === page),
+    });
+  }
+  return pages;
+}
+
+/**
+ * Render the requested pages using the same canvas/balloon path as the existing
+ * PNG export, then return self-contained images for Excel.
+ */
+export async function collectBalloonedPageImages(
+  renderPage: PageCanvasProvider,
+  annotations: Annotation[],
+  pageNumbers: number[],
+  header?: {
+    projectName?: string;
+    metadata?: Partial<DocumentMetadata> | null;
+  }
+): Promise<BalloonedPageImage[]> {
+  const pages: BalloonedPageImage[] = [];
+  for (const page of pageNumbers) {
+    const source = await renderPage(page);
+    if (!source) continue;
+    const rendered = renderBalloonedCanvas(
+      source,
+      annotations.filter((annotation) => annotation.page === page),
+      header
+    );
+    pages.push({
+      page,
+      dataUrl: rendered.toDataURL("image/png"),
+      width: rendered.width,
+      height: rendered.height,
     });
   }
   return pages;

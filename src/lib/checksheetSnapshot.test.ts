@@ -53,4 +53,24 @@ describe("checksheet creation snapshot", () => {
 
     expect(Object.values(creation.payload.metadata)).toEqual(["", "", ""]);
   });
+
+  it("completes a one-sided tolerance in the exported snapshot", () => {
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "Tolerance export",
+      readingColumns: ["Part 1"],
+      annotations: [
+        makeAnnotation({ value: "25", range: "+0.1" }),
+        makeAnnotation({ id: "embedded", number: 2, value: "R0.3+0.05", range: undefined }),
+      ],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project,
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.items.map((item) => item.tolerance)).toEqual([
+      "+0.1, -0",
+      "+0.05, -0",
+    ]);
+  });
 });

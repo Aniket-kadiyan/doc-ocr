@@ -68,6 +68,51 @@ export function valueWithRange(a: Annotation): string {
   return a.range ? `${a.value} ${a.range}` : a.value;
 }
 
+const EXPORT_TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+const SINGLE_UPPER_TOLERANCE = new RegExp(
+  String.raw`^\+\s*(${EXPORT_TOLERANCE_NUMBER})$`
+);
+const SINGLE_LOWER_TOLERANCE = new RegExp(
+  String.raw`^-\s*(${EXPORT_TOLERANCE_NUMBER})$`
+);
+
+/**
+ * Complete a one-sided tolerance for exported data without changing the
+ * editable annotation. An explicit Range value always takes precedence over
+ * tolerance text embedded at the end of Value.
+ */
+export function toleranceForExport(
+  tolerance?: string,
+  value?: string
+): string {
+  const original = tolerance ?? "";
+  const trimmed = original.trim();
+
+  const upper = SINGLE_UPPER_TOLERANCE.exec(trimmed);
+  if (upper) return `+${upper[1]}, -0`;
+
+  const lower = SINGLE_LOWER_TOLERANCE.exec(trimmed);
+  if (lower) return `+0, -${lower[1]}`;
+
+  if (trimmed) return original;
+
+  const embedded = new RegExp(
+    String.raw`([+-])\s*(${EXPORT_TOLERANCE_NUMBER})\s*$`
+  ).exec(value?.trim() ?? "");
+  if (embedded && embedded.index != null) {
+    const specification = (value ?? "").slice(0, embedded.index);
+    // A sign is a tolerance only when it follows a numeric specification;
+    // this prevents a negative nominal such as R-5 from being reinterpreted.
+    if (/\d\s*$/.test(specification)) {
+      return embedded[1] === "+"
+        ? `+${embedded[2]}, -0`
+        : `+0, -${embedded[2]}`;
+    }
+  }
+
+  return original;
+}
+
 /** New projects contain value annotations only. Older projects may still have
  * separate label annotations, which are merged into their mapped value here. */
 export interface LegacyAnnotationMigration {
@@ -151,7 +196,7 @@ export function buildInspectionSheet(
       String(a.number),
       oneLine(a.label ?? ""),
       oneLine(a.value),
-      a.range ?? "",
+      toleranceForExport(a.range, a.value),
       ...extraColumns.map((col) => a.extras?.[col] ?? ""),
       a.method ?? "",
       a.tool ?? "",
@@ -274,7 +319,7 @@ export function buildVerificationPayload(
       kind: "dimension",
       method: a.method ?? "",
       tool: a.tool ?? "",
-      range: a.range ?? "",
+      range: toleranceForExport(a.range, a.value),
       labelId: "",
       page: a.page,
       confidence: a.confidence,
