@@ -60,7 +60,7 @@ from symbol_vision import (
 # Identifies the OCR package loaded by the running backend. The backend imports
 # this module once at startup, so a changed value also makes a stale process
 # visible through /health instead of making new scan behaviour look inactive.
-OCR_CHANGESET_ID = "mvp1-integration-parity-p1-authoritative-routing"
+OCR_CHANGESET_ID = "mvp1-integration-parity-p2-context-suppression"
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -105,6 +105,10 @@ GROUPING_MAX_REFINEMENTS = 8
 # tables unrelated to coordinate points.
 TABLE_READ_ROW_HEIGHT = 30.0
 MAX_TABLES_READ = 6
+# A detected notes region larger than this is still retained as Other, but it
+# cannot suppress values beneath it. This fail-safe prevents a bad paragraph
+# grouping from clearing a substantial part of the drawing.
+NOTES_MAX_PAGE_FRACTION = 0.25
 
 
 def sort_reading_order(
@@ -165,7 +169,17 @@ def assemble_paddle_lines(
 # The "." or ")" separator is REQUIRED. Making it optional was tried and is a
 # regression: it turns ordinary lines into false markers, which breaks the
 # "markers must climb" guard below and the whole block is then rejected.
-_NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]\s*[A-Za-z]")
+_NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]\s*[^\W\d_]")
+# Some drawings omit marker punctuation: ``1 UNSPECIFIED BENDING RADIUS``.
+# Requiring a word of at least three letters and another token prevents count
+# callouts such as ``2 PLACES`` and ``4 HOLES`` from becoming note markers.
+_NOTE_POINT_PROSE_RE = re.compile(r"^\s*(\d{1,2})\s+[^\W\d_]{3,}\s+\S")
+# Wide-set note layouts often detect the number and the prose separately.
+_NOTE_MARKER_ONLY_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]?\s*$")
+_NOTE_MIN_POINTS = 2
+_NOTE_MIN_POINTS_UNPUNCTUATED = 3
+_NOTE_MARKER_COLUMN_TOLERANCE = 1.5
+_NotePoint = tuple[int, dict[str, Any], int, dict[str, Any]]
 # The block's own heading. PaddleOCR reads the CAD "O" as a zero often enough
 # on these sheets that both spellings are accepted.
 _NOTES_HEADING_RE = re.compile(r"^\s*N[O0]TES?\s*[:.\-]?\s*$", re.I)
@@ -2427,56 +2441,156 @@ class OcrPipeline:
         return cleaned if len(markers) >= 2 else []
 
     @staticmethod
-    def _detect_notes_block(
+    def _note_marker_points(
         boxes: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any] | None, list[int]]:
-        """
-        Recover the drawing's NOTES paragraph as ONE region.
+    ) -> tuple[list[_NotePoint], int]:
+        """Return numbered markers and the evidence threshold they require."""
 
-        Every line of a notes block fails ``has_dimension_value`` — it opens
-        with a word and carries nothing measurable — so ``segment`` drops the
-        whole paragraph. The notes are still wanted on the inspection sheet,
-        just not as dimensions, so the block is assembled here and returned as
-        a single General Note region.
+        punctuated: list[_NotePoint] = []
+        prose: list[_NotePoint] = []
+        detached: list[_NotePoint] = []
+        for index, box in enumerate(boxes):
+            text = str(box.get("text") or "")
+            match = _NOTE_POINT_RE.match(text)
+            if match:
+                punctuated.append((index, box, int(match.group(1)), box))
+                continue
+            match = _NOTE_POINT_PROSE_RE.match(text)
+            if match:
+                prose.append((index, box, int(match.group(1)), box))
+                continue
+            match = _NOTE_MARKER_ONLY_RE.match(text)
+            if match:
+                beside = OcrPipeline._prose_beside(box, boxes)
+                if beside is not None:
+                    detached.append(
+                        (
+                            index,
+                            box,
+                            int(match.group(1)),
+                            OcrPipeline._union_box(box, beside),
+                        )
+                    )
 
-        The text is taken from the detection boxes rather than by re-reading
-        the crop: each box is already one line, and preserving that line
-        structure is what lets the sheet split the paragraph back into its
-        numbered points. Re-reading a whole paragraph through the dimension
-        recogniser would also lose the line breaks.
+        if len(punctuated) >= _NOTE_MIN_POINTS:
+            return punctuated, _NOTE_MIN_POINTS
+        return prose + detached, _NOTE_MIN_POINTS_UNPUNCTUATED
 
-        Returns ``(region, indices)`` — the region and the indices of the boxes
-        it consumed — or ``(None, [])`` when the drawing carries no notes.
-        """
-        points = [
-            (i, b)
-            for i, b in enumerate(boxes)
-            if _NOTE_POINT_RE.match(b.get("text") or "")
+    @staticmethod
+    def _prose_beside(
+        marker: dict[str, Any],
+        boxes: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Find the prose run belonging to a detached numbered marker."""
+
+        line_h = max(float(marker["h"]), 1.0)
+        nearest: dict[str, Any] | None = None
+        for box in boxes:
+            if box is marker:
+                continue
+            text = str(box.get("text") or "").strip()
+            if sum(character.isalpha() for character in text) < 3:
+                continue
+            gap = float(box["x"]) - (float(marker["x"]) + float(marker["w"]))
+            if not 0.0 <= gap <= 4.0 * line_h:
+                continue
+            overlap = min(
+                float(box["y"]) + float(box["h"]),
+                float(marker["y"]) + line_h,
+            ) - max(float(box["y"]), float(marker["y"]))
+            if overlap < 0.5 * min(float(box["h"]), line_h):
+                continue
+            if nearest is None or float(box["x"]) < float(nearest["x"]):
+                nearest = box
+        return nearest
+
+    @staticmethod
+    def _union_box(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+        x0 = min(float(left["x"]), float(right["x"]))
+        y0 = min(float(left["y"]), float(right["y"]))
+        x1 = max(
+            float(left["x"]) + float(left["w"]),
+            float(right["x"]) + float(right["w"]),
+        )
+        y1 = max(
+            float(left["y"]) + float(left["h"]),
+            float(right["y"]) + float(right["h"]),
+        )
+        return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+    @staticmethod
+    def _note_point_groups(
+        points: list[_NotePoint],
+        *,
+        minimum: int,
+    ) -> list[list[_NotePoint]]:
+        """Split restarted numbering into separate, aligned note lists."""
+
+        groups: list[list[_NotePoint]] = []
+        current: list[_NotePoint] = []
+        for point in sorted(points, key=lambda item: item[1]["y"]):
+            if current and point[2] <= current[-1][2]:
+                if point[2] > 2:
+                    continue
+                groups.append(current)
+                current = []
+            current.append(point)
+        if current:
+            groups.append(current)
+
+        aligned = (OcrPipeline._one_marker_column(group) for group in groups)
+        return [
+            group
+            for group in aligned
+            if len(group) >= minimum and group[0][2] <= 2
         ]
-        # Two points is the smallest thing that is recognisably a list. A lone
-        # "1. SOMETHING" is far more likely to be a stray callout.
-        if len(points) < 2:
-            return None, []
 
-        points.sort(key=lambda p: p[1]["y"])
-        numbers = [
-            int(_NOTE_POINT_RE.match(b["text"]).group(1)) for _, b in points
+    @staticmethod
+    def _one_marker_column(group: list[_NotePoint]) -> list[_NotePoint]:
+        if not group:
+            return group
+        lefts = sorted(float(point[1]["x"]) for point in group)
+        median_left = lefts[len(lefts) // 2]
+        heights = sorted(float(point[1]["h"]) for point in group)
+        tolerance = max(
+            4.0,
+            heights[len(heights) // 2] * _NOTE_MARKER_COLUMN_TOLERANCE,
+        )
+        return [
+            point
+            for point in group
+            if abs(float(point[1]["x"]) - median_left) <= tolerance
         ]
-        # The markers must climb as the eye moves down the block, and the list
-        # has to start at its top. Without this a column of unrelated numbered
-        # table rows would be swept up as "notes".
-        if numbers[0] > 2 or any(
-            b <= a for a, b in zip(numbers, numbers[1:])
-        ):
-            return None, []
 
-        left = min(b["x"] for _, b in points)
-        right = max(b["x"] + b["w"] for _, b in points)
-        line_h = sorted(b["h"] for _, b in points)[len(points) // 2]
-        top = min(b["y"] for _, b in points)
-        bottom = max(b["y"] + b["h"] for _, b in points)
+    @staticmethod
+    def _detect_notes_blocks(
+        boxes: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], list[int]]]:
+        """Recover every numbered notes paragraph, one region per list."""
 
-        chosen = {i for i, _ in points}
+        found, minimum = OcrPipeline._note_marker_points(boxes)
+        return [
+            block
+            for group in OcrPipeline._note_point_groups(found, minimum=minimum)
+            for block in (OcrPipeline._assemble_notes_block(boxes, group),)
+            if block is not None
+        ]
+
+    @staticmethod
+    def _assemble_notes_block(
+        boxes: list[dict[str, Any]],
+        points: list[_NotePoint],
+    ) -> tuple[dict[str, Any], list[int]] | None:
+        """Grow one numbered marker column into its complete paragraph."""
+
+        spans = [span for _, _, _, span in points]
+        left = min(b["x"] for b in spans)
+        right = max(b["x"] + b["w"] for b in spans)
+        line_h = sorted(b["h"] for b in spans)[len(spans) // 2]
+        top = min(b["y"] for b in spans)
+        bottom = max(b["y"] + b["h"] for b in spans)
+
+        chosen = {index for index, _, _, _ in points}
 
         # Wrapped continuation lines sit between and below the markers, and the
         # heading sits just above. Grow the block until it stops absorbing
@@ -2534,7 +2648,7 @@ class OcrPipeline:
         # Keep the heading out of the text: the sheet writes its own NOTES row.
         lines = [ln for ln in lines if ln and not _NOTES_HEADING_RE.match(ln)]
         if not lines:
-            return None, []
+            return None
 
         confs = [float(b.get("conf") or 0.0) for b in members]
         region = {
@@ -2562,6 +2676,17 @@ class OcrPipeline:
         region["_bounds"] = (left, top, right, bottom)
         region["_line_h"] = line_h
         return region, sorted(chosen)
+
+    @staticmethod
+    def _detect_notes_block(
+        boxes: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, list[int]]:
+        """Return the largest block for callers that support one paragraph."""
+
+        blocks = OcrPipeline._detect_notes_blocks(boxes)
+        if not blocks:
+            return None, []
+        return max(blocks, key=lambda block: len(block[1]))
 
     @staticmethod
     def _region_from_result(
@@ -5033,11 +5158,26 @@ class OcrPipeline:
             y1 = column["y"] + column["h"] + 2.0 * line_h
             anchor_bottom = column["y"] + column["h"]
         else:
-            return []
+            # The page objects may contain enough detached/punctuated markers
+            # to locate one language block even when neither its heading nor a
+            # fused marker column survived OCR. Use that block as the anchor
+            # for a bounded line-reading crop that also reaches the restarted
+            # list commonly printed immediately below it.
+            blocks = self._detect_notes_blocks(boxes)
+            if not blocks:
+                return []
+            anchor = min(blocks, key=lambda item: item[0]["bbox"]["y"])[0]
+            bbox = anchor["bbox"]
+            line_h = max(float(anchor.get("_line_h") or 0.0), 1.0)
+            x0 = float(bbox["x"]) - 0.5 * line_h
+            y0 = float(bbox["y"]) - 2.0 * line_h
+            anchor_bottom = float(bbox["y"]) + float(bbox["height"])
+            y1 = anchor_bottom + max(24.0 * line_h, 2.5 * float(bbox["height"]))
         # The paragraph never continues past the top of the title block.
         for b in boxes:
             if (
                 b["y"] >= anchor_bottom
+                and b["x"] + b["w"] >= x0
                 and b["x"] < x0 + 0.6 * iw
                 and _TITLE_BLOCK_WORDS_RE.search(str(b.get("text") or ""))
             ):
@@ -5129,6 +5269,96 @@ class OcrPipeline:
         out.extend(ln for i, ln in enumerate(lines) if i not in used)
         return out
 
+    def _notes_regions(
+        self,
+        image: Image.Image,
+        *,
+        boxes: list[dict[str, Any]] | None = None,
+        debug_dump: bool = False,
+        debug_dump_force: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return every notes paragraph while keeping the OCR work bounded.
+
+        The page route first reuses text already read for its candidates. A
+        small anchor crop is then allowed to recover line structure or a fused
+        marker column; this avoids the extra full-page OCR pass while still
+        handling multilingual sheets whose numbering restarts.
+        """
+        if boxes is None:
+            try:
+                boxes = self._detect_regions_ocr(image)
+            except Exception:
+                return []
+
+        sources = [boxes]
+        # One pass may return a vertical "12345" object or detached markers.
+        # Preserve the raw source (needed to combine unpunctuated and detached
+        # lists) and inspect a joined form as an additional hypothesis.
+        joined = self._join_note_markers(boxes)
+        if joined != boxes:
+            sources.append(joined)
+        initial_blocks = self._detect_notes_blocks(boxes)
+        near = (
+            self._notes_boxes_near_anchor(image, boxes)
+            if len(initial_blocks) < 2
+            else []
+        )
+        if near:
+            sources.append(near)
+
+        candidates: list[dict[str, Any]] = []
+
+        def overlap_share(left: dict[str, Any], right: dict[str, Any]) -> float:
+            a = left["bbox"]
+            b = right["bbox"]
+            x0 = max(float(a["x"]), float(b["x"]))
+            y0 = max(float(a["y"]), float(b["y"]))
+            x1 = min(
+                float(a["x"]) + float(a["width"]),
+                float(b["x"]) + float(b["width"]),
+            )
+            y1 = min(
+                float(a["y"]) + float(a["height"]),
+                float(b["y"]) + float(b["height"]),
+            )
+            intersection = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+            left_area = max(float(a["width"]) * float(a["height"]), 1.0)
+            right_area = max(float(b["width"]) * float(b["height"]), 1.0)
+            return intersection / min(left_area, right_area)
+
+        for source in sources:
+            for region, _ in self._detect_notes_blocks(source):
+                duplicate = next(
+                    (
+                        index
+                        for index, existing in enumerate(candidates)
+                        if overlap_share(region, existing) >= 0.6
+                    ),
+                    None,
+                )
+                if duplicate is None:
+                    candidates.append(region)
+                    continue
+                existing = candidates[duplicate]
+                if len(str(region.get("text") or "")) > len(
+                    str(existing.get("text") or "")
+                ):
+                    candidates[duplicate] = region
+
+        found: list[dict[str, Any]] = []
+        for region in sorted(
+            candidates,
+            key=lambda item: (item["bbox"]["y"], item["bbox"]["x"]),
+        ):
+            bounds = region.pop("_bounds", None)
+            line_h = region.pop("_line_h", 0.0)
+            if bounds is not None:
+                better = self._reread_notes_block(image, bounds, line_h)
+                if better:
+                    region["text"] = "\n".join(better)
+            found.append(region)
+        return found
+
     def _notes_region(
         self,
         image: Image.Image,
@@ -5137,41 +5367,21 @@ class OcrPipeline:
         debug_dump: bool = False,
         debug_dump_force: bool = False,
     ) -> dict[str, Any] | None:
-        """
-        Detect the NOTES paragraph and read it as one region.
+        """Return the largest paragraph for legacy single-region callers."""
 
-        Deliberately runs its own recognition pass: detect_regions on this
-        pipeline is DETECTOR-ONLY and returns geometry with empty text, so the
-        numbered-point markers this looks for are simply not there. With
-        recognised boxes the same detector reads all five notes on a real
-        sheet; without them it finds nothing and the note lines leak into
-        neighbouring dimension clusters, which is how a balloon came out as
-        "AN.2WTOOPING.".
-        """
-        if boxes is None:
-            try:
-                boxes = self._detect_regions_ocr(image)
-            except Exception:
-                return None
-        region, _ = self._detect_notes_block(boxes)
-        if region is None:
-            # The page route's objects are not lines: it hands over the
-            # marker column as one tall "12345" and each long note line
-            # read as debris, so the markers this looks for are missing.
-            # The heading (or the column) still says where the block IS, so
-            # just that corner is read again, line by line.
-            near = self._notes_boxes_near_anchor(image, boxes)
-            if near:
-                region, _ = self._detect_notes_block(near)
-        if region is None:
+        regions = self._notes_regions(
+            image,
+            boxes=boxes,
+            debug_dump=debug_dump,
+            debug_dump_force=debug_dump_force,
+        )
+        if not regions:
             return None
-        bounds = region.pop("_bounds", None)
-        line_h = region.pop("_line_h", 0.0)
-        if bounds is not None:
-            better = self._reread_notes_block(image, bounds, line_h)
-            if better:
-                region["text"] = "\n".join(better)
-        return region
+        return max(
+            regions,
+            key=lambda region: region["bbox"]["width"]
+            * region["bbox"]["height"],
+        )
 
     def segment(
         self,
@@ -7874,6 +8084,10 @@ class OcrPipeline:
             "revision_history",
             "note_information",
             "document_metadata",
+            # Decide this from preliminary geometry before an authoritative
+            # crop read loses the long-line evidence that proves the object is
+            # only a fragment of prose.
+            "text_line_fragment",
         }
 
         def build_filter_candidates() -> list[PageValueCandidate]:
@@ -8837,16 +9051,27 @@ class OcrPipeline:
         # OCR pass purely to find the NOTES markers cost 75 s on one sheet and
         # found nothing the panel passes had not. The raw recogniser text is
         # used because the value normaliser rewrites prose.
-        notes_region = self._notes_region(
+        notes_regions = self._notes_regions(
             image,
             boxes=self._record_text_boxes(ocr_records),
             debug_dump=debug_dump,
             debug_dump_force=debug_dump_force,
         )
-        if notes_region is not None:
+        page_area = float(image.width) * float(image.height)
+        for note_index, notes_region in enumerate(notes_regions, start=1):
             # The fragments the block was assembled from — the marker column,
             # a phrase out of one line — must not keep balloons of their own.
-            retire_inside([dict(notes_region["bbox"])], "Part of the general notes", keep=set())
+            # If grouping ever produces an implausibly large paragraph, retain
+            # it in Other but do not allow it to remove values beneath it.
+            note_area = float(notes_region["bbox"]["width"]) * float(
+                notes_region["bbox"]["height"]
+            )
+            if page_area > 0 and note_area <= NOTES_MAX_PAGE_FRACTION * page_area:
+                retire_inside(
+                    [dict(notes_region["bbox"])],
+                    "Part of the general notes",
+                    keep=set(),
+                )
             note_text = str(notes_region.get("text") or "")
             note_parse = parse_engineering_value(note_text)
             note_disposition = disposition_engineering_object(
@@ -8856,7 +9081,7 @@ class OcrPipeline:
                 context_rule="note_information",
                 context_reason="General drawing notes",
             )
-            note_id = "P-NOTES"
+            note_id = f"P-NOTES-{note_index:03d}"
             candidate_outcomes.append(
                 {
                     "candidate_id": note_id,

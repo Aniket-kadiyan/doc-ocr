@@ -88,13 +88,21 @@ DATE_VALUE = _compile(
 )
 NUMERIC_COMPONENT = re.compile(r"\d")
 SCALE_RATIO_VALUE = _compile(r"^\s*\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s*$")
-COMPACT_IDENTIFIER_VALUE = _compile(
+# Deliberately case-sensitive. Engineering identifiers are printed in
+# capitals; mixed/lower-case strings such as ``listed2`` and ``Roper0`` are
+# characteristic OCR damage from prose and must not enter through the
+# identifier escape hatch.
+COMPACT_IDENTIFIER_VALUE = re.compile(
     r"^(?=.{3,}$)(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]*$"
 )
 CONTEXT_IDENTIFIER_VALUE = _compile(
     r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9./_-]{5,}$"
 )
 SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
+# A long run of bare digits is only metadata when a nearby metadata label says
+# so. The length alone never excludes it because a drawing may contain a real
+# long integer dimension.
+BARE_IDENTIFIER_NUMBER = _compile(r"^\d{6,}$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
@@ -457,6 +465,7 @@ def _is_context_exclusion_prone(text: str) -> bool:
         SCALE_RATIO_VALUE.fullmatch(normalized)
         or _is_compact_identifier(normalized)
         or SINGLE_CHARACTER_VALUE.fullmatch(normalized)
+        or BARE_IDENTIFIER_NUMBER.fullmatch(normalized)
         or not is_complete_engineering_value(normalized)
     )
 
@@ -655,6 +664,73 @@ def _document_metadata(
     )
 
 
+# A detector pass can see a printed prose line as one long box while a rotated
+# pass breaks the same ink into many character-sized boxes. Those fragments
+# can be misread as valid numbers or compact identifiers. Geometry is more
+# reliable than the fragment text here: require a long line box and at least
+# six small boxes distributed along it.
+TEXT_LINE_MIN_ASPECT = 8.0
+TEXT_LINE_MIN_FRAGMENTS = 6
+TEXT_LINE_MAX_FRAGMENT_SHARE = 0.5
+TEXT_LINE_MIN_HORIZONTAL_COVER = 0.9
+TEXT_LINE_BASELINE_SLACK = 0.6
+TEXT_LINE_MAX_LINES_CONSIDERED = 4
+
+
+def _bbox_area(box: BBox) -> float:
+    return max(float(box["width"]) * float(box["height"]), 1.0)
+
+
+def _is_line_shaped(box: BBox) -> bool:
+    height = float(box["height"])
+    return height > 0 and float(box["width"]) / height >= TEXT_LINE_MIN_ASPECT
+
+
+def _sits_on_line(fragment: BBox, line: BBox) -> bool:
+    if _bbox_area(fragment) > _bbox_area(line) * TEXT_LINE_MAX_FRAGMENT_SHARE:
+        return False
+    fragment_left = float(fragment["x"])
+    fragment_right = fragment_left + float(fragment["width"])
+    line_left = float(line["x"])
+    line_right = line_left + float(line["width"])
+    covered = max(
+        0.0,
+        min(fragment_right, line_right) - max(fragment_left, line_left),
+    )
+    if covered / max(float(fragment["width"]), 1.0) < TEXT_LINE_MIN_HORIZONTAL_COVER:
+        return False
+    middle = float(fragment["y"]) + float(fragment["height"]) / 2
+    slack = TEXT_LINE_BASELINE_SLACK * float(line["height"])
+    return (
+        float(line["y"]) - slack
+        <= middle
+        <= float(line["y"]) + float(line["height"]) + slack
+    )
+
+
+def _text_line_fragment(
+    candidate: PageValueCandidate,
+    page_candidates: Sequence[PageValueCandidate],
+) -> bool:
+    lines_considered = 0
+    for other in page_candidates:
+        if other is candidate or not _is_line_shaped(other.bbox):
+            continue
+        if not _sits_on_line(candidate.bbox, other.bbox):
+            continue
+        lines_considered += 1
+        fragments = sum(
+            1
+            for item in page_candidates
+            if item is not other and _sits_on_line(item.bbox, other.bbox)
+        )
+        if fragments >= TEXT_LINE_MIN_FRAGMENTS:
+            return True
+        if lines_considered >= TEXT_LINE_MAX_LINES_CONSIDERED:
+            break
+    return False
+
+
 # Edit this ordered tuple to change whole-page exclusions.  Earlier enabled
 # rules win, making behavior deterministic and easy to audit in result counts.
 NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
@@ -693,6 +769,12 @@ NEVER_BALLOON_RULES: tuple[PageValueFilterRule, ...] = (
         enabled=True,
         reason="Drawing, document, part, or sheet metadata",
         predicate=_document_metadata,
+    ),
+    PageValueFilterRule(
+        name="text_line_fragment",
+        enabled=True,
+        reason="Piece of a printed text line detected whole by another pass",
+        predicate=_text_line_fragment,
     ),
 )
 

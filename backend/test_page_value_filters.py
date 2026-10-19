@@ -132,6 +132,30 @@ def test_split_metadata_value_is_rejected_only_when_its_label_is_nearby() -> Non
     assert standalone.accepted
 
 
+def test_a_drawing_number_beside_its_label_is_not_a_dimension() -> None:
+    label = candidate("DWG NO", x=10, y=10, width=60)
+    number = candidate("7475870300", x=80, y=10, width=200)
+
+    decision = evaluate_page_value(number, page_candidates=(label, number))
+
+    assert not decision.accepted
+    assert decision.rule_name == "document_metadata"
+
+
+def test_a_long_bare_number_without_a_label_remains_a_value() -> None:
+    number = candidate("123456", x=900, y=900, width=140)
+
+    assert evaluate_page_value(number, page_candidates=(number,)).accepted
+
+
+def test_short_integer_dimensions_are_not_treated_as_document_numbers() -> None:
+    label = candidate("DWG NO", x=10, y=10, width=60)
+    for text in ("21", "140", "12345"):
+        value = candidate(text, x=80, y=10, width=60)
+        decision = evaluate_page_value(value, page_candidates=(label, value))
+        assert decision.accepted, text
+
+
 def test_distant_metadata_label_does_not_exclude_a_numeric_value() -> None:
     label = candidate("PART NUMBER", x=10, y=10, width=90)
     value = candidate("50", x=700, y=500, width=30)
@@ -264,6 +288,69 @@ def test_mixed_section_rejects_only_candidate_inside_the_table() -> None:
     )
     assert decision.accepted
     assert decision.rule_name == "section_engineering_value"
+
+
+def _at(text: str, x: float, y: float, width: float, height: float):
+    return PageValueCandidate(
+        text=text,
+        bbox={"x": x, "y": y, "width": width, "height": height},
+    )
+
+
+TEXT_LINE = _at("", 100, 200, 460, 16)
+
+
+def _letters_along_the_line(count: int = 8):
+    return [
+        _at("", 110 + index * 50, 201, 20, 14)
+        for index in range(count)
+    ]
+
+
+def test_fragments_of_a_detected_text_line_are_not_values() -> None:
+    others = _letters_along_the_line()
+    for fragment in (
+        _at("Roper0", 250, 201, 70, 15),
+        _at("031", 330, 202, 22, 14),
+        _at("35", 410, 203, 12, 12),
+    ):
+        decision = evaluate_page_value(
+            fragment,
+            page_candidates=[TEXT_LINE, fragment, *others],
+        )
+        assert not decision.accepted, fragment.text
+        assert decision.rule_name == "text_line_fragment", fragment.text
+
+
+def test_two_pieces_are_a_split_callout_not_a_text_line() -> None:
+    fused = _at("", 100, 200, 460, 16)
+    left = _at("25.4", 110, 201, 180, 14)
+    right = _at("31.8", 310, 201, 180, 14)
+
+    decision = evaluate_page_value(left, page_candidates=[fused, left, right])
+
+    assert decision.accepted, decision.rule_name
+
+
+def test_a_dimension_beside_a_text_line_remains_a_value() -> None:
+    value = _at("Ø18.6", 700, 201, 60, 15)
+
+    decision = evaluate_page_value(
+        value,
+        page_candidates=[TEXT_LINE, value, *_letters_along_the_line()],
+    )
+
+    assert decision.accepted, decision.rule_name
+
+
+def test_misread_lowercase_words_are_not_compact_identifiers() -> None:
+    for text in ("e11", "listed2", "Roper0", "mus1", "proper1"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_uppercase_compact_identifiers_still_pass_the_page_grammar() -> None:
+    for text in ("ISD-600-500Y", "ISC-A00-008Y", "SCM415", "E545", "R24"):
+        assert evaluate_page_value(candidate(text)).accepted, text
 
 
 def test_short_chamfer_forms_are_complete_values() -> None:

@@ -34,6 +34,7 @@ HARD_OTHER_RULES = frozenset(
         "revision_history",
         "note_information",
         "document_metadata",
+        "text_line_fragment",
     }
 )
 

@@ -106,6 +106,7 @@ def test_hard_context_is_visible_other_and_wins_over_structure() -> None:
         "revision_history",
         "note_information",
         "document_metadata",
+        "text_line_fragment",
     ):
         result = decide(
             "25",

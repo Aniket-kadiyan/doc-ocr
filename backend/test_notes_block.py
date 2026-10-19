@@ -14,6 +14,8 @@ The box geometry is taken from real PaddleOCR output for two drawings:
 
 from __future__ import annotations
 
+from PIL import Image
+
 from ocr_pipeline import OcrPipeline
 
 
@@ -111,6 +113,109 @@ def test_numbered_table_rows_are_not_a_notes_block():
 def test_a_single_point_is_not_a_notes_block():
     one = [_b("1. SOMETHING HERE", 60, 40, 200, 20)]
     assert OcrPipeline._detect_notes_block(one)[0] is None
+
+
+# This drawing prints the same numbered notes twice, once with detached CJK
+# markers and once as unpunctuated English lines. Both blocks must be found so
+# their internal OCR fragments can be retained as Other rather than ballooned.
+UNPUNCTUATED_NOTES = [
+    _b("NOTES", 628, 500, 50, 16),
+    _b("1 UNSPECIFIED BENDING RADIUS OF PIPE IS", 645, 519, 420, 18),
+    _b("R15 ON A CENTER LINE.", 659, 536, 220, 18),
+    _b("2 BOTH SIDES OF PIPE END SHALL BE DOUBLE", 637, 554, 430, 18),
+    _b("FLARED AFTER INSERTED FLARE NUT.", 659, 575, 330, 18),
+    _b("3 DETAILED SHAPE OF THE FLARE NUT", 639, 595, 350, 18),
+    _b("4 MUST BE FREE FROM BURRS AND SHARP EDGES.", 639, 615, 440, 18),
+]
+
+DETACHED_MARKER_NOTES = [
+    _b("注記", 639, 88, 40, 18),
+    _b("1", 662, 116, 8, 18),
+    _b("指示無き曲げRは全て2軸を含む平面内における", 698, 116, 430, 18),
+    _b("2", 662, 173, 8, 18),
+    _b("PIPE両側はフレアナット挿入後ダブルフレアのこと", 698, 168, 430, 18),
+    _b("3", 662, 198, 8, 18),
+    _b("フレアナット及びダブルフレアの詳細形状は", 697, 196, 400, 18),
+    _b("4", 661, 251, 8, 18),
+    _b("有害なバリ及びシャープエッジ等無きこと", 698, 249, 390, 18),
+]
+
+
+def test_notes_numbered_without_a_separator_are_recognised():
+    region, _ = OcrPipeline._detect_notes_block(UNPUNCTUATED_NOTES)
+
+    assert region is not None
+    assert "UNSPECIFIED BENDING RADIUS" in region["text"]
+    assert "MUST BE FREE FROM BURRS" in region["text"]
+
+
+def test_detached_markers_still_open_a_note_block():
+    region, _ = OcrPipeline._detect_notes_block(DETACHED_MARKER_NOTES)
+
+    assert region is not None
+    assert "指示無き曲げ" in region["text"]
+    assert region["bbox"]["width"] > 300
+
+
+def test_restarted_numbering_returns_both_language_blocks():
+    blocks = OcrPipeline._detect_notes_blocks(
+        DETACHED_MARKER_NOTES + UNPUNCTUATED_NOTES
+    )
+
+    assert len(blocks) == 2
+    texts = [region["text"] for region, _ in blocks]
+    assert any("指示無き曲げ" in text for text in texts)
+    assert any("UNSPECIFIED BENDING RADIUS" in text for text in texts)
+
+
+def test_page_notes_orchestration_keeps_both_blocks_without_full_page_ocr():
+    pipeline = OcrPipeline()
+    pipeline._notes_boxes_near_anchor = lambda _image, _boxes: []
+    pipeline._reread_notes_block = lambda _image, _bounds, _line_h: []
+
+    regions = pipeline._notes_regions(
+        Image.new("RGB", (1400, 800), "white"),
+        boxes=DETACHED_MARKER_NOTES + UNPUNCTUATED_NOTES,
+    )
+
+    assert len(regions) == 2
+    assert all("_bounds" not in region for region in regions)
+
+
+def test_a_detected_note_block_anchors_a_bounded_read_for_the_second_block():
+    pipeline = OcrPipeline()
+    calls = []
+
+    def read_anchor_crop(crop):
+        calls.append(crop.size)
+        return list(UNPUNCTUATED_NOTES)
+
+    pipeline._detect_regions_ocr = read_anchor_crop
+    pipeline._reread_notes_block = lambda _image, _bounds, _line_h: []
+
+    regions = pipeline._notes_regions(
+        Image.new("RGB", (3000, 2100), "white"),
+        boxes=DETACHED_MARKER_NOTES,
+    )
+
+    assert calls
+    assert calls[0][1] > 500
+    assert len(regions) == 2
+
+
+def test_scattered_numbers_and_words_are_not_a_note_block():
+    scattered = [
+        _b("2", 300, 400, 12, 18),
+        _b("RUBBER", 340, 398, 70, 18),
+        _b("3", 900, 410, 12, 18),
+        _b("SLIT AREA", 940, 408, 90, 18),
+        _b("4", 1500, 420, 12, 18),
+        _b("DETAIL AT", 1540, 418, 95, 18),
+        _b("5", 1900, 430, 12, 18),
+        _b("DELIVERY", 1940, 428, 90, 18),
+    ]
+
+    assert OcrPipeline._detect_notes_blocks(scattered) == []
 
 
 if __name__ == "__main__":

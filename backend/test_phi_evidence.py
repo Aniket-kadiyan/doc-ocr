@@ -23,7 +23,7 @@ class PhiEvidenceRulesTests(unittest.TestCase):
     def test_runtime_changeset_identifies_this_package(self) -> None:
         self.assertEqual(
             OCR_CHANGESET_ID,
-            "mvp1-integration-parity-p1-authoritative-routing",
+            "mvp1-integration-parity-p2-context-suppression",
         )
         self.assertEqual(OcrPipeline().status["ocr_changeset"], OCR_CHANGESET_ID)
 
