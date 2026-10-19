@@ -1,0 +1,115 @@
+{
+  "note": "Real drawn GD&T glyphs with their true identity. These exist because the synthetic symbol tests render each glyph from the same template they match against, which cannot catch a template that does not resemble the real symbol — exactly how the concentricity template shipped wrong.",
+  "glyphs": [
+    {
+      "file": "concentricity_1.png",
+      "symbol_id": "concentricity",
+      "size": [
+        44,
+        38
+      ],
+      "source": "operator screenshot of the app, real drawing",
+      "note": "feature control frame '◎ | Ø0.02 | A'"
+    },
+    {
+      "file": "concentricity_2.png",
+      "symbol_id": "concentricity",
+      "size": [
+        44,
+        48
+      ],
+      "source": "operator screenshot of the app, real drawing",
+      "note": "standalone ◎ below balloon 23"
+    },
+    {
+      "file": "circularity_1.png",
+      "symbol_id": "circularity",
+      "size": [
+        38,
+        36
+      ],
+      "source": "operator screenshot of the app, real drawing",
+      "note": "feature control frame '○ | 0.01' at balloon 36"
+    },
+    {
+      "file": "concentricity_3.png",
+      "symbol_id": "concentricity",
+      "size": [
+        39,
+        39
+      ],
+      "source": "operator screenshot of the app, real drawing",
+      "note": "standalone ◎ at balloon 23, second screenshot"
+    },
+    {
+      "file": "position_scan_pos_phi20.png",
+      "symbol_id": "position",
+      "size": [
+        29,
+        34
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "feature control frame '⌖ | Ø0.1' near Ø20"
+    },
+    {
+      "file": "position_scan_pos_r.png",
+      "symbol_id": "position",
+      "size": [
+        31,
+        34
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "feature control frame '⌖ | Ø0.3' beside M3x0.5-6H"
+    },
+    {
+      "file": "flatness_scan_flat_002.png",
+      "symbol_id": "flatness",
+      "size": [
+        30,
+        32
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "feature control frame '⏥ | 0.02' on a leader"
+    },
+    {
+      "file": "flatness_scan_comp_bl.png",
+      "symbol_id": "flatness",
+      "size": [
+        31,
+        35
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "composite '⏥ 0.05 / ⟂ 0.02 A'"
+    },
+    {
+      "file": "perpendicularity_scan_comp_bl.png",
+      "symbol_id": "perpendicularity",
+      "size": [
+        30,
+        34
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "composite '⏥ 0.05 / ⟂ 0.02 A'"
+    },
+    {
+      "file": "straightness_scan_comp_r.png",
+      "symbol_id": "straightness",
+      "size": [
+        30,
+        28
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "three-segment stack '⟂ 0.02 A / ⏤ 0.02 / ∥ 0.02 D'"
+    },
+    {
+      "file": "parallelism_scan_comp_r.png",
+      "symbol_id": "parallelism",
+      "size": [
+        30,
+        32
+      ],
+      "source": "scanned drawing (WhatsApp photo, 1291px wide) read at 2x; the symbol compartment after rule erasure",
+      "note": "three-segment stack '⟂ 0.02 A / ⏤ 0.02 / ∥ 0.02 D'"
+    }
+  ]
+}
