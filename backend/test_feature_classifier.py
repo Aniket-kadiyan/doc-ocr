@@ -36,15 +36,12 @@ from feature_classifier import classify_feature
         # Hole features
         ("Ø8 THRU", fd.CAT_HOLE),
         ("4X Ø10 THRU", fd.CAT_HOLE),
-        # Counterbore (12), Depth (15) and GD&T (16) are switched off in
-        # feature_rules, so these fall through to the diameter they carry.
-        # test_feature_rules.py covers that decision; this file records what
-        # the classifier does with the sections that are on.
-        ("Ø12 CBORE Ø20", fd.CAT_DIAMETER),
-        ("Ø10 × 15 DEEP", fd.CAT_DIAMETER),
+        ("Ø12 CBORE Ø20", fd.CAT_HOLE),
+        ("Ø10 × 15 DEEP", fd.CAT_HOLE),
+        ("Ø6.50 ⌴Ø11 ↧4.40", fd.CAT_HOLE),
+        ("Ø3.50 ⌵Ø7 X 90°", fd.CAT_HOLE),
         ("POSITION Ø0.1 A B", fd.CAT_GDT),
         ("FLATNESS 0.05", fd.CAT_GDT),
-        ("ROUNDNESS(2PT./180)", fd.CAT_GDT),
         # Surface finish
         ("Ra 1.6", fd.CAT_SURFACE),
         ("Rz 3.2", fd.CAT_SURFACE),
@@ -118,3 +115,37 @@ def test_chamfer_beats_angle():
 def test_labels_are_populated():
     for text in ("Ø20", "R10", "M6", "Ra 1.6", "45°", "MATERIAL EN8"):
         assert classify_feature(text).label
+
+
+def test_measurement_notes_are_not_mislabelled_as_gdt():
+    for text in (
+        "ROUNDNESS(2PT./180)",
+        "ROUNDNESS(2PT./180)50µm MAX.",
+        "SQUARENESS WITH FACE 50µm MAX.",
+        "ECCENTRICITY WITH 500µm MAX.",
+    ):
+        assert classify_feature(text).category != fd.CAT_GDT, text
+
+
+def test_textual_gdt_evidence_is_serialized_with_the_feature():
+    feature = classify_feature("POSITION Ø0.1 A B")
+    payload = feature.to_dict()
+
+    assert feature.category == fd.CAT_GDT
+    assert payload["gdt_text"]["symbol_id"] == "position"
+    assert payload["gdt_text"]["datums"] == ["A", "B"]
+    assert payload["gdt_text"]["diameter_zone"] is True
+
+
+def test_geometry_backed_gdt_remains_authoritative():
+    feature = classify_feature(
+        "0.3",
+        engineering_symbol={
+            "kind": "feature_control_frame",
+            "subtype": "Position",
+        },
+    )
+
+    assert feature.category == fd.CAT_GDT
+    assert feature.subtype == "Position"
+    assert feature.gdt_text is None

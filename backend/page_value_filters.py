@@ -98,6 +98,8 @@ SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
+_FIT_CLASS = r"[A-Za-z]{1,2}\s*(?:0?[1-9]|1[0-8])(?![\d.])"
+_THRU = r"THRU(?:\s*ALL)?"
 # Degrees, then optional minutes and seconds. The minute mark is often lost:
 # it is a small tick and the recogniser drops it, so "60°±0°30" arrives where
 # the drawing reads "60°±0°30'". A bare 1-2 digit integer straight after the
@@ -116,29 +118,33 @@ _ANGLE_VALUE = _compile(
     rf"\s*-\s*(?:{_ANGLE_MAGNITUDE}|{_NUMBER}\s*°?))?"
     r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC))?$"
 )
+# Stacked deviations are flattened by OCR into one line.  The first bound must
+# carry a sign; the second may be signed or the unsigned nominal-zero bound.
+# An unsigned second bound also needs whitespace or '/', which prevents a
+# malformed double decimal from being split into two convenient numbers.
+_DEVIATION_PAIR = (
+    rf"[+-]\s*{_NUMBER}(?:"
+    rf"\s*/\s*(?:[+-]\s*)?{_NUMBER}"
+    rf"|\s+[+-]?\s*{_NUMBER}"
+    rf"|\s*[+-]\s*{_NUMBER}"
+    rf")"
+)
 _LINEAR_VALUE = _compile(
     rf"^(?:\d+\s*[X×]\s*)?"
     rf"(?:SR|SØ|R|Ø)?\s*[+-]?{_NUMBER}"
+    rf"(?:\s*{_FIT_CLASS})?"
     rf"(?:\s*±\s*{_NUMBER}"
-    rf"|\s*\+\s*{_NUMBER}\s*/?\s*-\s*{_NUMBER}"
-    # A stacked unilateral tolerance commonly omits the sign on its zero
-    # limit: ``Ø8 +0.2 / 0``.  Once assembled, keep that exact notation.
-    rf"|\s*[+-]\s*{_NUMBER}\s*/\s*(?:[+-]\s*)?{_NUMBER}"
-    # Two stacked deviations, printed one above the other on the drawing and
-    # read back on one line ("Ø33 -0.05 -0.1"). Both may carry the same sign:
-    # a shaft or hole limit often has upper AND lower below nominal. Listed
-    # before the single-deviation branch so the longer form wins.
-    rf"|\s*[+-]\s*{_NUMBER}\s*[+-]\s*{_NUMBER}"
+    rf"|\s*{_DEVIATION_PAIR}"
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
-    r"(?:\s+(?:MAX|MIN|TYP|REF|BASIC|THRU))?$"
+    rf"(?:\s+(?:MAX|MIN|TYP|REF|BASIC|{_THRU}))?$"
 )
 _THREAD_VALUE = _compile(
     rf"^M\s*\d+(?:\.\d+)?"
     rf"(?:\s*[X×]\s*{_NUMBER})?"
-    r"(?:\s*-\s*[0-9A-Z]+)?"
-    r"(?:\s+(?:THRU|TYP|REF))?$"
+    r"(?:\s*-\s*[0-9A-Z]+)*"
+    rf"(?:\s+(?:{_THRU}|TYP|REF))?$"
 )
 _CHAMFER_VALUE = _compile(
     rf"^(?:\d+\s*[X×]\s*)?"
@@ -152,7 +158,57 @@ _SHORT_CHAMFER_VALUE = _compile(
     rf"^(?:CHF|C)\s*{_NUMBER}(?:\s*(?:MM|MAX|MIN|TYP|REF)\.?)?$"
 )
 _STANDALONE_TOLERANCE = _compile(
-    rf"^(?:±|\+|-)\s*{_NUMBER}\s*°?$"
+    rf"^(?:±\s*{_NUMBER}\s*°?"
+    rf"|[+-]\s*{_NUMBER}\s*°?(?:"
+    rf"\s+[+-]?\s*{_NUMBER}\s*°?"
+    rf"|\s*[+-]\s*{_NUMBER}\s*°?"
+    rf")?)$"
+)
+
+# Hole callouts combine a diameter or thread with one or more machining
+# modifiers.  They must be accepted as one value; accepting only the leading
+# diameter silently loses the depth/counterbore/countersink instruction.
+_HOLE_COUNT = rf"(?:\d+\s*[X×]\s*)?"
+_DIAMETER_TERM = rf"(?:SØ|Ø)?\s*{_NUMBER}(?:\s*{_FIT_CLASS})?"
+_THREAD_TERM = (
+    rf"M\s*\d+(?:\.\d+)?"
+    rf"(?:\s*[X×]\s*{_NUMBER})?"
+    r"(?:\s*-\s*[0-9A-Za-z]+)*"
+)
+_DEPTH_TERM = rf"↧\s*{_NUMBER}"
+_COUNTERBORE_TERM = rf"⌴\s*(?:Ø\s*)?{_NUMBER}(?:\s*{_DEPTH_TERM})?"
+_COUNTERSINK_TERM = (
+    rf"⌵\s*(?:Ø\s*)?{_NUMBER}"
+    rf"(?:\s*[X×]\s*{_ANGLE_MAGNITUDE})?"
+)
+_HOLE_WORD = (
+    rf"(?:{_THRU}|DEEP|DP|DEPTH|CBORE|C'BORE|CSK|C'SINK|SF|SPOTFACE"
+    r"|TYP|REF|MIN|MAX|BASIC|TAP|TAPPED|DRILL|REAM"
+    r"|(?:NEAR|FAR)\s*SIDE|BOTH\s*SIDES)"
+)
+_HOLE_MODIFIER = (
+    rf"(?:{_DEPTH_TERM}|{_COUNTERBORE_TERM}|{_COUNTERSINK_TERM}"
+    rf"|[X×]\s*{_ANGLE_MAGNITUDE}|{_HOLE_WORD}\.?)"
+)
+_HOLE_SEPARATOR = r"\s*[,/]?\s*"
+_ONE_HOLE_CALLOUT = (
+    rf"{_HOLE_COUNT}(?:{_THREAD_TERM}|{_DIAMETER_TERM})"
+    rf"(?:{_HOLE_SEPARATOR}{_HOLE_MODIFIER})+"
+)
+_HOLE_CALLOUT_VALUE = _compile(
+    rf"^{_ONE_HOLE_CALLOUT}(?:{_HOLE_SEPARATOR}{_ONE_HOLE_CALLOUT})?$"
+)
+# Text read from the tolerance and datum cells of a feature-control frame.
+# Requiring Ø plus valid uppercase datum letters keeps a nearby section label
+# such as "25 A" from being accepted as GD&T.
+_DATUM_LETTER = r"[A-HJ-NP-Z]"
+_DIAMETRAL_TOLERANCE_WITH_DATUM = re.compile(
+    rf"^Ø\s*{_NUMBER}"
+    r"(?:\s*[ⓂⓁⓈ])?"
+    rf"(?:\s*-?\s*{_DATUM_LETTER}\b){{1,3}}$"
+)
+_STANDALONE_DEPTH_VALUE = _compile(
+    rf"^{_DEPTH_TERM}(?:\s*(?:MIN|MAX|TYP|REF)\.?)?$"
 )
 # Leader and extension lines touch the crop edge and read as a stray dash or
 # bar, so "-" and "~" join the punctuation already treated as boundary noise.
@@ -161,8 +217,13 @@ _STANDALONE_TOLERANCE = _compile(
 # A leader arrowhead touching the crop reads as an arrow glyph. Arrows are
 # never part of a value so they are stripped from the front; a leading "-" is
 # deliberately NOT stripped, because it is the sign of a real value.
-_BOUNDARY_NOISE_START = re.compile(r"^[?¦|;,\u2190-\u21FF\u25B6\u25C0]+\s*")
-_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,\-\u2010-\u2015~]+$")
+_BOUNDARY_NOISE_START = re.compile(
+    r"^[?¦|;,\u2190-\u21A6\u21A8-\u21FF\u25B6\u25C0]+\s*"
+)
+# An unmatched ')' is a common crop/OCR remnant.  It is removed only when the
+# remaining whole string passes the complete-value grammar below, so balanced
+# reference dimensions and arbitrary text remain unchanged.
+_BOUNDARY_NOISE_END = re.compile(r"\s*[?¦|;,)\-\u2010-\u2015~]+$")
 _KEYWORD_TOKEN = re.compile(r"[A-Z0-9]+")
 _KEYWORD_CONFUSABLES = str.maketrans(
     {
@@ -194,10 +255,36 @@ def _normalize_symbols(text: str) -> str:
         .replace("”", "″")
         .replace("ø", "Ø")
         .replace("φ", "Ø")
+        .replace("ϕ", "Ø")
         .replace("Φ", "Ø")
         .replace("⌀", "Ø")
+        .replace("∅", "Ø")
     )
+    normalized = canonical_hole_glyphs(normalized)
     return " ".join(normalized.strip().split())
+
+
+_DEPTH_GLYPH_SOURCES = "↧↓⇓⇩↡⤓⍗⌄"
+_COUNTERBORE_GLYPH_SOURCES = "⌴⊔"
+_COUNTERSINK_GLYPH_SOURCES = "⌵∨"
+DEPTH_GLYPH = "↧"
+COUNTERBORE_GLYPH = "⌴"
+COUNTERSINK_GLYPH = "⌵"
+_DEPTH_GLYPH_RE = re.compile(rf"[{_DEPTH_GLYPH_SOURCES}]\s*(?=[\d.])")
+_COUNTERBORE_GLYPH_RE = re.compile(
+    rf"[{_COUNTERBORE_GLYPH_SOURCES}]\s*(?=[Ø\d.])"
+)
+_COUNTERSINK_GLYPH_RE = re.compile(
+    rf"[{_COUNTERSINK_GLYPH_SOURCES}]\s*(?=[Ø\d.])"
+)
+
+
+def canonical_hole_glyphs(text: str) -> str:
+    """Fold OCR variants only where a hole glyph directly introduces a value."""
+
+    out = _DEPTH_GLYPH_RE.sub(DEPTH_GLYPH, str(text or ""))
+    out = _COUNTERBORE_GLYPH_RE.sub(COUNTERBORE_GLYPH, out)
+    return _COUNTERSINK_GLYPH_RE.sub(COUNTERSINK_GLYPH, out)
 
 
 def _unwrapped_value(text: str) -> str:
@@ -227,6 +314,8 @@ def _is_single_value(value: str) -> bool:
         or _CHAMFER_VALUE.fullmatch(value)
         or _SHORT_CHAMFER_VALUE.fullmatch(value)
         or _STANDALONE_TOLERANCE.fullmatch(value)
+        or _HOLE_CALLOUT_VALUE.fullmatch(value)
+        or _STANDALONE_DEPTH_VALUE.fullmatch(value)
     )
 
 
@@ -268,9 +357,29 @@ def is_complete_engineering_value(text: str) -> bool:
         return True
     if _STANDALONE_TOLERANCE.fullmatch(value):
         return True
+    if _HOLE_CALLOUT_VALUE.fullmatch(value):
+        return True
+    if _STANDALONE_DEPTH_VALUE.fullmatch(value):
+        return True
+    if _DIAMETRAL_TOLERANCE_WITH_DATUM.fullmatch(value):
+        return True
     if _is_dual_unit_value(value):
         return True
     return bool(COMPACT_IDENTIFIER_VALUE.fullmatch(value))
+
+
+_DEPTH_LETTER_RE = re.compile(r"(?<=[\dA-Za-z])\s+[T⊤Ŧ]\s*(?=[\d.])")
+
+
+def _repaired_depth_letter(value: str) -> str | None:
+    """Return a guarded T-to-depth repair only for a complete hole callout."""
+
+    if not _DEPTH_LETTER_RE.search(value):
+        return None
+    repaired = _DEPTH_LETTER_RE.sub(DEPTH_GLYPH, value)
+    if repaired == value or not _HOLE_CALLOUT_VALUE.fullmatch(repaired):
+        return None
+    return repaired
 
 
 def normalize_page_value_text(text: str) -> str:
@@ -286,6 +395,9 @@ def normalize_page_value_text(text: str) -> str:
     stripped = _BOUNDARY_NOISE_END.sub("", stripped).strip()
     if stripped != normalized and is_complete_engineering_value(stripped):
         return stripped
+    repaired = _repaired_depth_letter(normalized)
+    if repaired is not None:
+        return repaired
     return normalized
 
 
@@ -367,11 +479,45 @@ def needs_expanded_filter_context(text: str, bbox: BBox) -> bool:
     )
 
 
+# Nearby DETAIL/SECTION/SCALE text describes a view, not every value inside
+# that view.  Only shapes that can themselves be pieces of a split caption may
+# inherit those exclusions: view letters (C, A-A), multiplicities ((3x),
+# B(3x)), and scale ratios (1:1).  Explicit forms avoid treating short real
+# values such as 25, R3, C3, or 0.5 as caption fragments.
+_CAPTION_PIECE = re.compile(
+    r"^(?:[A-Z](?:-[A-Z])?|[A-Z]?\(?\d{1,2}[X×]\)?)$",
+    re.IGNORECASE,
+)
+_CAPTION_RATIO = re.compile(r"(?<!\d)\d{1,3}\s*:\s*\d{1,3}(?!\d)")
+
+
+def _is_caption_fragment(text: str) -> bool:
+    """Whether one OCR object can be part of a split view caption."""
+
+    compact = "".join(str(text or "").split())
+    return bool(
+        compact
+        and (
+            _CAPTION_PIECE.fullmatch(compact)
+            or _CAPTION_RATIO.search(compact)
+        )
+    )
+
+
 def _matches_text_or_nearby_label(
     candidate: PageValueCandidate,
     page_candidates: Sequence[PageValueCandidate],
     pattern: re.Pattern[str],
+    *,
+    nearby_only_caption_fragments: bool = False,
 ) -> bool:
+    # A keyword read from the candidate itself is direct evidence. Rebuilt
+    # context and separate nearby boxes are proximity evidence and, for view
+    # captions, must pass the caption-fragment guard below.
+    if pattern.search(_canonical_keyword_text(candidate.text)):
+        return True
+    if nearby_only_caption_fragments and not _is_caption_fragment(candidate.text):
+        return False
     if pattern.search(_candidate_keyword_text(candidate)):
         return True
     if not _is_context_exclusion_prone(candidate.text):
@@ -453,6 +599,7 @@ def _detail_view_section(
         candidate,
         page_candidates,
         DETAIL_VIEW_SECTION,
+        nearby_only_caption_fragments=True,
     )
 
 
@@ -464,6 +611,7 @@ def _scale_information(
         candidate,
         page_candidates,
         SCALE_LABEL,
+        nearby_only_caption_fragments=True,
     )
 
 

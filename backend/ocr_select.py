@@ -21,7 +21,9 @@ def digit_quality_score(text: str, confidence: float) -> float:
         score += 8.0
     if re.search(r"±|\+/-", t):
         score += 4.0
-    if re.search(r"[ØøφΦ]", t):
+    if re.search(r"[ØøφΦ∅⌀]", t):
+        score += 3.0
+    if re.search(r"[↧⌴⌵]", t):
         score += 3.0
     if re.search(r"±", t):
         score += 6.0
@@ -31,7 +33,7 @@ def digit_quality_score(text: str, confidence: float) -> float:
         score -= 12.0
 
     # Penalize garbage letters (mis-read noise)
-    letters = re.sub(r"[ØøRr±°'\".\d\s]", "", t)
+    letters = re.sub(r"[Øø∅⌀Rr±°×↧⌴⌵'\".\d\s]", "", t)
     score -= len(letters) * 4.0
 
     # Penalize very short or very long nonsense

@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 
 from angle_utils import normalize_primes, parse_dms
+from page_value_filters import canonical_hole_glyphs
 from tolerance_utils import is_tolerance_pair
 
 # 215,370.05  — comma where ± was; 370.05 is 37 + 0.05
@@ -75,7 +76,7 @@ def normalize_cad_number_string(t: str) -> str:
     if not t:
         return t
 
-    s = normalize_primes(t.strip())
+    s = canonical_hole_glyphs(normalize_primes(t.strip()))
 
     # Angular dimensions (32°20'40") must keep their minute/second ticks.
     dms = parse_dms(s, require_marks=True)

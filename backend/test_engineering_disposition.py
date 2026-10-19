@@ -34,6 +34,9 @@ def test_complete_engineering_values_are_eligible() -> None:
         "2.25[57.15]REF",
         "2:1",
         "2N9",
+        "Ø33 +0.012 0",
+        "+0.012 0",
+        "Ø0.1 A B",
     ):
         result = decide(text)
         assert result.state == "eligible", text

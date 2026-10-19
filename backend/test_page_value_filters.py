@@ -286,3 +286,151 @@ def test_short_chamfer_rule_does_not_accept_bare_or_zone_letters() -> None:
     for text in ("C", "CHF", "A3", "B2"):
         decision = evaluate_page_value(candidate(text))
         assert not decision.accepted, text
+
+
+def test_hole_callouts_and_iso_fits_are_complete_values() -> None:
+    values = (
+        "Ø2.50 ↧13",
+        "M3x0.5 - 6H ↧3",
+        "M3x0.5 - 6H THRU ALL",
+        "2 x Ø2.50 ↧8.50",
+        "2 x Ø2.50 THRU ALL",
+        "Ø4 H7 ↧10",
+        "Ø6.50 ⌴Ø11 ↧4.40",
+        "Ø3.50 ⌵Ø7 X 90°",
+        "Ø3.50 X 90° NEAR SIDE",
+        "13 DEEP",
+        "↧0.90",
+        "Ø4 H7",
+        "Ø18h6",
+        "20 JS9",
+    )
+
+    for text in values:
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_hole_glyph_normalization_preserves_meaning() -> None:
+    assert normalize_page_value_text("2.50 ↓13") == "2.50 ↧13"
+    assert normalize_page_value_text("2 x ∅2.50 THRU") == "2 x Ø2.50 THRU"
+    assert normalize_page_value_text("↧ 0.90") == "↧0.90"
+    assert normalize_page_value_text("M3x0.5-6H T4.50") == "M3x0.5-6H↧4.50"
+
+
+def test_hole_repairs_do_not_change_arrows_prose_or_identifiers() -> None:
+    assert normalize_page_value_text("→ 25") == "25"
+    assert normalize_page_value_text("↑25") == "25"
+    for text in ("Ø50T7", "ISD-600T500", "20 TO 25", "PART T5", "T10"):
+        assert normalize_page_value_text(text) == text
+    for text in ("3 PLACES", "DO NOT SCALE", "REMOVE ALL BURRS 0.2"):
+        assert not evaluate_page_value(candidate(text)).accepted
+
+
+def test_stacked_deviations_are_complete_values() -> None:
+    for text in (
+        "Ø33 +0.012 0",
+        "Ø33 -0.05 -0.10",
+        "+0.012 0",
+        "+0.05 -0.05",
+        "-0.05 -0.10",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_stacked_deviation_grammar_does_not_accept_two_plain_numbers() -> None:
+    for text in ("33 0.5", "25 40", "12.5 0.25", "+0.0120.0"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_diametral_tolerance_with_datums_is_a_complete_value() -> None:
+    for text in (
+        "Ø0.02A",
+        "Ø0.02 A",
+        "Ø0.1 A B",
+        "Ø0.3 A B C",
+        "Ø0.02Ⓜ A B",
+    ):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+
+
+def test_datum_grammar_does_not_fuse_an_ordinary_length_and_label() -> None:
+    for text in ("25 A", "0.5 m", "12.5 B", "Ø0.02 a", "Ø0.02 I"):
+        assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_orphaned_closing_parenthesis_is_guarded_boundary_noise() -> None:
+    assert normalize_page_value_text("Ø20.86)") == "Ø20.86"
+    assert normalize_page_value_text("(20.86)") == "(20.86)"
+    assert normalize_page_value_text("1.00[25.40]") == "1.00[25.40]"
+    assert normalize_page_value_text("ZONE A 25)") == "ZONE A 25)"
+
+
+def _detail_caption_page(value_text: str) -> tuple[PageValueCandidate, ...]:
+    value = candidate(value_text, x=1520, y=390, width=160, height=34)
+    return (
+        candidate("DETAIL C", x=1500, y=300, width=200, height=34),
+        candidate("SCALE 5:1", x=1500, y=340, width=200, height=34),
+        value,
+    )
+
+
+def test_dimensions_inside_detail_view_survive_caption_proximity() -> None:
+    for text in ("Ø20.6 -0.1", "0.30 X 45°", "Ø2.50 ↧13"):
+        page = _detail_caption_page(text)
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+
+        assert decision.accepted, (text, decision.rule_name)
+        assert decision.rule_name == "engineering_value"
+
+
+def test_damaged_dimensions_under_caption_reach_invalid_value_review_path() -> None:
+    for text in ("20.6~0.1", "20.86=0.01"):
+        page = _detail_caption_page(text)
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+
+        assert not decision.accepted, text
+        assert decision.rule_name == "invalid_engineering_value"
+
+
+def test_only_split_caption_shapes_inherit_nearby_caption_exclusion() -> None:
+    for text in ("C", "A-A", "(3x)", "B(3x)", "1:1", "5:1", "Scale1:1"):
+        page = _detail_caption_page(text)
+        decision = evaluate_page_value(page[-1], page_candidates=page)
+
+        assert not decision.accepted, text
+        assert decision.rule_name in {"detail_view_section", "scale_information"}
+
+
+def test_short_real_values_ignore_view_caption_in_rebuilt_context() -> None:
+    for text in ("25", "R3", "C3", "0.5", "R212.5"):
+        value = candidate(text, context="SECTION VIEW B-B")
+        decision = evaluate_page_value(value, page_candidates=(value,))
+
+        assert decision.accepted, (text, decision.rule_name)
+        assert decision.rule_name == "engineering_value"
+
+
+def test_malformed_value_ignores_view_caption_in_rebuilt_context() -> None:
+    value = candidate("20.6~0.1", context="DETAIL C SCALE 5:1")
+    decision = evaluate_page_value(value, page_candidates=(value,))
+
+    assert not decision.accepted
+    assert decision.rule_name == "invalid_engineering_value"
+
+
+def test_direct_view_caption_text_remains_excluded() -> None:
+    cases = {
+        "SECTION VIEW B-B": "detail_view_section",
+        "DETAIL D": "detail_view_section",
+        "SECTION A-A": "detail_view_section",
+        "SCALE 5:1": "scale_information",
+    }
+
+    for text, expected_rule in cases.items():
+        decision = evaluate_page_value(candidate(text))
+
+        assert not decision.accepted, text
+        assert decision.rule_name == expected_rule

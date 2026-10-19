@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Iterable, Literal, Mapping
 
+from page_value_filters import canonical_hole_glyphs
+
 
 ParseStatus = Literal["complete", "partial", "unparsed", "empty"]
 ParseKind = Literal[
@@ -29,6 +31,8 @@ ParseKind = Literal[
     "angle",
     "chamfer",
     "thread",
+    "hole",
+    "depth",
     "dual_unit",
     "ratio",
     "standalone_tolerance",
@@ -40,7 +44,9 @@ ParseKind = Literal[
 ]
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
-_QUALIFIER = r"(?:MAX|MIN|TYP|REF|BASIC|THRU)"
+_FIT_CLASS = r"[A-Za-z]{1,2}\s*(?:0?[1-9]|1[0-8])(?![\d.])"
+_THRU = r"THRU(?:\s+ALL)?"
+_QUALIFIER = rf"(?:MAX|MIN|TYP|REF|BASIC|{_THRU})"
 _QUALIFIER_RE = re.compile(rf"{_QUALIFIER}", re.IGNORECASE)
 _HAS_DIGIT_RE = re.compile(r"\d")
 
@@ -48,6 +54,9 @@ _TOKEN_RE = re.compile(
     rf"(?P<space>\s+)"
     rf"|(?P<number>{_NUMBER})"
     r"|(?P<diameter>Ø)"
+    r"|(?P<depth>↧)"
+    r"|(?P<counterbore>⌴)"
+    r"|(?P<countersink>⌵)"
     r"|(?P<plus_minus>±)"
     r"|(?P<degree>°)"
     r"|(?P<prime>[′'])"
@@ -72,7 +81,7 @@ _THREAD_RE = re.compile(
     rf"^(?:(?P<quantity>\d+)\s*[X×]\s*)?"
     rf"M\s*(?P<nominal>{_NUMBER})"
     rf"(?:\s*[X×]\s*(?P<pitch>{_NUMBER}))?"
-    r"(?:\s*-\s*(?P<fit>[0-9A-Z]+))?"
+    r"(?P<fit>(?:\s*-\s*[0-9A-Z]+)*)"
     rf"(?P<qualifiers>(?:\s*{_QUALIFIER})*)$",
     re.IGNORECASE,
 )
@@ -91,7 +100,11 @@ _SHORT_CHAMFER_RE = re.compile(
     re.IGNORECASE,
 )
 _STANDALONE_TOLERANCE_RE = re.compile(
-    rf"^(?P<sign>±|\+|-)\s*(?P<value>{_NUMBER})\s*(?P<degree>°)?$"
+    rf"^(?:±\s*{_NUMBER}\s*°?"
+    rf"|[+-]\s*{_NUMBER}\s*°?(?:"
+    rf"\s+[+-]?\s*{_NUMBER}\s*°?"
+    rf"|\s*[+-]\s*{_NUMBER}\s*°?"
+    rf")?)$"
 )
 _ANGLE_RE = re.compile(
     rf"^(?P<degrees>{_NUMBER})\s*°"
@@ -104,14 +117,23 @@ _ANGLE_RE = re.compile(
     rf"(?P<qualifiers>(?:\s*{_QUALIFIER})*)$",
     re.IGNORECASE,
 )
+# The OCR line assembler places an upper and lower deviation side by side.
+# The explicit first sign is the guard that distinguishes this from two
+# unrelated values merged into one crop.
+_DEVIATION_PAIR = (
+    rf"[+-]\s*{_NUMBER}(?:"
+    rf"\s*/\s*(?:[+-]\s*)?{_NUMBER}"
+    rf"|\s+[+-]?\s*{_NUMBER}"
+    rf"|\s*[+-]\s*{_NUMBER}"
+    rf")"
+)
 _DIMENSION_RE = re.compile(
     rf"^(?:(?P<quantity>\d+)\s*[X×]\s*)?"
     r"(?P<prefix>SR|SØ|Ø|R)?\s*"
     rf"(?P<nominal>[+-]?{_NUMBER})"
-    r"(?P<fit>[A-Z]\d{1,3})?"
+    rf"(?:\s*(?P<fit>{_FIT_CLASS}))?"
     rf"(?P<tolerance>\s*(?:±\s*{_NUMBER}\s*°?"
-    rf"|[+-]\s*{_NUMBER}\s*(?:/\s*(?:[+-]\s*)?{_NUMBER}"
-    rf"|\s*[+-]\s*{_NUMBER})"
+    rf"|{_DEVIATION_PAIR}"
     rf"|[+-]\s*{_NUMBER}"
     rf"|(?:/|\bTO\b|:)\s*{_NUMBER}))?"
     r"\s*(?P<unit>MM|CM|INCHES|INCH|IN|\")?"
@@ -122,8 +144,71 @@ _PARTIAL_DIMENSION_RE = re.compile(
     rf"^(?:(?P<quantity>\d+)\s*[X×]\s*)?"
     r"(?P<prefix>SR|SØ|Ø|R)?\s*"
     rf"(?P<nominal>[+-]?{_NUMBER})"
-    r"(?P<fit>[A-Z]\d{1,3})?",
+    rf"(?:\s*(?P<fit>{_FIT_CLASS}))?",
     re.IGNORECASE,
+)
+
+# A complete hole callout is a feature term followed by one or more machining
+# instructions.  This deliberately remains stricter than free-form note text.
+_ANGLE_MAGNITUDE = (
+    rf"{_NUMBER}\s*°(?:\s*{_NUMBER}\s*[′']"
+    rf"(?:\s*{_NUMBER}\s*[″\"])?"
+    rf"|\s*\d{{1,2}}(?![\d.]))?"
+)
+_HOLE_COUNT = rf"(?:\d+\s*[X×]\s*)?"
+_HOLE_DIAMETER_TERM = rf"(?:SØ|Ø)?\s*{_NUMBER}(?:\s*{_FIT_CLASS})?"
+_HOLE_THREAD_TERM = (
+    rf"M\s*\d+(?:\.\d+)?"
+    rf"(?:\s*[X×]\s*{_NUMBER})?"
+    r"(?:\s*-\s*[0-9A-Za-z]+)*"
+)
+_DEPTH_TERM = rf"↧\s*{_NUMBER}"
+_COUNTERBORE_TERM = rf"⌴\s*(?:Ø\s*)?{_NUMBER}(?:\s*{_DEPTH_TERM})?"
+_COUNTERSINK_TERM = (
+    rf"⌵\s*(?:Ø\s*)?{_NUMBER}"
+    rf"(?:\s*[X×]\s*{_ANGLE_MAGNITUDE})?"
+)
+_HOLE_WORD = (
+    rf"(?:{_THRU}|DEEP|DP|DEPTH|CBORE|C'BORE|CSK|C'SINK|SF|SPOTFACE"
+    r"|TYP|REF|MIN|MAX|BASIC|TAP|TAPPED|DRILL|REAM"
+    r"|(?:NEAR|FAR)\s*SIDE|BOTH\s*SIDES)"
+)
+_HOLE_MODIFIER = (
+    rf"(?:{_DEPTH_TERM}|{_COUNTERBORE_TERM}|{_COUNTERSINK_TERM}"
+    rf"|[X×]\s*{_ANGLE_MAGNITUDE}|{_HOLE_WORD}\.?)"
+)
+_HOLE_SEPARATOR = r"\s*[,/]?\s*"
+_ONE_HOLE_CALLOUT = (
+    rf"{_HOLE_COUNT}(?:{_HOLE_THREAD_TERM}|{_HOLE_DIAMETER_TERM})"
+    rf"(?:{_HOLE_SEPARATOR}{_HOLE_MODIFIER})+"
+)
+_HOLE_CALLOUT_RE = re.compile(
+    rf"^{_ONE_HOLE_CALLOUT}(?:{_HOLE_SEPARATOR}{_ONE_HOLE_CALLOUT})?$",
+    re.IGNORECASE,
+)
+_STANDALONE_DEPTH_RE = re.compile(
+    rf"^↧\s*(?P<depth>{_NUMBER})"
+    r"(?P<qualifiers>(?:\s*(?:MIN|MAX|TYP|REF)\.?)*)$",
+    re.IGNORECASE,
+)
+_LEADING_QUANTITY_RE = re.compile(r"^(?P<quantity>\d+)\s*[X×]\s*", re.IGNORECASE)
+_HOLE_THREAD_HEAD_RE = re.compile(
+    rf"^(?:\d+\s*[X×]\s*)?M\s*(?P<nominal>{_NUMBER})"
+    rf"(?:\s*[X×]\s*(?P<pitch>{_NUMBER}))?"
+    r"(?P<fit>(?:\s*-\s*[0-9A-Za-z]+)*)",
+    re.IGNORECASE,
+)
+_HOLE_DIAMETER_HEAD_RE = re.compile(
+    rf"^(?:\d+\s*[X×]\s*)?(?P<prefix>SØ|Ø)?\s*"
+    rf"(?P<nominal>{_NUMBER})(?:\s*(?P<fit>{_FIT_CLASS}))?",
+    re.IGNORECASE,
+)
+_DEPTH_VALUE_RE = re.compile(rf"↧\s*(?P<value>{_NUMBER})", re.IGNORECASE)
+_COUNTERBORE_VALUE_RE = re.compile(
+    rf"⌴\s*(?P<prefix>Ø)?\s*(?P<value>{_NUMBER})", re.IGNORECASE
+)
+_COUNTERSINK_VALUE_RE = re.compile(
+    rf"⌵\s*(?P<prefix>Ø)?\s*(?P<value>{_NUMBER})", re.IGNORECASE
 )
 _INCOMPLETE_DECIMAL_TOLERANCE_RE = re.compile(
     r"^\s*(?P<sign>[+-])\s*(?P<digits>\d+)\.\s*$"
@@ -141,6 +226,15 @@ _GDT_TEXT_RE = re.compile(
     r"ROUNDNESS|CYLINDRICITY|PARALLELISM|PERPENDICULARITY|ANGULARITY|POSITION|"
     r"CONCENTRICITY|SYMMETRY|RUNOUT)\b", re.IGNORECASE,
 )
+# A narrow textual representation of the tolerance-zone and datum cells from
+# a feature-control frame.  I, O and Q are not valid datum letters.
+_DATUM_LETTER = r"[A-HJ-NP-Z]"
+_DIAMETRAL_TOLERANCE_WITH_DATUM_RE = re.compile(
+    rf"^Ø\s*(?P<tolerance>{_NUMBER})"
+    r"(?:\s*(?P<material_condition>[ⓂⓁⓈ]))?"
+    rf"(?P<datum_text>(?:\s*-?\s*{_DATUM_LETTER}\b){{1,3}})$"
+)
+_DATUM_TOKEN_RE = re.compile(_DATUM_LETTER)
 
 _SYMBOL_REPLACEMENTS = (
     ("+/-", "±", "ascii_plus_minus"),
@@ -152,8 +246,10 @@ _SYMBOL_REPLACEMENTS = (
     ("–", "-", "minus_variant"),
     ("—", "-", "minus_variant"),
     ("φ", "Ø", "diameter_variant"),
+    ("ϕ", "Ø", "diameter_variant"),
     ("Φ", "Ø", "diameter_variant"),
     ("⌀", "Ø", "diameter_variant"),
+    ("∅", "Ø", "diameter_variant"),
     ("ø", "Ø", "diameter_variant"),
     ("×", "X", "multiplication_variant"),
     ("‘", "′", "prime_variant"),
@@ -232,6 +328,10 @@ def _normalize(text: str) -> tuple[str, tuple[str, ...]]:
             value = value.replace(source, replacement)
             if step not in steps:
                 steps.append(step)
+    hole_normalized = canonical_hole_glyphs(value)
+    if hole_normalized != value:
+        value = hole_normalized
+        steps.append("hole_glyph_variant")
     value, plus_minus_count = re.subn(
         r"\+\s*(?:/\s*)?[-−](?=\s*\d)",
         "±",
@@ -259,6 +359,63 @@ def _tokens(text: str) -> tuple[EngineeringValueToken, ...]:
 
 def _qualifiers(text: str | None) -> list[str]:
     return [match.group(0).upper() for match in _QUALIFIER_RE.finditer(text or "")]
+
+
+def _thread_fit(text: str | None) -> str | None:
+    value = re.sub(r"\s+", "", str(text or "")).lstrip("-")
+    return value or None
+
+
+def _hole_components(value: str) -> dict[str, Any]:
+    """Extract stable, conservative structure while retaining the full callout."""
+
+    quantity = _LEADING_QUANTITY_RE.match(value)
+    thread = _HOLE_THREAD_HEAD_RE.match(value)
+    diameter = _HOLE_DIAMETER_HEAD_RE.match(value) if thread is None else None
+    head: dict[str, Any]
+    if thread is not None:
+        head = {
+            "type": "thread",
+            "nominal": thread.group("nominal"),
+            "pitch": thread.group("pitch"),
+            "fit": _thread_fit(thread.group("fit")),
+        }
+    elif diameter is not None:
+        head = {
+            "type": "diameter" if diameter.group("prefix") else "plain",
+            "prefix": (diameter.group("prefix") or "").upper() or None,
+            "nominal": diameter.group("nominal"),
+            "fit": re.sub(r"\s+", "", diameter.group("fit") or "")
+            or None,
+        }
+    else:
+        head = {"type": "unknown"}
+
+    keywords = [
+        match.group(0).rstrip(".").upper()
+        for match in re.finditer(_HOLE_WORD, value, re.IGNORECASE)
+    ]
+    return {
+        "text": value,
+        "quantity": quantity.group("quantity") if quantity else None,
+        "feature": head,
+        "depths": [match.group("value") for match in _DEPTH_VALUE_RE.finditer(value)],
+        "counterbores": [
+            {
+                "diameter": match.group("value"),
+                "diameter_symbol": bool(match.group("prefix")),
+            }
+            for match in _COUNTERBORE_VALUE_RE.finditer(value)
+        ],
+        "countersinks": [
+            {
+                "diameter": match.group("value"),
+                "diameter_symbol": bool(match.group("prefix")),
+            }
+            for match in _COUNTERSINK_VALUE_RE.finditer(value)
+        ],
+        "keywords": keywords,
+    }
 
 
 def _reference_wrapper(text: str) -> tuple[str, bool, int]:
@@ -320,14 +477,23 @@ def _parse_tolerance(text: str | None) -> dict[str, Any] | None:
         }
 
     pair = re.fullmatch(
-        rf"(?P<first_sign>[+-])\s*(?P<first>{_NUMBER})\s*"
-        rf"(?:(?P<slash>/)\s*(?P<slash_sign>[+-])?"
-        rf"|(?P<second_sign>[+-]))\s*(?P<second>{_NUMBER})",
+        rf"(?P<first_sign>[+-])\s*(?P<first>{_NUMBER})"
+        rf"(?P<first_degree>\s*°)?"
+        rf"(?:(?P<slash>\s*/\s*)(?P<slash_sign>[+-])?"
+        rf"|(?P<spaced>\s+)(?P<spaced_sign>[+-])?"
+        rf"|(?P<compact_sign>\s*[+-]))\s*"
+        rf"(?P<second>{_NUMBER})(?P<second_degree>\s*°)?",
         value,
     )
     if pair:
         first = _signed(pair.group("first_sign"), pair.group("first"))
-        second_sign = pair.group("slash_sign") or pair.group("second_sign") or ""
+        compact_sign = str(pair.group("compact_sign") or "").strip()
+        second_sign = (
+            pair.group("slash_sign")
+            or pair.group("spaced_sign")
+            or compact_sign
+            or ""
+        )
         second = f"{second_sign}{pair.group('second')}"
         return {
             "mode": "deviation_pair",
@@ -335,6 +501,9 @@ def _parse_tolerance(text: str | None) -> dict[str, Any] | None:
             "upper": first,
             "lower": second,
             "separator": "/" if pair.group("slash") else "",
+            "degree": bool(
+                pair.group("first_degree") or pair.group("second_degree")
+            ),
         }
 
     single = re.fullmatch(
@@ -464,6 +633,30 @@ def parse_engineering_value(
                 "unit": surface.group("unit").upper() if surface.group("unit") else None,
                 "grade": surface.group("grade").upper() if surface.group("grade") else None},
             normalization_steps=normalization_steps)
+
+    diametral_tolerance = _DIAMETRAL_TOLERANCE_WITH_DATUM_RE.fullmatch(value)
+    if diametral_tolerance:
+        return _result(
+            raw_text=raw,
+            normalized_text=normalized,
+            status="complete",
+            kind="gdt",
+            components={
+                **base_components,
+                "tolerance_zone": {
+                    "diameter": True,
+                    "value": diametral_tolerance.group("tolerance"),
+                    "material_condition": diametral_tolerance.group(
+                        "material_condition"
+                    ),
+                },
+                "datums": _DATUM_TOKEN_RE.findall(
+                    diametral_tolerance.group("datum_text")
+                ),
+            },
+            normalization_steps=normalization_steps,
+        )
+
     if (feature_category == "GD&T"
             or (_GDT_TEXT_RE.search(value) and _HAS_DIGIT_RE.search(value))
             or (value.count("|") >= 2 and _HAS_DIGIT_RE.search(value))):
@@ -533,7 +726,7 @@ def parse_engineering_value(
                 "prefix": "M",
                 "nominal": thread.group("nominal"),
                 "pitch": thread.group("pitch"),
-                "fit": thread.group("fit"),
+                "fit": _thread_fit(thread.group("fit")),
                 "qualifiers": _qualifiers(thread.group("qualifiers")),
             },
             normalization_steps=normalization_steps,
@@ -578,12 +771,29 @@ def parse_engineering_value(
             normalization_steps=normalization_steps,
         )
 
+    standalone_depth = _STANDALONE_DEPTH_RE.fullmatch(value)
+    if standalone_depth:
+        return _result(
+            raw_text=raw,
+            normalized_text=normalized,
+            status="complete",
+            kind="depth",
+            components={
+                **base_components,
+                "depth": standalone_depth.group("depth"),
+                "qualifiers": _qualifiers(
+                    standalone_depth.group("qualifiers")
+                ),
+            },
+            normalization_steps=normalization_steps,
+        )
+
     standalone = _STANDALONE_TOLERANCE_RE.fullmatch(value)
     if standalone:
         tolerance = _parse_tolerance(value)
         warnings = (
             ("single_bound_tolerance",)
-            if standalone.group("sign") in {"+", "-"}
+            if tolerance and tolerance.get("mode") == "single_deviation"
             else ()
         )
         return _result(
@@ -638,12 +848,24 @@ def parse_engineering_value(
                 "quantity": dimension.group("quantity"),
                 "prefix": (dimension.group("prefix") or "").upper() or None,
                 "nominal": dimension.group("nominal"),
-                "fit": (dimension.group("fit") or "").upper() or None,
+                "fit": re.sub(r"\s+", "", dimension.group("fit") or "")
+                or None,
                 "tolerance": tolerance,
                 "unit": (dimension.group("unit") or "").upper() or None,
                 "qualifiers": _qualifiers(dimension.group("qualifiers")),
             },
             warnings=warnings,
+            normalization_steps=normalization_steps,
+        )
+
+    hole = _HOLE_CALLOUT_RE.fullmatch(value)
+    if hole:
+        return _result(
+            raw_text=raw,
+            normalized_text=normalized,
+            status="complete",
+            kind="hole",
+            components={**base_components, **_hole_components(value)},
             normalization_steps=normalization_steps,
         )
 
@@ -659,7 +881,7 @@ def parse_engineering_value(
             "quantity": partial.group("quantity"),
             "prefix": (partial.group("prefix") or "").upper() or None,
             "nominal": partial.group("nominal"),
-            "fit": (partial.group("fit") or "").upper() or None,
+            "fit": re.sub(r"\s+", "", partial.group("fit") or "") or None,
         }
         warnings = ["unparsed_fragment"]
         incomplete = _INCOMPLETE_DECIMAL_TOLERANCE_RE.fullmatch(remainder)

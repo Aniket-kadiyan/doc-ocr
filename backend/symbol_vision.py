@@ -19,7 +19,17 @@ try:
 except ImportError:
     cv2 = None  # type: ignore
 
-PM_THRESHOLD = 0.34
+# The ± detector is a supporting signal. OCR already reads most clear symbols,
+# so this threshold favours precision: visual evidence must not turn an ordinary
+# plus, equals sign, digit, or drawing line into a tolerance marker.
+#
+# Calibrated against real positive and negative CAD crops from the benchmark
+# drawings. With the corrected polarity and ink-scoped matching below, 0.60
+# retains the useful visual signal without accepting the lower-scoring marks.
+PM_THRESHOLD = 0.60
+
+# Template sizes are relative to the detected ink height, not the padded crop.
+_PM_SCALES = (0.7, 0.9, 1.1)
 
 
 @dataclass
@@ -36,27 +46,53 @@ def _to_gray(img: Image.Image) -> np.ndarray:
 
 
 def _make_pm_template(size: int) -> np.ndarray:
-    t = np.full((size, size), 255, dtype=np.uint8)
+    """Return a ± template with the same polarity as ``cad_ink_to_gray``.
+
+    ``cad_ink_to_gray`` produces bright drawing ink on a dark field. The old
+    template used dark ink on a bright field, so the glyph it was intended to
+    find anti-correlated with the template.
+    """
+
+    t = np.zeros((size, size), dtype=np.uint8)
     if cv2 is None:
         return t
     c, th = size // 2, max(1, size // 10)
-    cv2.line(t, (c, size // 5), (c, 4 * size // 5), 0, th)
-    cv2.line(t, (size // 5, c - size // 8), (4 * size // 5, c - size // 8), 0, th)
-    cv2.line(t, (size // 5, c + size // 7), (4 * size // 5, c + size // 7), 0, th)
+    cv2.line(t, (c, size // 5), (c, 4 * size // 5), 255, th)
+    cv2.line(t, (size // 5, c - size // 8), (4 * size // 5, c - size // 8), 255, th)
+    cv2.line(t, (size // 5, c + size // 7), (4 * size // 5, c + size // 7), 255, th)
     return t
+
+
+def _ink_bounds(gray: np.ndarray) -> np.ndarray:
+    """Crop a symbol zone to its ink so padding cannot dominate the score."""
+
+    if cv2 is None or gray.size == 0:
+        return gray
+    _, binary = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    ys, xs = np.nonzero(binary)
+    if len(xs) == 0:
+        return gray
+    return gray[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
 
 
 def _match_pm(gray: np.ndarray) -> float:
     if cv2 is None or gray.size == 0:
         return 0.0
-    h = max(gray.shape[0], 1)
-    base = max(12, min(h // 2, 72))
+    ink = _ink_bounds(gray)
+    if ink.shape[0] < 8 or ink.shape[1] < 8:
+        return 0.0
     best = 0.0
-    for sz in (base, int(base * 1.3)):
-        tpl = _make_pm_template(sz)
-        if gray.shape[0] < tpl.shape[0] or gray.shape[1] < tpl.shape[1]:
+    for factor in _PM_SCALES:
+        size = int(ink.shape[0] * factor)
+        if size < 8 or ink.shape[0] < size or ink.shape[1] < size:
             continue
-        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+        template = _make_pm_template(size)
+        res = cv2.matchTemplate(ink, template, cv2.TM_CCOEFF_NORMED)
         best = max(best, float(cv2.minMaxLoc(res)[1]))
     return best
 

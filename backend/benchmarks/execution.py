@@ -8,12 +8,15 @@ rendered PDF unconditionally measures a different product path.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import time
 from pathlib import Path
 from typing import Any, Iterator
 
 from PIL import Image
 
+from gdt_config import GdtConfig, get_config as get_gdt_config
+from gdt_scan_integration import augment_page_scan_result, page_scan_enabled
 from native_symbol_enrichment import enrich_native_result_with_geometry
 from page_layout import analyze_page_layout
 from pdf_evidence import PdfPageEvidence, extract_pdf_page_evidence
@@ -106,8 +109,9 @@ def segment_production_page(
     page_number: int,
     pipeline: Any,
     source_pdf_bytes: bytes | None = None,
+    gdt_config: GdtConfig | None = None,
 ) -> dict[str, Any]:
-    """Run one whole page with the application's native-PDF-first policy."""
+    """Run one whole page with the application's complete production policy."""
 
     native_text_layer: dict[str, Any] | None = None
     native_evidence: PdfPageEvidence | None = None
@@ -158,6 +162,30 @@ def segment_production_page(
         if native_result is not None:
             result = merge_native_and_ocr_results(native_result, result)
 
+    resolved_gdt_config = gdt_config or get_gdt_config()
+    if page_scan_enabled(resolved_gdt_config):
+
+        def recognize_gdt_compartment(crop: Image.Image) -> tuple[str, float]:
+            recognized = pipeline.recognize(
+                crop,
+                compute_text_bbox=False,
+                max_paddle_predictions=3,
+                allow_prefix_ocr=False,
+            )
+            return (
+                str(recognized.get("text") or ""),
+                float(recognized.get("confidence") or 0.0),
+            )
+
+        result = augment_page_scan_result(
+            image,
+            result,
+            ocr_fn=recognize_gdt_compartment,
+            page=page_number,
+            existing_value_boxes=(),
+            config=resolved_gdt_config,
+        )
+
     result["coordinate_space"] = "page"
     return result
 
@@ -168,6 +196,7 @@ def segment_document(
     *,
     route: str = "page",
     pipeline: Any | None = None,
+    gdt_page_scan: bool | None = None,
 ) -> dict[str, Any]:
     """Run a complete document and retain the full candidate lifecycle."""
 
@@ -175,6 +204,15 @@ def segment_document(
         from ocr_pipeline import get_pipeline
 
         pipeline = get_pipeline()
+
+    resolved_gdt_config = get_gdt_config()
+    if gdt_page_scan is not None:
+        resolved_gdt_config = replace(
+            resolved_gdt_config,
+            page_scan_enabled=bool(gdt_page_scan),
+        )
+    configured_gdt_enabled = page_scan_enabled(resolved_gdt_config)
+    applied_gdt_enabled = route == "page" and configured_gdt_enabled
 
     source_pdf_bytes = path.read_bytes() if path.suffix.lower() == ".pdf" else None
     pages: list[dict[str, Any]] = []
@@ -186,6 +224,7 @@ def segment_document(
                 page_number=page_number,
                 pipeline=pipeline,
                 source_pdf_bytes=source_pdf_bytes,
+                gdt_config=resolved_gdt_config,
             )
             if route == "page"
             else pipeline.segment(image)
@@ -204,6 +243,17 @@ def segment_document(
         "execution_policy": (
             "native_pdf_first" if route == "page" else "legacy_segment"
         ),
+        "gdt_page_scan": {
+            "policy": (
+                "configured"
+                if gdt_page_scan is None
+                else ("forced_on" if gdt_page_scan else "forced_off")
+            ),
+            "enabled": applied_gdt_enabled,
+            "configured_enabled": configured_gdt_enabled,
+            "gdt_enabled": bool(resolved_gdt_config.enabled),
+            "page_scan_enabled": bool(resolved_gdt_config.page_scan_enabled),
+        },
         "source_format": path.suffix.lower().lstrip(".") or "unknown",
         "dpi": dpi,
         "seconds": time.time() - started,

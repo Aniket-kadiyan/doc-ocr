@@ -10,7 +10,12 @@ and reports per callout how much of the expected string came back.
     .venv/bin/python scripts/run_benchmark.py
 
     # one drawing, saving its complete candidate lifecycle for re-scoring
-    .venv/bin/python scripts/run_benchmark.py BS1801006.020 --save-snapshot
+    .venv/bin/python scripts/run_benchmark.py ballwoon_drawing \\
+        --gdt-page-scan --save-snapshot
+
+    # the same drawing with the optional hook forced off for comparison
+    .venv/bin/python scripts/run_benchmark.py ballwoon_drawing \\
+        --no-gdt-page-scan --save-snapshot
 
     # re-score a saved snapshot after changing scoring or ground truth
     .venv/bin/python scripts/run_benchmark.py BS1801006.020 --regions \\
@@ -41,6 +46,7 @@ from benchmarks.suite import (  # noqa: E402
     build_suite_report,
     format_suite_markdown,
     format_suite_text,
+    required_gdt_execution_failures,
     snapshot_execution_summary,
 )
 from ocr_pipeline import OCR_CHANGESET_ID  # noqa: E402
@@ -96,6 +102,25 @@ def main() -> int:
         choices=("page", "legacy_segment"),
         help="override the fixture route; page is the production Auto-Balloon route",
     )
+    gdt_group = parser.add_mutually_exclusive_group()
+    gdt_group.add_argument(
+        "--gdt-page-scan",
+        dest="gdt_page_scan",
+        action="store_true",
+        default=None,
+        help=(
+            "force the graphical GD&T production hook on, independently of "
+            "GDT_PAGE_SCAN_ENABLED"
+        ),
+    )
+    gdt_group.add_argument(
+        "--no-gdt-page-scan",
+        dest="gdt_page_scan",
+        action="store_false",
+        help=(
+            "force the graphical GD&T production hook off for a comparison run"
+        ),
+    )
     parser.add_argument(
         "--page",
         action="store_true",
@@ -135,6 +160,7 @@ def main() -> int:
                 path,
                 args.dpi or spec.get("dpi", 250),
                 route=route,
+                gdt_page_scan=args.gdt_page_scan,
             )
             snapshot["fixture"] = fixture.name
             snapshot["document"] = spec["document"]
@@ -186,21 +212,24 @@ def main() -> int:
             partial_threshold=spec.get("partial_threshold", 0.6),
             seconds=seconds,
         )
+        execution_summary = (
+            snapshot_execution_summary(snapshot)
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("pages"), list)
+            else {}
+        )
         failures = requirement_failures(
             report,
             spec.get("requires", {}),
             accounting=accounting,
         )
+        if args.gdt_page_scan is True:
+            failures.extend(required_gdt_execution_failures(execution_summary))
         payload = report.to_dict()
         payload["fixture"] = fixture.name
         payload["document_path"] = spec["document"]
         payload["route"] = snapshot.get("route") if isinstance(snapshot, dict) else None
         payload["dpi"] = snapshot.get("dpi") if isinstance(snapshot, dict) else None
-        payload["execution"] = (
-            snapshot_execution_summary(snapshot)
-            if isinstance(snapshot, dict) and isinstance(snapshot.get("pages"), list)
-            else {}
-        )
+        payload["execution"] = execution_summary
         payload["accounting"] = accounting.to_dict()
         payload["gate_failures"] = failures
         reports.append(payload)

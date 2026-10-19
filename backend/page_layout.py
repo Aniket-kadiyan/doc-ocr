@@ -439,6 +439,7 @@ def _cells_are_adjacent(
 # strip of one or two 50 px rows under 200 px wide, and a part view crossed by
 # extension lines makes a chain of boxes 120-280 px tall.
 TABLE_MIN_CELL_HEIGHT_RATIO = 0.012
+TABLE_MAX_CELL_HEIGHT_RATIO = 0.065
 TABLE_FRAME_ROW_HEIGHT_RATIO = 0.03
 TABLE_FRAME_MAX_WIDTH_RATIO = 0.12
 TABLE_TALL_CELL_HEIGHT_RATIO = 0.06
@@ -446,6 +447,11 @@ TABLE_TALL_CELL_MIN_PX = 100
 TABLE_MAX_DRAWING_CELL_FRACTION = 0.34
 TABLE_EMPTY_CELL_INK_FRACTION = 0.02
 TABLE_STROKE_LENGTH_RATIO = 0.05
+TABLE_MIN_CELLS = 3
+TABLE_MIN_OCCUPANCY = 0.50
+TABLE_MIN_TEXT_COMPONENTS_PER_CELL = 3.0
+TABLE_TEXT_COMPONENT_MIN_HEIGHT_RATIO = 0.0025
+TABLE_TEXT_COMPONENT_MAX_HEIGHT_RATIO = 0.025
 
 
 def _ink_without_axis_lines(ink: np.ndarray, min_length: int) -> np.ndarray:
@@ -499,6 +505,101 @@ def _cell_holds_drawing(
     return longest > TABLE_STROKE_LENGTH_RATIO * page_height
 
 
+def _text_component_count(
+    content: np.ndarray,
+    cell: LayoutBox,
+    *,
+    page_height: int,
+    inset: int,
+) -> int | None:
+    """Count glyph-sized components inside a cell after its rules are removed.
+
+    ``None`` means OpenCV is unavailable, so callers can retain the existing
+    geometry-only behaviour instead of treating every table as empty. OpenCV
+    is a backend runtime dependency; this fallback keeps lightweight imports
+    and documentation builds usable.
+    """
+
+    try:
+        import cv2
+    except ImportError:
+        return None
+
+    x0 = max(0, cell.x + inset)
+    y0 = max(0, cell.y + inset)
+    x1 = min(content.shape[1], max(x0, cell.x1 - inset))
+    y1 = min(content.shape[0], max(y0, cell.y1 - inset))
+    interior = content[y0:y1, x0:x1]
+    if interior.size == 0 or not interior.any():
+        return 0
+
+    _count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        interior.astype(np.uint8),
+        connectivity=8,
+    )
+    if stats.shape[0] <= 1:
+        return 0
+
+    heights = stats[1:, cv2.CC_STAT_HEIGHT]
+    widths = stats[1:, cv2.CC_STAT_WIDTH]
+    minimum_height = max(
+        5,
+        int(page_height * TABLE_TEXT_COMPONENT_MIN_HEIGHT_RATIO),
+    )
+    maximum_height = max(
+        minimum_height + 1,
+        int(page_height * TABLE_TEXT_COMPONENT_MAX_HEIGHT_RATIO),
+    )
+    glyph_like = (
+        (heights >= minimum_height)
+        & (heights <= maximum_height)
+        & (widths >= 2)
+        & (widths <= 6 * heights)
+        & (heights <= 8 * widths)
+    )
+    return int(np.count_nonzero(glyph_like))
+
+
+def _group_has_table_text(
+    group: Sequence[LayoutBox],
+    content: np.ndarray,
+    *,
+    page_height: int,
+    tolerance: int,
+) -> bool:
+    """Whether a repeated-cell group has the population pattern of a table.
+
+    A part view is often a perfect grid of rectangles. Hard-masking it is
+    destructive, so grid geometry alone is insufficient: most real table
+    cells contain glyph-sized content, while an accidental view grid is
+    predominantly empty or contains only a small number of dimensions.
+    """
+
+    component_counts: list[int] = []
+    for cell in group:
+        count = _text_component_count(
+            content,
+            cell,
+            page_height=page_height,
+            # Group connectivity deliberately uses twice the line-detection
+            # tolerance. Using that enlarged value as the content inset clips
+            # text printed close to a cell rule, so restore the original
+            # line-scale tolerance for occupancy measurement.
+            inset=max(2, tolerance // 2),
+        )
+        if count is None:
+            return True
+        component_counts.append(count)
+
+    populated = sum(count >= 2 for count in component_counts)
+    occupancy = populated / max(len(group), 1)
+    average_components = sum(component_counts) / max(len(group), 1)
+    return (
+        occupancy > TABLE_MIN_OCCUPANCY
+        or average_components >= TABLE_MIN_TEXT_COMPONENTS_PER_CELL
+    )
+
+
 def _group_is_table(
     group: Sequence[LayoutBox],
     *,
@@ -506,6 +607,7 @@ def _group_is_table(
     page_height: int,
     tolerance: int,
     content: np.ndarray | None = None,
+    occupancy_ink: np.ndarray | None = None,
 ) -> bool:
     """
     Whether a connected group of closed cells is a table rather than drawing.
@@ -517,23 +619,40 @@ def _group_is_table(
     sheet ``Ø20.5``, ``Ø36.8``, ``12.55``, ``15`` and both frames — before the
     detector ever saw them.
     """
-    if len(group) < 2:
+    if len(group) < TABLE_MIN_CELLS:
         return False
     heights = sorted(cell.height for cell in group)
     median_height = heights[len(heights) // 2]
     # Hatching and decorative grids: cells far smaller than a text row.
     if median_height < TABLE_MIN_CELL_HEIGHT_RATIO * page_height:
         return False
+    # Section and orthographic views create large repeated rectangles even
+    # when a dimension is printed inside every pocket. Tables measured on the
+    # benchmark drawings stay at or below this text-row-sized boundary.
+    if median_height > TABLE_MAX_CELL_HEIGHT_RATIO * page_height:
+        return False
     rows: list[int] = []
     for cell in group:
         if all(abs(cell.y - row) > tolerance for row in rows):
             rows.append(cell.y)
     width = max(cell.x1 for cell in group) - min(cell.x for cell in group)
+    # Measure population on the original ink inside each cell. The inset keeps
+    # the surrounding rules out without allowing line-removal morphology to
+    # damage the glyphs used as positive table evidence.
+    if occupancy_ink is not None:
+        if not _group_has_table_text(
+            group,
+            occupancy_ink,
+            page_height=page_height,
+            tolerance=tolerance,
+        ):
+            return False
     # A table's tall cells hold text (a multi-line specification, a title).
     # A part view crossed by its extension lines closes into boxes the size
     # of the view itself, and those hold drawing: on one sheet four of the
     # group's ten boxes were 167 to 280 px tall and held either nothing or an
-    # arc or leader far longer than a glyph.
+    # arc or leader far longer than a glyph. This check deliberately uses the
+    # separate map with long axis-aligned rules removed.
     if content is not None:
         tall_limit = max(TABLE_TALL_CELL_HEIGHT_RATIO * page_height, TABLE_TALL_CELL_MIN_PX)
         drawing = sum(
@@ -561,14 +680,16 @@ def _retain_repeated_cell_groups(
     tolerance: int,
     page_size: tuple[int, int] | None = None,
     content: np.ndarray | None = None,
+    occupancy_ink: np.ndarray | None = None,
 ) -> list[LayoutBox]:
     """
     Discard isolated drawing rectangles while retaining repeated grids.
 
     With ``page_size`` each connected group is also judged by
     :func:`_group_is_table`, which drops the grids a drawing makes by accident;
-    ``content`` (the ink map without the grid lines) lets it look inside the
-    tall cells.
+    ``content`` (the ink map without the grid lines) lets it inspect drawing
+    strokes in tall cells, while ``occupancy_ink`` retains the original glyphs
+    used to confirm table-like population.
     """
 
     parent = list(range(len(cells)))
@@ -605,6 +726,7 @@ def _retain_repeated_cell_groups(
                 page_height=page_size[1],
                 tolerance=tolerance,
                 content=content,
+                occupancy_ink=occupancy_ink,
             )
         )
     }
@@ -717,6 +839,7 @@ def _grid_masks(
             ink,
             max(20, int(round(min(full_width, full_height) * 0.02))),
         ),
+        occupancy_ink=ink,
     )
     return _discard_mostly_contained_boxes(
         _merge_rectangular_cells(

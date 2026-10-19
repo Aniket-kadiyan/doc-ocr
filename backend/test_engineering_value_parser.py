@@ -102,6 +102,49 @@ def test_common_ascii_plus_minus_and_compact_pairs_are_explicit_normalization() 
     assert pair.components["tolerance"]["lower"] == "-0.2"
 
 
+def test_stacked_deviation_pairs_keep_both_explicit_bounds() -> None:
+    cases = {
+        "Ø33 +0.012 0": ("linear", "+0.012", "0"),
+        "+0.012 0": ("standalone_tolerance", "+0.012", "0"),
+        "+0.05 -0.05": ("standalone_tolerance", "+0.05", "-0.05"),
+        "-0.05 -0.10": ("standalone_tolerance", "-0.05", "-0.10"),
+    }
+
+    for text, (kind, upper, lower) in cases.items():
+        parsed = parse_engineering_value(text)
+        assert parsed.complete, text
+        assert parsed.kind == kind, text
+        tolerance = parsed.components["tolerance"]
+        assert tolerance["mode"] == "deviation_pair", text
+        assert tolerance["upper"] == upper, text
+        assert tolerance["lower"] == lower, text
+        assert "single_bound_tolerance" not in parsed.warnings, text
+
+
+def test_two_plain_numbers_are_not_reinterpreted_as_deviations() -> None:
+    for text in ("33 0.5", "25 40", "12.5 0.25", "+0.0120.0"):
+        assert not parse_engineering_value(text).complete, text
+
+
+def test_diametral_tolerance_with_datums_is_structured_gdt() -> None:
+    parsed = parse_engineering_value("Ø0.02Ⓜ A B")
+
+    assert parsed.complete
+    assert parsed.kind == "gdt"
+    assert parsed.components["tolerance_zone"] == {
+        "diameter": True,
+        "value": "0.02",
+        "material_condition": "Ⓜ",
+    }
+    assert parsed.components["datums"] == ["A", "B"]
+    assert "".join(token.text for token in parsed.tokens) == parsed.normalized_text
+
+
+def test_datum_sequence_requires_diameter_and_valid_uppercase_letters() -> None:
+    for text in ("25 A", "0.5 m", "Ø0.02 a", "Ø0.02 I", "Ø0.02 A B C D"):
+        assert not parse_engineering_value(text).complete, text
+
+
 def test_iso_fit_is_not_misread_as_malformed_tolerance() -> None:
     parsed = parse_engineering_value("2N9")
 
@@ -110,6 +153,54 @@ def test_iso_fit_is_not_misread_as_malformed_tolerance() -> None:
     assert parsed.components["nominal"] == "2"
     assert parsed.components["fit"] == "N9"
     assert parsed.components["tolerance"] is None
+
+
+def test_spaced_and_lowercase_iso_fits_preserve_their_semantics() -> None:
+    cases = {
+        "Ø4 H7": "H7",
+        "Ø18h6": "h6",
+        "20 JS9": "JS9",
+    }
+
+    for text, fit in cases.items():
+        parsed = parse_engineering_value(text)
+        assert parsed.complete, text
+        assert parsed.kind == "linear", text
+        assert parsed.components["fit"] == fit, text
+
+
+def test_hole_callouts_are_complete_and_keep_modifier_values() -> None:
+    depth = parse_engineering_value("Ø4 H7 ↧10")
+    counterbore = parse_engineering_value("Ø6.50 ⌴Ø11 ↧4.40")
+    countersink = parse_engineering_value("Ø3.50 ⌵Ø7 X 90°")
+    thread = parse_engineering_value("M3x0.5 - 6H ↧3")
+
+    for parsed in (depth, counterbore, countersink, thread):
+        assert parsed.complete
+        assert parsed.kind == "hole"
+        assert "".join(token.text for token in parsed.tokens) == parsed.normalized_text
+
+    assert depth.components["feature"]["fit"] == "H7"
+    assert depth.components["depths"] == ["10"]
+    assert counterbore.components["counterbores"] == [
+        {"diameter": "11", "diameter_symbol": True}
+    ]
+    assert counterbore.components["depths"] == ["4.40"]
+    assert countersink.components["countersinks"] == [
+        {"diameter": "7", "diameter_symbol": True}
+    ]
+    assert thread.components["feature"]["fit"] == "6H"
+
+
+def test_standalone_depth_and_hole_glyph_variants_are_lossless() -> None:
+    parsed = parse_engineering_value("↓ 0.90")
+
+    assert parsed.raw_text == "↓ 0.90"
+    assert parsed.normalized_text == "↧0.90"
+    assert parsed.complete
+    assert parsed.kind == "depth"
+    assert parsed.components["depth"] == "0.90"
+    assert "hole_glyph_variant" in parsed.normalization_steps
 
 
 def test_incomplete_tolerance_is_partial_and_nothing_is_deleted() -> None:

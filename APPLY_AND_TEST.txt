@@ -1,0 +1,109 @@
+QTracX selective integration — SI-3.6
+Standalone additive GD&T orchestration pipeline
+
+Base branch verified:
+  selective-integration @ cf51417
+
+What this package adds
+----------------------
+1. backend/gdt_pipeline.py
+   Combines the existing GD&T registry, graphical detector, feature-control-
+   frame parser, contextual rules, and guarded textual GD&T recognition into
+   one failure-isolated page/document result.
+
+2. backend/benchmarks/gdt_eval.py
+   Per-class, macro/micro, localization, ambiguity, declined-read, and FCF
+   field scoring. It deliberately avoids a single misleading accuracy number.
+
+3. backend/test_gdt_pipeline.py
+   Covers tiling, explicit deskew helpers, error isolation, serialization,
+   frame grouping, textual/graphical deduplication, review routing, scan-region
+   shaping, frame absorption, and evaluation accounting.
+
+Critical safeguards applied in this selective port
+---------------------------------------------------
+- Automatic deskew is OFF by default. Existing page orientation/unwarping
+  behavior is unchanged. Deskew helpers are available only when an explicit
+  caller passes deskew=True.
+- A structurally parsed FCF is not silently discarded because its symbol and
+  tolerance are uncertain. It is emitted with needs_review and reasons.
+- An out-of-range GD&T tolerance is retained for review instead of removed.
+- Ordinary loose drawing geometry below the detector's ambiguity floor is not
+  published, preventing thousands of meaningless review boxes.
+- A frame is one candidate: text/value candidates inside it are absorbed so
+  the tolerance is not separately ballooned as a linear dimension.
+- Graphical and textual detections describing the same frame are linked, not
+  double-counted.
+- Each stage and page is failure-isolated; errors are returned as evidence and
+  do not fail the remaining document.
+
+Scope boundary
+--------------
+This package adds the standalone orchestrator and its output adapters, but it
+does NOT import or call it from the current production page scan, OCR worker,
+API routes, UI, persistence, or export flow. Current auto-ballooning behavior
+therefore remains unchanged until the next controlled integration milestone.
+
+How to apply
+------------
+1. Confirm you are on selective-integration and have no unrelated local
+   changes that these paths would overwrite.
+2. Extract this ZIP into the doc-ocr repository root, preserving paths.
+3. Review the three added files.
+
+PowerShell verification (from doc-ocr\backend)
+------------------------------------------------
+Focused SI-3.6 suite:
+
+  .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_pipeline.py `
+    test_gdt_context.py `
+    test_fcf_parse.py `
+    test_gdt_config.py `
+    test_gdt_detect.py `
+    test_gdt_templates.py `
+    test_gdt_registry.py `
+    test_gdt_text.py `
+    test_feature_classifier.py `
+    test_feature_rules.py
+
+Broader regression suite:
+
+  .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_pipeline.py `
+    test_gdt_context.py `
+    test_fcf_parse.py `
+    test_dimensions.py `
+    test_engineering_value_parser.py `
+    test_native_symbol_enrichment.py `
+    test_stacked_tolerance.py `
+    test_plus_minus_vision.py `
+    test_feature_classifier.py `
+    test_feature_rules.py `
+    test_gdt_registry.py `
+    test_gdt_templates.py `
+    test_gdt_config.py `
+    test_gdt_detect.py `
+    test_gdt_text.py `
+    test_pdf_text_first.py `
+    test_candidate_lifecycle.py `
+    test_engineering_disposition.py `
+    test_config_env.py `
+    test_accuracy_integration.py `
+    test_detection_passes.py `
+    test_page_candidate_recovery.py `
+    test_page_scan.py `
+    test_page_value_filters.py `
+    test_structured_symbol_vision.py `
+    test_engineering_object_assembly.py
+
+Validated by Codex with the project's pinned OpenCV 4.10.0.84:
+  Orchestrator: 38 passed
+  Focused: 476 passed
+  Broader: 676 passed, 1 skipped
+
+Suggested commit message
+------------------------
+feat(ocr): add standalone GD&T orchestration pipeline
+
+No commit or push was performed by Codex.

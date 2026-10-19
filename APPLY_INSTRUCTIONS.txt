@@ -1,37 +1,24 @@
-QTracX M1.3 — Frontend diagnostics and request correlation
-===========================================================
+QTracX selective-integration — SI-1.1 occupancy hotfix
+======================================================
 
-Branch: Configuration-and-logging
+Apply this directly over commit:
+83645a038e11616a8bdd87dbef5696dc457068bb
 
-Prerequisite
-------------
-M1.2 backend structured logging must already be applied and committed.
+Do not revert SI-1 first.
+
+Files changed
+-------------
+backend/page_layout.py
+backend/test_page_layout.py
 
 Apply
 -----
-Copy this folder's contents over the doc-ocr repository root and allow Windows
-to merge folders and replace existing files. Do not revert M1.1 or M1.2.
+1. Extract this ZIP over the doc-ocr repository root.
+2. Allow both files to overwrite their current versions.
+3. From doc-ocr\backend run:
 
-Test from doc-ocr/backend
--------------------------
-  .\.venv-gpu\Scripts\python.exe -m unittest -v `
-    test_config_env.py test_app_logging.py `
-    test_client_diagnostics.py test_ocr_runtime.py
+   .\.venv-gpu\Scripts\python.exe -m pytest -q test_page_layout.py
 
-Expected: 21 tests pass.
+Expected result: 15 passed
 
-Test from the repository root
------------------------------
-  npm run lint
-  npm run typecheck
-  npm run test:frontend
-
-Expected frontend result: 28 test files and 148 tests pass.
-
-The previously observed six test_symbol_markers.py failures are separate from
-this diagnostics package.
-
-Suggested commit message
-------------------------
-  feat(logging): correlate frontend and backend diagnostics
-
+No commit is included.

@@ -20,6 +20,10 @@ import feature_dictionary as fd
 #: Reasons a section is not applied, kept short so they read well in a listing.
 OUT_OF_SCOPE = "marked out of scope in the spec"
 NEEDS_GEOMETRY = "needs dimension-line geometry the pipeline does not measure"
+REQUIRED_FOR_HOLE_CALLOUTS = (
+    "enabled because the glyph is part of the inspection value"
+)
+GUARDED = "applied only when gdt_text confirms the shape of a callout"
 
 
 @dataclass(frozen=True)
@@ -45,11 +49,11 @@ SPEC_RULES: tuple[SpecRule, ...] = (
     SpecRule(9, "Taper", fd.CAT_TAPER, True),
     SpecRule(10, "Thread", fd.CAT_THREAD, True),
     SpecRule(11, "THRU", fd.CAT_HOLE, True),
-    SpecRule(12, "Counterbore", fd.CAT_HOLE, False, OUT_OF_SCOPE),
+    SpecRule(12, "Counterbore", fd.CAT_HOLE, True, REQUIRED_FOR_HOLE_CALLOUTS),
     SpecRule(13, "Countersink", fd.CAT_HOLE, True),
     SpecRule(14, "Spotface", fd.CAT_HOLE, True),
-    SpecRule(15, "Depth", fd.CAT_HOLE, False, OUT_OF_SCOPE),
-    SpecRule(16, "GD&T", fd.CAT_GDT, True),
+    SpecRule(15, "Depth", fd.CAT_HOLE, True, REQUIRED_FOR_HOLE_CALLOUTS),
+    SpecRule(16, "GD&T", fd.CAT_GDT, True, GUARDED),
     SpecRule(17, "Datum", fd.CAT_DATUM, True),
     SpecRule(18, "Surface Finish", fd.CAT_SURFACE, True),
     SpecRule(19, "Weld", fd.CAT_WELD, True),
