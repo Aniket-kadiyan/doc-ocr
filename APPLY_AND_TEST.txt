@@ -1,65 +1,62 @@
-QTracX selective integration — SI-3.5
-GD&T contextual association and standards validation
+QTracX selective integration — SI-3.6
+Standalone additive GD&T orchestration pipeline
 
 Base branch verified:
-  selective-integration @ 33fe712
+  selective-integration @ cf51417
 
 What this package adds
 ----------------------
-1. backend/gdt_context.py
-   Applies drawing context to already-detected GD&T objects without replacing
-   visual evidence. It associates nearby values, resolves shared-glyph ties,
-   links datum references, demotes loose characteristic false positives, and
-   reports standards observations.
+1. backend/gdt_pipeline.py
+   Combines the existing GD&T registry, graphical detector, feature-control-
+   frame parser, contextual rules, and guarded textual GD&T recognition into
+   one failure-isolated page/document result.
 
-2. backend/test_gdt_context.py
-   Pure-logic regression tests for ambiguity resolution, value attachment,
-   radius parsing, datum association, confidence demotion, audit evidence,
-   and standards consistency.
+2. backend/benchmarks/gdt_eval.py
+   Per-class, macro/micro, localization, ambiguity, declined-read, and FCF
+   field scoring. It deliberately avoids a single misleading accuracy number.
 
-Governing safety rule
----------------------
-Context may resolve an existing ambiguity, attach information, or add a
-warning. It may not replace a confident visual detection with a different
-symbol. If position and visual evidence disagree, the detection is retained,
-downgraded to ambiguous, and given a recorded conflict reason.
+3. backend/test_gdt_pipeline.py
+   Covers tiling, explicit deskew helpers, error isolation, serialization,
+   frame grouping, textual/graphical deduplication, review routing, scan-region
+   shaping, frame absorption, and evaluation accounting.
 
-Behavior added
---------------
-- Distinguishes shared glyphs by valid position/context:
-  profile-of-line vs arc length, counterbore vs spotface, circularity vs
-  diameter vs all-around, diameter vs spherical diameter, and datum marker
-  vs datum feature.
-- Parses R, CR and SR values while rejecting Ra, Rc, REF, REV and similar
-  false friends.
-- Associates only sufficiently close text, preferring text on the right in
-  the same row. It does not attach the nearest arbitrary number on the page.
-- Preserves drawing units instead of assuming millimetres or inches.
-- Links FCF datum references by letter and reports missing datum features as
-  unresolved findings rather than silently dropping them.
-- Demotes geometric characteristics found outside a frame instead of deleting
-  them, retaining their evidence for review.
-- Reports standard-family mismatches and retired controls as observations;
-  it does not claim overall drawing compliance.
+Critical safeguards applied in this selective port
+---------------------------------------------------
+- Automatic deskew is OFF by default. Existing page orientation/unwarping
+  behavior is unchanged. Deskew helpers are available only when an explicit
+  caller passes deskew=True.
+- A structurally parsed FCF is not silently discarded because its symbol and
+  tolerance are uncertain. It is emitted with needs_review and reasons.
+- An out-of-range GD&T tolerance is retained for review instead of removed.
+- Ordinary loose drawing geometry below the detector's ambiguity floor is not
+  published, preventing thousands of meaningless review boxes.
+- A frame is one candidate: text/value candidates inside it are absorbed so
+  the tolerance is not separately ballooned as a linear dimension.
+- Graphical and textual detections describing the same frame are linked, not
+  double-counted.
+- Each stage and page is failure-isolated; errors are returned as evidence and
+  do not fail the remaining document.
 
 Scope boundary
 --------------
-This milestone adds standalone contextual logic only. It does NOT invoke the
-GD&T pipeline from production page scanning, change auto-balloon results,
-add API response fields, or alter UI/review/export behavior.
+This package adds the standalone orchestrator and its output adapters, but it
+does NOT import or call it from the current production page scan, OCR worker,
+API routes, UI, persistence, or export flow. Current auto-ballooning behavior
+therefore remains unchanged until the next controlled integration milestone.
 
 How to apply
 ------------
 1. Confirm you are on selective-integration and have no unrelated local
    changes that these paths would overwrite.
 2. Extract this ZIP into the doc-ocr repository root, preserving paths.
-3. Review the two added backend files.
+3. Review the three added files.
 
 PowerShell verification (from doc-ocr\backend)
 ------------------------------------------------
-Focused SI-3.5 suite:
+Focused SI-3.6 suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_pipeline.py `
     test_gdt_context.py `
     test_fcf_parse.py `
     test_gdt_config.py `
@@ -73,6 +70,7 @@ Focused SI-3.5 suite:
 Broader regression suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_gdt_pipeline.py `
     test_gdt_context.py `
     test_fcf_parse.py `
     test_dimensions.py `
@@ -99,12 +97,13 @@ Broader regression suite:
     test_structured_symbol_vision.py `
     test_engineering_object_assembly.py
 
-Validated by Codex:
-  Focused: 438 passed
-  Broader: 638 passed, 1 skipped
+Validated by Codex with the project's pinned OpenCV 4.10.0.84:
+  Orchestrator: 38 passed
+  Focused: 476 passed
+  Broader: 676 passed, 1 skipped
 
 Suggested commit message
 ------------------------
-feat(ocr): add contextual GD&T association rules
+feat(ocr): add standalone GD&T orchestration pipeline
 
 No commit or push was performed by Codex.
