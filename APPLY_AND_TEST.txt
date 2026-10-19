@@ -1,58 +1,71 @@
-QTracX selective integration — SI-3.3
-Guarded graphical GD&T glyph detector
+QTracX selective integration — SI-3.4
+Feature-control-frame parsing and compartment validation
 
 Base branch verified:
-  selective-integration @ 7d2eb32
+  selective-integration @ 07ff5c3
 
 What this package adds
 ----------------------
-1. backend/gdt_detect.py
-   A standalone hybrid GD&T glyph detector using aligned procedural-template
-   comparison, contour/topology evidence, optional OCR corroboration, and
-   explicit confidence/ambiguity handling.
+1. backend/fcf_parse.py
+   Detects ruled feature-control frames, separates composite-frame segments,
+   splits compartments, and returns structured GD&T data rather than a
+   flattened OCR string.
 
-2. backend/gdt_config.py
-   External GDT_* settings for confidence thresholds, glyph size bounds,
-   duplicate merging, page tiling, and feature-control-frame geometry.
+2. backend/benchmarks/gdt_synthetic.py
+   Deterministic synthetic drawing/frame generation with exact ground truth.
+   It is test support and a regression baseline—not a claim of real-world
+   accuracy.
 
-3. backend/benchmarks/fixtures/glyphs/
-   Small real glyph crops from drawings. These ensure the detector is tested
-   against actual drawing symbols rather than only templates generated from
-   the same code used for matching.
+3. backend/test_fcf_parse.py
+   Covers frame geometry, compartment splitting, rule erasure, composite
+   frames, tolerance/modifier parsing, datum precedence, schema validation,
+   visual diameter-zone recovery, OCR failure isolation, and false-frame
+   rejection.
 
-4. Tests
-   Detector decisions, ambiguity handling, template matching, degradation
-   safety, real-glyph recognition, coordinate transforms, duplicate merging,
-   serialization, and configuration loading/caching.
+Structured output
+-----------------
+Each parsed frame keeps separate fields for:
+- geometric characteristic and its confidence/status
+- tolerance value
+- diametral-zone marker
+- material-condition modifier
+- other modifiers
+- ordered datum references
+- composite segment identity
+- original compartment text and bounding boxes
+- warnings and evidence
 
 Safety behavior
 ---------------
-- A close rival produces status="ambiguous" instead of a confident guess.
-- A mark below the confidence floor remains "unknown" with evidence.
-- Symbols sharing identical artwork remain ambiguous.
-- Tiny or unreadable circled modifiers are downgraded rather than promoted.
-- Retired and standards-specific symbols retain warnings.
-- Non-visual engineering concepts cannot be reported as detected glyphs.
+- Missing information distinguishes absent, unreadable, and not-applicable.
+- An OCR failure in one compartment does not remove the complete frame.
+- Ambiguous characteristic symbols retain the frame for review.
+- Datum precedence follows physical compartment order, even when one datum
+  cannot be read.
+- No drawing unit is invented; the unit remains "drawing_unit".
+- Boxes without a geometric characteristic are not published as valid FCFs.
+- Composite controls retain their segment relationship.
 
 Scope boundary
 --------------
-This milestone adds and tests the standalone detector only. It does NOT call
-the detector from page scanning or auto-ballooning, and it does not change the
-API, UI, review list, persisted checksheet, or export output. Production-path
-integration will be a separate milestone with explicit review routing.
+This milestone adds the standalone FCF parser only. It does NOT invoke it from
+production page scanning, alter the auto-ballooning pipeline, expose new API
+fields, or change the UI/review/export flows. Those connections remain a
+separate controlled integration milestone.
 
 How to apply
 ------------
-1. Confirm you are on the selective-integration branch and have no unrelated
-   local changes that these paths would overwrite.
+1. Confirm you are on selective-integration and have no unrelated local
+   changes that these paths would overwrite.
 2. Extract this ZIP into the doc-ocr repository root, preserving paths.
-3. Review the two modules, two test files, and glyph fixture directory.
+3. Review the three added files.
 
 PowerShell verification (from doc-ocr\backend)
 ------------------------------------------------
-Focused SI-3.3 suite:
+Focused SI-3.4 suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_fcf_parse.py `
     test_gdt_config.py `
     test_gdt_detect.py `
     test_gdt_templates.py `
@@ -64,6 +77,7 @@ Focused SI-3.3 suite:
 Broader regression suite:
 
   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+    test_fcf_parse.py `
     test_dimensions.py `
     test_engineering_value_parser.py `
     test_native_symbol_enrichment.py `
@@ -89,11 +103,11 @@ Broader regression suite:
     test_engineering_object_assembly.py
 
 Validated by Codex with the project's pinned OpenCV 4.10.0.84:
-  Focused: 354 passed
-  Broader: 554 passed, 1 skipped
+  Focused: 400 passed
+  Broader: 600 passed, 1 skipped
 
 Suggested commit message
 ------------------------
-feat(ocr): add guarded graphical GD&T detection
+feat(ocr): add structured feature-control-frame parsing
 
 No commit or push was performed by Codex.
