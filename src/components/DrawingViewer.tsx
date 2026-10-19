@@ -31,6 +31,10 @@ import {
 import { filterNewScanRegions } from "@/lib/scanCandidates";
 import { mergePageReviewCandidates } from "@/lib/scanReviewCandidates";
 import {
+  areAllValueBalloonsHidden,
+  areAllValueBalloonsVisible,
+} from "@/lib/balloonVisibility";
+import {
   runSectionScanQueue,
   type QueuedScanSection,
   type ScanRunOutcome,
@@ -259,9 +263,8 @@ export function DrawingViewer() {
   const valueAnnotations = annotations.filter(
     (annotation) => annotation.kind !== "label"
   );
-  const balloonsVisible =
-    valueAnnotations.length > 0 &&
-    valueAnnotations.every((annotation) => !annotation.hidden);
+  const balloonsVisible = areAllValueBalloonsVisible(annotations);
+  const balloonsGloballyHidden = areAllValueBalloonsHidden(annotations);
   const pageScanReviewCandidates = scanReviewCandidates.filter(
     (candidate) => candidate.page === currentPage
   );
@@ -1799,6 +1802,26 @@ export function DrawingViewer() {
                       listening={!drawingActive}
                     />
 
+                    {balloonsGloballyHidden &&
+                      pageAnnotations.map((ann) => {
+                        const box = ann.orientedBox ?? ann.bbox;
+                        const rotation = ann.orientedBox?.rotation ?? 0;
+                        return (
+                          <Rect
+                            key={`whiteout-${ann.id}`}
+                            x={box.x}
+                            y={box.y}
+                            width={box.width}
+                            height={box.height}
+                            rotation={rotation}
+                            fill="#ffffff"
+                            stroke="#ffffff"
+                            strokeWidth={1 / scale}
+                            listening={false}
+                          />
+                        );
+                      })}
+
                     {gdtResult && (
                       <GdtOverlay
                         frames={framesForPage(gdtResult, currentPage)}
@@ -1818,39 +1841,47 @@ export function DrawingViewer() {
                       />
                     )}
 
-                    {pageScanReviewCandidates.length > 0 &&
-                      scanProgress === null && (
-                      <ScanReviewOverlay
-                        candidates={pageScanReviewCandidates}
-                        scale={scale}
-                        disabled={drawingActive || isProcessing}
-                        selectedCandidateId={selectedReviewCandidateId}
-                        onSelect={openScanReviewCandidate}
-                      />
-                    )}
-
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
                       const stroke = highlighted ? "#2563eb" : "#dc2626";
+                      const box = ann.orientedBox ?? ann.bbox;
+                      const rotation = ann.orientedBox?.rotation ?? 0;
                       return (
                         <Rect
                           key={ann.id}
-                          x={ann.bbox.x}
-                          y={ann.bbox.y}
-                          width={ann.bbox.width}
-                          height={ann.bbox.height}
+                          x={box.x}
+                          y={box.y}
+                          width={box.width}
+                          height={box.height}
+                          rotation={rotation}
                           stroke={stroke}
                           // Divide by zoom so stroke + dash keep a constant
                           // on-screen size while the Stage scales the geometry.
                           strokeWidth={(highlighted ? 3 : 2) / scale}
                           dash={[6 / scale, 4 / scale]}
                           // When something is selected, fade the other values.
-                          opacity={selectedId && !highlighted ? 0.15 : 1}
+                          opacity={
+                            (selectedId && !highlighted) ||
+                            selectedReviewCandidateId !== null
+                              ? 0.15
+                              : 1
+                          }
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
                         />
                       );
                     })}
+
+                    {pageScanReviewCandidates.length > 0 &&
+                      scanProgress === null && (
+                        <ScanReviewOverlay
+                          candidates={pageScanReviewCandidates}
+                          scale={scale}
+                          disabled={drawingActive || isProcessing}
+                          selectedCandidateId={selectedReviewCandidateId}
+                          onSelect={openScanReviewCandidate}
+                        />
+                      )}
 
                     {pageSelectedScanSections.map((section) => {
                       const order =
@@ -1942,7 +1973,10 @@ export function DrawingViewer() {
                         annotation={ann}
                         scale={scale}
                         selected={selectedId === ann.id}
-                        dimmed={!!selectedId && selectedId !== ann.id}
+                        dimmed={
+                          (!!selectedId && selectedId !== ann.id) ||
+                          selectedReviewCandidateId !== null
+                        }
                         listening={!drawingActive}
                         onSelect={handleSelect}
                       />
@@ -2001,14 +2035,7 @@ export function DrawingViewer() {
         />
       </div>
 
-      <AnnotationPopup
-        onReviewResolved={resolveScanReviewCandidate}
-        onReviewCancelled={(candidateId) =>
-          setSelectedReviewCandidateId((current) =>
-            current === candidateId ? null : current
-          )
-        }
-      />
+      <AnnotationPopup onReviewResolved={resolveScanReviewCandidate} />
 
       {(() => {
         const editingValue = annotations.find(

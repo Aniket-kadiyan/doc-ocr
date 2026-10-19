@@ -1,0 +1,67 @@
+MVP2 milestone 1: review highlight and global hide whiteout
+============================================================
+
+Required base
+-------------
+Create MVP2 from origin/integration commit:
+
+    fb608dfd4a41f0faa95f54d76c92a3176be75e95
+
+Do not apply this package over the old MVP1 or
+fix-integration-detection-parity branches.
+
+Apply
+-----
+From the doc-ocr repository root, copy the included src folder over the
+repository's existing src folder. This package changes only:
+
+    src/components/DrawingViewer.tsx
+    src/components/ScanReviewOverlay.tsx
+    src/components/Toolbar.tsx
+    src/lib/balloonVisibility.ts
+    src/lib/balloonVisibility.test.ts
+
+No backend or OCR/detection files are included.
+
+Automated verification
+----------------------
+Run from the doc-ocr repository root:
+
+    npm run typecheck
+    npm run lint
+    npm run test:frontend
+    npm run build
+
+Expected frontend test result for this package:
+
+    17 test files passed
+    110 tests passed
+
+Manual verification
+-------------------
+1. Run Auto Balloon on a drawing that creates at least two review candidates.
+2. Select one review candidate.
+3. Confirm its box is strongly highlighted and other balloons/review boxes dim.
+4. Press Cancel in the review popup.
+5. Confirm the selected review box remains highlighted.
+6. Confirm the highlight clears when the candidate is accepted or ignored.
+7. Confirm it also clears when another value/review item or blank drawing area
+   is clicked.
+8. Click Hide Balloons. Confirm accepted value rectangles are covered in white
+   while review candidates, references and GD&T overlays remain available.
+9. Click Show Balloons. Confirm the original drawing and balloons return.
+
+Verified before packaging
+-------------------------
+    npm run typecheck      PASS
+    npm run lint           PASS
+    npm run test:frontend  PASS (17 files, 110 tests)
+    npm run build          PASS
+
+The backend test command could not run in the packaging workspace because it
+does not contain the project's Python virtual environment or pytest. This
+milestone contains no backend changes.
+
+Suggested commit message
+------------------------
+    feat(ui): preserve review highlights and white out hidden values
