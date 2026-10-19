@@ -1,0 +1,280 @@
+{
+ "schema_version": 1,
+ "milestone": "M5 combined M1-M4 regression",
+ "ocr_changeset": "mvp1-m9-candidate-accounting",
+ "summary": {
+  "documents": 2,
+  "documents_passed": 2,
+  "documents_failed": 0,
+  "gate_failures": 0,
+  "seconds": 420.524,
+  "totals": {
+   "expected": 101,
+   "matched": 71,
+   "partial": 19,
+   "missed": 11,
+   "type_correct": 65,
+   "type_total": 101,
+   "semantic_exact": 68,
+   "disposition_correct": 43,
+   "disposition_total": 101,
+   "noise_detections": 0,
+   "unexpected_detections": 22,
+   "unmatched_review_or_other": 623,
+   "mean_percent": 90.0,
+   "by_expected_disposition": {
+    "accepted": {
+     "expected": 84,
+     "matched": 63,
+     "semantic_exact": 60,
+     "disposition_correct": 41
+    },
+    "review": {
+     "expected": 0,
+     "matched": 0,
+     "semantic_exact": 0,
+     "disposition_correct": 0
+    },
+    "other": {
+     "expected": 17,
+     "matched": 8,
+     "semantic_exact": 8,
+     "disposition_correct": 2
+    }
+   }
+  },
+  "accounting": {
+   "pages": 2,
+   "pages_passed": 2,
+   "issue_count": 0,
+   "unavailable_documents": 0,
+   "passed": true
+  },
+  "execution": {
+   "source_profile_pages": {
+    "raster": 2
+   },
+   "text_layer_strategy_pages": {
+    "raster_ocr": 2
+   },
+   "recognition_source_counts": {
+    "ocr": 612
+   },
+   "gdt_page_scan": {
+    "enabled_documents": 0,
+    "status_pages": {
+     "disabled": 2
+    },
+    "completed_pages": 0,
+    "error_pages": 0,
+    "missing_pages": 0,
+    "detected_frame_count": 0,
+    "published_frame_count": 0,
+    "eligible_frame_count": 0,
+    "review_frame_count": 0,
+    "absorbed_candidate_count": 0,
+    "skipped_existing_count": 0,
+    "duplicate_frame_count": 0,
+    "native_evidence_frame_count": 0
+   }
+  }
+ },
+ "documents": [
+  {
+   "fixture": "129E01-13300-ID.json",
+   "document": "PIPE, EXH PRESSURE, drawing 129E01-13300-ID",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 171.308584690094,
+   "totals": {
+    "expected": 34,
+    "matched": 24,
+    "partial": 5,
+    "missed": 5,
+    "mean_percent": 88.8,
+    "type_correct": 24,
+    "type_total": 34,
+    "semantic_exact": 23,
+    "disposition_correct": 20,
+    "disposition_total": 34,
+    "noise_detections": 0,
+    "unexpected_detections": 9,
+    "unmatched_review_or_other": 173,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 28,
+      "matched": 22,
+      "semantic_exact": 21,
+      "disposition_correct": 19
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 6,
+      "matched": 2,
+      "semantic_exact": 2,
+      "disposition_correct": 1
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 181
+    },
+    "gdt_page_scan": {
+     "policy": "forced_off",
+     "enabled": false,
+     "status_pages": {
+      "disabled": 1
+     },
+     "completed_pages": 0,
+     "error_pages": 0,
+     "missing_pages": 0,
+     "detected_frame_count": 0,
+     "published_frame_count": 0,
+     "eligible_frame_count": 0,
+     "review_frame_count": 0,
+     "absorbed_candidate_count": 0,
+     "skipped_existing_count": 0,
+     "duplicate_frame_count": 0,
+     "native_evidence_frame_count": 0
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 181
+      },
+      "gdt_integration": {
+       "status": "disabled",
+       "detected_frame_count": 0,
+       "published_frame_count": 0,
+       "eligible_frame_count": 0,
+       "review_frame_count": 0,
+       "absorbed_candidate_count": 0,
+       "skipped_existing_count": 0,
+       "duplicate_frame_count": 0,
+       "native_evidence_frame_count": 0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fixture": "ballwoon_drawing.json",
+   "document": "PIPE ASM, EXH PRESS SENSOR, drawing 7475870300",
+   "passed": true,
+   "gate_failures": [],
+   "seconds": 249.21563506126404,
+   "totals": {
+    "expected": 67,
+    "matched": 47,
+    "partial": 14,
+    "missed": 6,
+    "mean_percent": 90.6,
+    "type_correct": 41,
+    "type_total": 67,
+    "semantic_exact": 45,
+    "disposition_correct": 23,
+    "disposition_total": 67,
+    "noise_detections": 0,
+    "unexpected_detections": 13,
+    "unmatched_review_or_other": 450,
+    "by_expected_disposition": {
+     "accepted": {
+      "expected": 56,
+      "matched": 41,
+      "semantic_exact": 39,
+      "disposition_correct": 22
+     },
+     "review": {
+      "expected": 0,
+      "matched": 0,
+      "semantic_exact": 0,
+      "disposition_correct": 0
+     },
+     "other": {
+      "expected": 11,
+      "matched": 6,
+      "semantic_exact": 6,
+      "disposition_correct": 1
+     }
+    }
+   },
+   "accounting": {
+    "passed": true,
+    "issue_count": 0
+   },
+   "execution": {
+    "policy": "native_pdf_first",
+    "source_format": "pdf",
+    "source_profile_pages": {
+     "raster": 1
+    },
+    "text_layer_strategy_pages": {
+     "raster_ocr": 1
+    },
+    "recognition_source_counts": {
+     "ocr": 431
+    },
+    "gdt_page_scan": {
+     "policy": "forced_off",
+     "enabled": false,
+     "status_pages": {
+      "disabled": 1
+     },
+     "completed_pages": 0,
+     "error_pages": 0,
+     "missing_pages": 0,
+     "detected_frame_count": 0,
+     "published_frame_count": 0,
+     "eligible_frame_count": 0,
+     "review_frame_count": 0,
+     "absorbed_candidate_count": 0,
+     "skipped_existing_count": 0,
+     "duplicate_frame_count": 0,
+     "native_evidence_frame_count": 0
+    },
+    "pages": [
+     {
+      "page": 1,
+      "source_profile": "raster",
+      "text_layer_strategy": "raster_ocr",
+      "recognition_source_counts": {
+       "ocr": 431
+      },
+      "gdt_integration": {
+       "status": "disabled",
+       "detected_frame_count": 0,
+       "published_frame_count": 0,
+       "eligible_frame_count": 0,
+       "review_frame_count": 0,
+       "absorbed_candidate_count": 0,
+       "skipped_existing_count": 0,
+       "duplicate_frame_count": 0,
+       "native_evidence_frame_count": 0
+      }
+     }
+    ]
+   }
+  }
+ ]
+}
