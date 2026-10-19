@@ -1,4 +1,5 @@
 import type { BBox, DimensionType } from "@/types/annotation";
+import type { DocumentMetadata } from "@/types/documentMetadata";
 
 export type ChecksheetRunStatus = "draft" | "completed";
 
@@ -22,6 +23,7 @@ export interface ChecksheetSnapshotPayload {
   source_project_id?: string;
   source_file_type: "pdf" | "image";
   pdf_render_scale: number;
+  metadata: DocumentMetadata;
   reading_columns: string[];
   items: ChecksheetSnapshotItem[];
 }
@@ -59,6 +61,7 @@ export interface ChecksheetRunResponse {
     id: string;
     revision_number: number;
     pdf_render_scale: number;
+    metadata: DocumentMetadata;
   };
   run: {
     id: string;
@@ -124,6 +127,7 @@ export interface ChecksheetDetail {
     revision_number: number;
     row_count: number;
     created_at: string;
+    metadata: DocumentMetadata;
   }>;
   runs: ChecksheetRunSummary[];
 }

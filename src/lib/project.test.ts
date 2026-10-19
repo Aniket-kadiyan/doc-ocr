@@ -124,13 +124,45 @@ describe("project and integration exports", () => {
         dataUrl: "data:image/png;base64,AA==",
       },
       annotations: values,
+      metadata: {
+        partName: "Drive Bracket",
+        documentNumber: "DB-1042",
+        revisionNumber: "C",
+      },
       savedAt: 123,
     });
     const bundle = parseProjectBundle(serialized);
 
     expect(bundle.annotations).toHaveLength(2);
+    expect(bundle.metadata).toEqual({
+      partName: "Drive Bracket",
+      documentNumber: "DB-1042",
+      revisionNumber: "C",
+    });
     expect(serialized).not.toContain("balloon-style");
     expect(serialized).not.toContain("artwork");
+  });
+
+  it("loads older project files with blank metadata", () => {
+    const serialized = JSON.stringify({
+      format: "doc-ocr-box.project",
+      version: 1,
+      projectName: "Legacy drawing",
+      savedAt: 123,
+      source: {
+        fileName: "drawing.png",
+        mimeType: "image/png",
+        fileType: "image",
+        dataUrl: "data:image/png;base64,AA==",
+      },
+      annotations: values,
+    });
+
+    expect(parseProjectBundle(serialized).metadata).toEqual({
+      partName: "",
+      documentNumber: "",
+      revisionNumber: "",
+    });
   });
 
   it("persists individual visibility without removing hidden values from exports", () => {
@@ -166,7 +198,12 @@ describe("project and integration exports", () => {
       values,
       "Test drawing",
       "https://example.invalid/verify",
-      ["part1"]
+      ["part1"],
+      {
+        partName: "Drive Bracket",
+        documentNumber: "DB-1042",
+        revisionNumber: "C",
+      }
     );
 
     expect(payload.items).toHaveLength(2);
@@ -178,5 +215,6 @@ describe("project and integration exports", () => {
       range: "+0.05, -0.05",
     });
     expect(payload.sheet?.extraColumns).toEqual(["part1"]);
+    expect(payload.metadata.documentNumber).toBe("DB-1042");
   });
 });

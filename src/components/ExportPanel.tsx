@@ -25,6 +25,7 @@ import {
 } from "@/lib/ballooned";
 import { buildBalloonedPdf } from "@/lib/balloonedPdf";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useDocumentMetadataStore } from "@/store/documentMetadataStore";
 import {
   CreateChecksheetDialog,
   type CreateChecksheetValues,
@@ -40,6 +41,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
   const projectId = useAnnotationStore((s) => s.projectId);
   const currentPage = useAnnotationStore((s) => s.currentPage);
   const pageCanvasProvider = useAnnotationStore((s) => s.pageCanvasProvider);
+  const metadata = useDocumentMetadataStore((s) => s.metadata);
   const [actionStatus, setActionStatus] = useState<{
     kind: "idle" | "saving" | "sending" | "rendering" | "ok" | "error";
     message: string;
@@ -158,6 +160,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         projectId,
         projectName,
         project,
+        metadata,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(
@@ -192,7 +195,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportInspectionJSON(annotations, extraColumns),
+      exportInspectionJSON(annotations, extraColumns, metadata),
       `${base}_inspection.json`,
       "application/json"
     );
@@ -204,7 +207,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportInspectionCSV(annotations, extraColumns),
+      exportInspectionCSV(annotations, extraColumns, metadata),
       `${base}_inspection.csv`,
       "text/csv"
     );
@@ -234,6 +237,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
       }
       const pdf = await buildBalloonedPdf({
         projectName,
+        metadata,
         pages,
         annotations,
         extraColumns,
@@ -273,7 +277,8 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
       if (!source) throw new Error("Could not render this page.");
       const canvas = renderBalloonedCanvas(
         source,
-        annotations.filter((a) => a.page === currentPage)
+        annotations.filter((a) => a.page === currentPage),
+        { projectName, metadata }
       );
       downloadBlob(
         await canvasToPngBlob(canvas),
@@ -301,7 +306,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
     downloadFile(
-      exportXML(annotations, extraColumns),
+      exportXML(annotations, extraColumns, metadata),
       `${base}_inspection.xml`,
       "application/xml"
     );
@@ -323,7 +328,8 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
         annotations,
         projectName,
         url,
-        extraColumns
+        extraColumns,
+        metadata
       );
       await sendForVerification(url, payload);
       setActionStatus({
@@ -374,7 +380,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           >
             <span className="font-medium">JSON</span>
             <span className="block text-[11px] text-slate-400">
-              Values only: S.no, Label, Value, Tolerance, …, Method, Tool
+              Document metadata and inspection values
             </span>
           </button>
           <button
@@ -384,7 +390,7 @@ export function ExportPanel({ disabled = false }: ExportPanelProps) {
           >
             <span className="font-medium">CSV</span>
             <span className="block text-[11px] text-slate-400">
-              Inspection sheet with your extra columns
+              Metadata and inspection table with your extra columns
             </span>
           </button>
           <button

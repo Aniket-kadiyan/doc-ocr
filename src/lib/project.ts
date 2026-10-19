@@ -2,15 +2,19 @@ import type { Annotation } from "@/types/annotation";
 import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
- * the file is portable) plus every annotation and a verification payload that a
- * remote checking server can consume directly. Saving produces one `.docbox.json`
- * file; loading restores both the drawing and its annotations.
+ * the file is portable), every annotation, and document metadata. Saving
+ * produces one `.docbox.json` file; loading restores the drawing and its saved
+ * project data.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 1;
+export const PROJECT_VERSION = 2;
 
 export interface ProjectSource {
   fileName: string;
@@ -51,6 +55,7 @@ export interface InspectionSheet {
 
 export interface VerificationPayload {
   projectName: string;
+  metadata: DocumentMetadata;
   /** Optional remote endpoint baked into the file for reference. */
   endpoint: string;
   items: VerificationItem[];
@@ -238,6 +243,7 @@ export interface ProjectBundle {
   savedAt: number;
   source: ProjectSource;
   annotations: Annotation[];
+  metadata: DocumentMetadata;
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -250,10 +256,12 @@ export function buildVerificationPayload(
   annotations: Annotation[],
   projectName: string,
   endpoint = verificationEndpoint(),
-  extraColumns?: string[]
+  extraColumns?: string[],
+  metadata?: Partial<DocumentMetadata> | null
 ): VerificationPayload {
   return {
     projectName,
+    metadata: normalizeDocumentMetadata(metadata),
     endpoint,
     ...(extraColumns != null
       ? { sheet: buildInspectionSheet(annotations, extraColumns) }
@@ -285,6 +293,7 @@ export function buildProjectBundle(args: {
   projectName: string;
   source: ProjectSource;
   annotations: Annotation[];
+  metadata?: Partial<DocumentMetadata> | null;
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -294,6 +303,7 @@ export function buildProjectBundle(args: {
     savedAt: args.savedAt,
     source: args.source,
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
+    metadata: normalizeDocumentMetadata(args.metadata),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -316,7 +326,11 @@ export function parseProjectBundle(text: string): ProjectBundle {
   if (!Array.isArray(b.annotations)) {
     throw new Error("Project file is missing its annotations.");
   }
-  return b as ProjectBundle;
+  return {
+    ...(b as ProjectBundle),
+    version: Number(b.version) || 1,
+    metadata: normalizeDocumentMetadata(b.metadata),
+  };
 }
 
 /** POST the value/label payload to a remote server for checking. */

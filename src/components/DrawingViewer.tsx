@@ -17,6 +17,7 @@ import {
 import type Konva from "konva";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useDocumentMetadataStore } from "@/store/documentMetadataStore";
 import { normalizeBBox } from "@/lib/canvasUtils";
 import {
   abandonAutoBalloonScan,
@@ -54,6 +55,7 @@ import {
   saveAnnotations,
   loadAnnotations,
   saveProject,
+  saveProjectMetadata,
   getMostRecentProject,
   deleteProject,
 } from "@/lib/db";
@@ -92,6 +94,11 @@ import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
 import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
 import type { Annotation, BBox, DimensionType } from "@/types/annotation";
+import {
+  DOCUMENT_METADATA_FIELDS,
+  normalizeDocumentMetadata,
+  type DocumentMetadataField,
+} from "@/types/documentMetadata";
 import type { SegmentRegion } from "@/lib/paddleOcrClient";
 import type {
   ScanCompletionSummary,
@@ -185,6 +192,8 @@ export function DrawingViewer() {
     string | null
   >(null);
   const [currentBox, setCurrentBox] = useState<BBox | null>(null);
+  const [activeMetadataField, setActiveMetadataField] =
+    useState<DocumentMetadataField | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [lastDebugDump, setLastDebugDump] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
@@ -252,6 +261,14 @@ export function DrawingViewer() {
   const setPageCanvasProvider = useAnnotationStore(
     (s) => s.setPageCanvasProvider
   );
+  const metadata = useDocumentMetadataStore((s) => s.metadata);
+  const setDocumentMetadata = useDocumentMetadataStore((s) => s.setMetadata);
+  const updateDocumentMetadataField = useDocumentMetadataStore(
+    (s) => s.updateField
+  );
+  const resetDocumentMetadata = useDocumentMetadataStore(
+    (s) => s.resetMetadata
+  );
 
   const pageAnnotations = annotations.filter(
     (annotation) =>
@@ -271,6 +288,9 @@ export function DrawingViewer() {
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
+  const activeMetadataLabel = DOCUMENT_METADATA_FIELDS.find(
+    ({ key }) => key === activeMetadataField
+  )?.label;
   // Carried with their table position, because that is what fixes a point's
   // colour: the row keeps its hue whether or not its name was found.
   const pageReferencePoints =
@@ -474,6 +494,7 @@ export function DrawingViewer() {
     });
     setProjectId(recent.id);
     setProjectName(recent.name.replace(/\.[^.]+$/, ""));
+    setDocumentMetadata(recent.metadata);
     sourceFileRef.current = {
       fileName: recent.fileName,
       mimeType: file.type,
@@ -488,7 +509,7 @@ export function DrawingViewer() {
     await saveAnnotations(recent.id, migration.annotations);
     const warning = legacyMigrationWarning(migration.orphanLabelCount);
     if (warning) setSelectionError(warning);
-  }, [loadSource, setAnnotations, setProjectName]);
+  }, [loadSource, setAnnotations, setDocumentMetadata, setProjectName]);
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -507,6 +528,8 @@ export function DrawingViewer() {
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
+    setActiveMetadataField(null);
+    resetDocumentMetadata();
     setScanProgress(null);
     setScanOverlay(null);
     setScanScope(null);
@@ -526,6 +549,7 @@ export function DrawingViewer() {
       fileType,
       mimeType: file.type,
       fileBlob: file,
+      metadata: normalizeDocumentMetadata(),
       updatedAt: Date.now(),
     });
     await loadSource(file);
@@ -546,6 +570,7 @@ export function DrawingViewer() {
       projectName,
       source,
       annotations,
+      metadata,
       savedAt: Date.now(),
     });
     downloadFile(json, `${base}.docbox.json`, "application/json");
@@ -566,6 +591,8 @@ export function DrawingViewer() {
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
+    setActiveMetadataField(null);
+    resetDocumentMetadata();
     setPending(null);
     setSelectionError(null);
     setScanProgress(null);
@@ -585,12 +612,14 @@ export function DrawingViewer() {
     setSelectedScanSections([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
+    setActiveMetadataField(null);
     try {
       const bundle = parseProjectBundle(await file.text());
       const id = uuidv4();
       setProjectId(id);
       sourceFileRef.current = bundle.source;
       setProjectName(bundle.projectName);
+      setDocumentMetadata(bundle.metadata);
       const srcFile = dataUrlToFile(
         bundle.source.dataUrl,
         bundle.source.fileName,
@@ -611,6 +640,7 @@ export function DrawingViewer() {
         fileType: bundle.source.fileType,
         mimeType: bundle.source.mimeType,
         fileBlob: srcFile,
+        metadata: bundle.metadata,
         updatedAt: Date.now(),
       });
       await saveAnnotations(id, migration.annotations);
@@ -680,6 +710,87 @@ export function DrawingViewer() {
       );
     },
     [moveAnnotationToNumber, projectId]
+  );
+
+  const handleMetadataChange = useCallback(
+    (field: DocumentMetadataField, value: string) => {
+      const next = {
+        ...useDocumentMetadataStore.getState().metadata,
+        [field]: value,
+      };
+      updateDocumentMetadataField(field, value);
+      void saveProjectMetadata(projectId, next).catch(() => {
+        setSelectionError("Could not save the document metadata locally.");
+      });
+    },
+    [projectId, updateDocumentMetadataField]
+  );
+
+  const handleMetadataSelect = useCallback(
+    (field: DocumentMetadataField) => {
+      if (activeMetadataField === field) {
+        setActiveMetadataField(null);
+        return;
+      }
+      setSelectionError(null);
+      setScanSummary(null);
+      setSelectedScanSections([]);
+      setSelectedId(null);
+      setSelectedReviewCandidateId(null);
+      setPending(null);
+      setIsDrawingValue(false);
+      setIsSegmenting(false);
+      setActiveMetadataField(field);
+    }, [activeMetadataField, setIsDrawingValue, setIsSegmenting, setPending]);
+
+  const handleMetadataClear = useCallback(
+    (field: DocumentMetadataField) => {
+      if (activeMetadataField === field) setActiveMetadataField(null);
+      handleMetadataChange(field, "");
+    },
+    [activeMetadataField, handleMetadataChange]
+  );
+
+  const finishMetadataBox = useCallback(
+    async (bbox: BBox, field: DocumentMetadataField) => {
+      if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
+      const source = sourceCanvasRef.current;
+      if (!source) {
+        setActiveMetadataField(null);
+        return;
+      }
+
+      setActiveMetadataField(null);
+      setIsProcessing(true);
+      setSelectionError(null);
+      setScanSummary(null);
+      try {
+        // Intentionally use the same single-value reader as Draw Value. This
+        // fills metadata without creating an annotation or balloon.
+        const ocrResult = await runOCR(source, bbox, 1);
+        if (ocrResult.debugDumpDir) {
+          setLastDebugDump(ocrResult.debugDumpDir);
+        } else if (ocrResult.debugDumpSkipped) {
+          setLastDebugDump(`skipped: ${ocrResult.debugDumpSkipped}`);
+        }
+        const detectedValue = ocrResult.text.trim().replace(/\s+/g, " ");
+        if (!detectedValue) {
+          setSelectionError(
+            "No metadata text detected — select the field and draw a tighter box, or enter the value manually."
+          );
+          return;
+        }
+        handleMetadataChange(field, detectedValue);
+      } catch (err) {
+        setSelectionError(
+          err instanceof Error ? err.message : "Metadata OCR failed unexpectedly"
+        );
+      } finally {
+        setIsProcessing(false);
+        setActiveMetadataField(null);
+      }
+    },
+    [handleMetadataChange, setIsProcessing]
   );
 
   // Read one drawn value and open the value/tolerance confirmation popup.
@@ -1146,6 +1257,7 @@ export function DrawingViewer() {
     if (sections.length === 0) return;
 
     setSelectedScanSections([]);
+    setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setIsProcessing(true);
@@ -1182,6 +1294,7 @@ export function DrawingViewer() {
     const source = sourceCanvasRef.current;
     if (!source) return;
     setSelectedScanSections([]);
+    setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setReferenceTable(null);
@@ -1220,6 +1333,8 @@ export function DrawingViewer() {
   ) => {
     const source = sourceCanvasRef.current;
     if (!source) return;
+
+    setActiveMetadataField(null);
 
     if (announce) {
       // Chained onto a page scan this would wipe the balloon count the scan
@@ -1334,6 +1449,7 @@ export function DrawingViewer() {
     setSelectionError(null);
     setScanSummary(null);
     setSelectedScanSections([]);
+    setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setGdtSelectedKey(null);
@@ -1480,7 +1596,8 @@ export function DrawingViewer() {
 
   const isCompletingDraw = useRef(false);
 
-  const drawingActive = isDrawingValue || isSegmenting;
+  const drawingActive =
+    isDrawingValue || isSegmenting || activeMetadataField !== null;
 
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     const stage = e.target.getStage();
@@ -1521,12 +1638,15 @@ export function DrawingViewer() {
     const box = { ...currentBoxRef.current };
     const segmenting = isSegmenting;
     const drawingValue = isDrawingValue;
+    const metadataField = activeMetadataField;
     drawStartRef.current = null;
     currentBoxRef.current = null;
     setCurrentBox(null);
     try {
       if (segmenting) {
         await finishSegmentBox(box);
+      } else if (metadataField) {
+        await finishMetadataBox(box, metadataField);
       } else if (drawingValue) {
         await finishBox(box);
       }
@@ -1534,7 +1654,9 @@ export function DrawingViewer() {
       isCompletingDraw.current = false;
     }
   }, [
+    activeMetadataField,
     finishBox,
+    finishMetadataBox,
     finishSegmentBox,
     isSegmenting,
     isDrawingValue,
@@ -1671,6 +1793,21 @@ export function DrawingViewer() {
           </button>
         </div>
       )}
+      {activeMetadataField && (
+        <div className="flex items-center justify-center gap-3 bg-violet-600 px-4 py-2.5 text-center text-sm font-medium text-white">
+          <span>
+            Drag a box around the {activeMetadataLabel}. The detected text will
+            fill the metadata field without creating a balloon.
+          </span>
+          <button
+            type="button"
+            onClick={() => setActiveMetadataField(null)}
+            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {isSegmenting && !isProcessing && (
         <div className="flex flex-wrap items-center justify-center gap-2 bg-emerald-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
@@ -1726,6 +1863,7 @@ export function DrawingViewer() {
           setSelectionError(null);
           setScanSummary(null);
           setSelectedScanSections([]);
+          setActiveMetadataField(null);
           setIsDrawingValue(false);
           setIsSegmenting(true);
         }}
@@ -1738,6 +1876,7 @@ export function DrawingViewer() {
           setSelectionError(null);
           setScanSummary(null);
           setSelectedScanSections([]);
+          setActiveMetadataField(null);
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
         }}
@@ -2020,7 +2159,10 @@ export function DrawingViewer() {
           }
           annotations={annotations}
           reviewCandidates={scanReviewCandidates}
-          disabled={isSegmenting || isProcessing}
+          metadata={metadata}
+          activeMetadataField={activeMetadataField}
+          drawingAvailable={konvaImage !== null}
+          disabled={isSegmenting || isProcessing || konvaImage === null}
           selectedId={selectedId}
           selectedReviewCandidateId={selectedReviewCandidateId}
           onSelect={(id) => handleSelect(id)}
@@ -2028,6 +2170,9 @@ export function DrawingViewer() {
           onDelete={handleDelete}
           onMove={handleMoveAnnotation}
           onToggleVisibility={toggleAnnotationVisibility}
+          onMetadataChange={handleMetadataChange}
+          onMetadataSelect={handleMetadataSelect}
+          onMetadataClear={handleMetadataClear}
           onEdit={(id) => {
             handleSelect(id);
             setEditingValueId(id);

@@ -11,6 +11,10 @@ import {
   getChecksheetRun,
 } from "@/lib/checksheetClient";
 import type { ChecksheetRunResponse, ChecksheetRow } from "@/types/checksheet";
+import {
+  DOCUMENT_METADATA_FIELDS,
+  normalizeDocumentMetadata,
+} from "@/types/documentMetadata";
 
 interface ChecksheetRunProps {
   checksheetId: string;
@@ -85,6 +89,7 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
   const previewRow =
     data?.rows.find((row) => row.annotation_id === activeAnnotationId) ??
     activeRow;
+  const revisionMetadata = normalizeDocumentMetadata(data?.revision.metadata);
 
   const navigate = useCallback(
     (offset: number) => {
@@ -247,6 +252,19 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
             </button>
           </div>
         </div>
+        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+          {DOCUMENT_METADATA_FIELDS.map(({ key, label }) => (
+            <div
+              key={key}
+              className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+            >
+              <dt className="font-medium text-slate-500">{label}</dt>
+              <dd className="mt-0.5 truncate font-semibold text-slate-800">
+                {revisionMetadata[key] || "—"}
+              </dd>
+            </div>
+          ))}
+        </dl>
         {data.checksheet.archived && (
           <p className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
             This checksheet is archived. Restore it from Saved Checksheets to edit

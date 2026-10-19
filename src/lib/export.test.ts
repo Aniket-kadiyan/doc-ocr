@@ -35,7 +35,7 @@ describe("tolerance export validation", () => {
   });
 });
 
-describe("values-only exports", () => {
+describe("inspection exports", () => {
   const annotations = [
     makeAnnotation({ id: "plain", number: 1, value: "25", range: "0" }),
     makeAnnotation({
@@ -54,10 +54,18 @@ describe("values-only exports", () => {
   // whether or not the drawing carried a value for it, so a failed read is
   // visible to the inspector instead of silently missing.
   const valueRowCount = annotations.length;
+  const metadata = {
+    partName: "Drive Bracket",
+    documentNumber: "DB-1042 & ALT",
+    revisionNumber: "C",
+  };
 
   it("exports JSON with exactly one row per value", () => {
-    const result = JSON.parse(exportInspectionJSON(annotations, ["part1"]));
+    const result = JSON.parse(
+      exportInspectionJSON(annotations, ["part1"], metadata)
+    );
 
+    expect(result.metadata).toEqual(metadata);
     expect(result.extra_columns).toEqual(["part1"]);
     expect(result.data.filter((row: Record<string, string>) => row["S.no"]))
       .toHaveLength(valueRowCount);
@@ -87,24 +95,34 @@ describe("values-only exports", () => {
   });
 
   it("exports stable CSV headers and optional blank fields", () => {
-    const csv = exportInspectionCSV(annotations, ["part1"]);
+    const csv = exportInspectionCSV(annotations, ["part1"], metadata);
     const lines = csv.split("\n");
 
-    expect(lines[0]).toBe(
+    expect(lines.slice(0, 4)).toEqual([
+      '"Metadata Field","Value"',
+      '"Part Name","Drive Bracket"',
+      '"Document Number","DB-1042 & ALT"',
+      '"Revision Number","C"',
+    ]);
+    expect(lines[5]).toBe(
       '"S.no","Label","Value","Tolerance","part1","Method","Tool"'
     );
     // Header + one line per value, before the title-block section.
-    expect(lines.slice(0, valueRowCount + 1)).toHaveLength(valueRowCount + 1);
-    expect(lines[1]).toBe('"1","","25","0","","",""');
+    expect(lines.slice(5, 5 + valueRowCount + 1)).toHaveLength(
+      valueRowCount + 1
+    );
+    expect(lines[6]).toBe('"1","","25","0","","",""');
   });
 
   it("exports one escaped XML row per value", () => {
-    const xml = exportXML(annotations, ["part1"]);
+    const xml = exportXML(annotations, ["part1"], metadata);
 
     // XML carries the same table as CSV and JSON: one <row> per sheet row.
     expect(xml.match(/<row>/g)?.length).toBeGreaterThanOrEqual(valueRowCount);
     expect(xml).toContain("Diameter &amp; finish");
     expect(xml).toContain('<cell name="Value">25</cell>');
     expect(xml).toContain("<columns>");
+    expect(xml).toContain("<partName>Drive Bracket</partName>");
+    expect(xml).toContain("<documentNumber>DB-1042 &amp; ALT</documentNumber>");
   });
 });

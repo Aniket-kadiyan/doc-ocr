@@ -66,6 +66,34 @@ def _max_document_bytes() -> int:
     return megabytes * 1024 * 1024
 
 
+_METADATA_FIELDS = ("partName", "documentNumber", "revisionNumber")
+
+
+def _blank_metadata() -> dict[str, str]:
+    return {field: "" for field in _METADATA_FIELDS}
+
+
+def _revision_metadata(
+    connection: sqlite3.Connection,
+    revision_id: str,
+) -> dict[str, str]:
+    metadata = _blank_metadata()
+    rows = connection.execute(
+        """
+        SELECT field_key, value
+        FROM checksheet_revision_metadata
+        WHERE revision_id = ?
+        ORDER BY position ASC
+        """,
+        (revision_id,),
+    ).fetchall()
+    for row in rows:
+        key = str(row["field_key"])
+        if key in metadata:
+            metadata[key] = str(row["value"])
+    return metadata
+
+
 class ChecksheetStorage:
     """Owns all checksheet mutations and keeps browser state out of the model."""
 
@@ -142,6 +170,16 @@ class ChecksheetStorage:
 
                     CREATE INDEX IF NOT EXISTS idx_checksheet_revisions_definition
                         ON checksheet_revisions (checksheet_id, revision_number DESC);
+
+                    CREATE TABLE IF NOT EXISTS checksheet_revision_metadata (
+                        revision_id TEXT NOT NULL
+                            REFERENCES checksheet_revisions(id) ON DELETE CASCADE,
+                        field_key TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        position INTEGER NOT NULL CHECK (position >= 0),
+                        PRIMARY KEY (revision_id, field_key),
+                        UNIQUE (revision_id, position)
+                    );
 
                     CREATE TABLE IF NOT EXISTS checksheet_columns (
                         id TEXT PRIMARY KEY,
@@ -340,6 +378,21 @@ class ChecksheetStorage:
                 created_at,
             ),
         )
+        metadata = snapshot.metadata.model_dump(by_alias=True)
+        for position, field_key in enumerate(_METADATA_FIELDS):
+            connection.execute(
+                """
+                INSERT INTO checksheet_revision_metadata (
+                    revision_id, field_key, value, position
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    field_key,
+                    str(metadata.get(field_key, "")),
+                    position,
+                ),
+            )
         for position, name in enumerate(snapshot.reading_columns):
             connection.execute(
                 """
@@ -664,6 +717,10 @@ class ChecksheetStorage:
                 """,
                 (checksheet_id,),
             ).fetchall()
+            revision_metadata = {
+                str(row["id"]): _revision_metadata(connection, str(row["id"]))
+                for row in revisions
+            }
         return {
             "id": str(definition["id"]),
             "name": str(definition["name"]),
@@ -679,6 +736,7 @@ class ChecksheetStorage:
                     "revision_number": int(row["revision_number"]),
                     "row_count": int(row["row_count"]),
                     "created_at": str(row["created_at"]),
+                    "metadata": revision_metadata[str(row["id"])],
                 }
                 for row in revisions
             ],
@@ -748,6 +806,7 @@ class ChecksheetStorage:
                 """,
                 (run_id,),
             ).fetchall()
+            metadata = _revision_metadata(connection, str(row["revision_id"]))
         readings: dict[str, dict[str, str]] = {}
         for reading in reading_rows:
             readings.setdefault(str(reading["item_id"]), {})[
@@ -764,6 +823,7 @@ class ChecksheetStorage:
                 "id": str(row["revision_id"]),
                 "revision_number": int(row["revision_number"]),
                 "pdf_render_scale": float(row["pdf_render_scale"]),
+                "metadata": metadata,
             },
             "run": {
                 "id": str(row["id"]),
@@ -1061,6 +1121,28 @@ class ChecksheetStorage:
                     now,
                 ),
             )
+            metadata_rows = connection.execute(
+                """
+                SELECT field_key, value, position
+                FROM checksheet_revision_metadata
+                WHERE revision_id = ? ORDER BY position
+                """,
+                (revision["id"],),
+            ).fetchall()
+            for metadata_row in metadata_rows:
+                connection.execute(
+                    """
+                    INSERT INTO checksheet_revision_metadata (
+                        revision_id, field_key, value, position
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        new_revision_id,
+                        metadata_row["field_key"],
+                        metadata_row["value"],
+                        metadata_row["position"],
+                    ),
+                )
             columns = connection.execute(
                 """
                 SELECT * FROM checksheet_columns

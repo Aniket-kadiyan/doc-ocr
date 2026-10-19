@@ -1,6 +1,10 @@
 import type { Annotation } from "@/types/annotation";
 import { buildInspectionSheet } from "@/lib/project";
 import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
+import {
   BALLOON_COLORS,
   BALLOON_FONT_SIZE,
   BALLOON_RADIUS,
@@ -22,7 +26,7 @@ import type { BalloonedPage } from "@/lib/ballooned";
 const DRAWING_LONG_EDGE = 1190;
 const MARGIN = 24;
 /** Band above the drawing holding the project name and page number. */
-const HEADER_HEIGHT = 22;
+const HEADER_HEIGHT = 34;
 /** A4 landscape, for the inspection table. */
 const TABLE_PAGE: [number, number] = [841.89, 595.28];
 /** Balloons shrink with the drawing, but never below this radius (points),
@@ -141,6 +145,7 @@ function drawBalloon(
 
 export interface BalloonedPdfArgs {
   projectName: string;
+  metadata?: Partial<DocumentMetadata> | null;
   pages: BalloonedPage[];
   /** Every annotation in the project — the table spans all pages. */
   annotations: Annotation[];
@@ -155,6 +160,7 @@ export interface BalloonedPdfArgs {
  */
 export async function buildBalloonedPdf({
   projectName,
+  metadata,
   pages,
   annotations,
   extraColumns = [],
@@ -166,6 +172,13 @@ export async function buildBalloonedPdf({
     import("jspdf"),
     import("jspdf-autotable"),
   ]);
+
+  const normalizedMetadata = normalizeDocumentMetadata(metadata);
+  const metadataLine = [
+    `Part: ${normalizedMetadata.partName || "—"}`,
+    `Document: ${normalizedMetadata.documentNumber || "—"}`,
+    `Revision: ${normalizedMetadata.revisionNumber || "—"}`,
+  ].join(" · ");
 
   const first = pages[0] ? layoutPage(pages[0].width, pages[0].height) : null;
   const doc = new jsPDF({
@@ -195,6 +208,10 @@ export async function buildBalloonedPdf({
     doc.setFontSize(11);
     doc.setTextColor(30, 41, 59);
     doc.text(projectName, MARGIN, MARGIN + 11);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(metadataLine, MARGIN, MARGIN + 24);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(100, 116, 139);
@@ -235,10 +252,12 @@ export async function buildBalloonedPdf({
     MARGIN,
     MARGIN + 26
   );
+  doc.setFontSize(8);
+  doc.text(metadataLine, MARGIN, MARGIN + 38);
 
   const valueColumn = 2;
   autoTable(doc, {
-    startY: MARGIN + 38,
+    startY: MARGIN + 50,
     margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN },
     head: [sheet.headers],
     body: sheet.rows,

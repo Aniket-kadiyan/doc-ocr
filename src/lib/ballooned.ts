@@ -1,5 +1,9 @@
 import type { Annotation } from "@/types/annotation";
 import { balloonGeometry } from "@/lib/balloonGeometry";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 /**
  * "Ballooned drawing" exports — the shareable view of a finished project.
@@ -72,16 +76,48 @@ function drawBalloon(
  */
 export function renderBalloonedCanvas(
   source: HTMLCanvasElement,
-  annotations: Annotation[]
+  annotations: Annotation[],
+  header?: {
+    projectName?: string;
+    metadata?: Partial<DocumentMetadata> | null;
+  }
 ): HTMLCanvasElement {
+  const headerHeight = header ? 52 : 0;
   const out = document.createElement("canvas");
   out.width = source.width;
-  out.height = source.height;
+  out.height = source.height + headerHeight;
   const ctx = out.getContext("2d");
   if (!ctx) throw new Error("Canvas context unavailable");
-  ctx.drawImage(source, 0, 0);
+  if (header) {
+    const metadata = normalizeDocumentMetadata(header.metadata);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, out.width, headerHeight);
+    ctx.fillStyle = "#1e293b";
+    ctx.font = "bold 15px sans-serif";
+    ctx.fillText(header.projectName || "Drawing", 14, 20);
+    ctx.fillStyle = "#475569";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(
+      [
+        `Part: ${metadata.partName || "—"}`,
+        `Document: ${metadata.documentNumber || "—"}`,
+        `Revision: ${metadata.revisionNumber || "—"}`,
+      ].join(" · "),
+      14,
+      40
+    );
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.beginPath();
+    ctx.moveTo(0, headerHeight - 0.5);
+    ctx.lineTo(out.width, headerHeight - 0.5);
+    ctx.stroke();
+  }
+  ctx.drawImage(source, 0, headerHeight);
+  ctx.save();
+  ctx.translate(0, headerHeight);
   // Boxes first, then balloons, matching the viewer's layer order.
   for (const a of annotations) drawBalloon(ctx, a);
+  ctx.restore();
   return out;
 }
 

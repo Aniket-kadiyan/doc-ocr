@@ -3,6 +3,10 @@ import {
   buildInspectionSheet,
   type InspectionSheet,
 } from "@/lib/project";
+import {
+  normalizeDocumentMetadata,
+  type DocumentMetadata,
+} from "@/types/documentMetadata";
 
 const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
@@ -37,8 +41,9 @@ export function findMalformedToleranceAnnotations(
     return hasToleranceIntent && !VALID_EMBEDDED_TOLERANCE.test(value);
   });
 }
-/** In-memory form of the values-only inspection JSON export. */
+/** In-memory form of the inspection JSON export. */
 export interface InspectionJSON {
+  metadata: DocumentMetadata;
   data: Array<Record<string, string>>;
   extra_columns: string[];
 }
@@ -46,27 +51,35 @@ export interface InspectionJSON {
 /** Build the inspection JSON object for downloads and backend conversion. */
 export function buildInspectionJSON(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  metadata?: Partial<DocumentMetadata> | null
 ): InspectionJSON {
   const sheet = buildInspectionSheet(annotations, extraColumns);
   const data = sheet.rows.map((row) =>
     Object.fromEntries(sheet.headers.map((header, i) => [header, row[i]]))
   );
-  return { data, extra_columns: sheet.extraColumns };
+  return {
+    metadata: normalizeDocumentMetadata(metadata),
+    data,
+    extra_columns: sheet.extraColumns,
+  };
 }
 
 /**
- * Values-only JSON: one object per value under `data` with the S.no / Label /
- * Value / Tolerance / extra columns / Method / Tool fields, plus the
- * inspector-filled `extra_columns` names listed separately (rows carry whatever
- * readings were entered in the checksheet). No bbox/rotation/etc. — use Save
- * Project for a reloadable file.
+ * Inspection JSON: document metadata plus one object per inspection row under
+ * `data`, with the inspector-filled `extra_columns` names listed separately.
+ * No bbox/rotation/etc. is included — use Save Project for a reloadable file.
  */
 export function exportInspectionJSON(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  metadata?: Partial<DocumentMetadata> | null
 ): string {
-  return JSON.stringify(buildInspectionJSON(annotations, extraColumns), null, 2);
+  return JSON.stringify(
+    buildInspectionJSON(annotations, extraColumns, metadata),
+    null,
+    2
+  );
 }
 
 /** Serialize an inspection sheet (S.no, Label, Value, Tolerance, extra columns,
@@ -81,9 +94,22 @@ export function inspectionSheetCSV(sheet: InspectionSheet): string {
 /** Build and serialize the inspection sheet with the given extra columns. */
 export function exportInspectionCSV(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  metadata?: Partial<DocumentMetadata> | null
 ): string {
-  return inspectionSheetCSV(buildInspectionSheet(annotations, extraColumns));
+  const normalized = normalizeDocumentMetadata(metadata);
+  const csv = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
+  const metadataRows = [
+    ["Metadata Field", "Value"],
+    ["Part Name", normalized.partName],
+    ["Document Number", normalized.documentNumber],
+    ["Revision Number", normalized.revisionNumber],
+  ];
+  return [
+    ...metadataRows.map((row) => row.map(csv).join(",")),
+    "",
+    inspectionSheetCSV(buildInspectionSheet(annotations, extraColumns)),
+  ].join("\n");
 }
 
 /**
@@ -96,9 +122,11 @@ export function exportInspectionCSV(
  */
 export function exportXML(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  metadata?: Partial<DocumentMetadata> | null
 ): string {
   const sheet = buildInspectionSheet(annotations, extraColumns);
+  const normalizedMetadata = normalizeDocumentMetadata(metadata);
 
   const columns = sheet.headers
     .map((h) => `    <column>${escapeXml(h)}</column>`)
@@ -121,6 +149,11 @@ export function exportXML(
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     "<inspection>",
+    "  <metadata>",
+    `    <partName>${escapeXml(normalizedMetadata.partName)}</partName>`,
+    `    <documentNumber>${escapeXml(normalizedMetadata.documentNumber)}</documentNumber>`,
+    `    <revisionNumber>${escapeXml(normalizedMetadata.revisionNumber)}</revisionNumber>`,
+    "  </metadata>",
     "  <columns>",
     columns,
     "  </columns>",
