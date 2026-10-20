@@ -6,6 +6,11 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import {
+  buildReferenceValueRows,
+  normalizePageReferenceTables,
+} from "@/lib/referenceValues";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -14,7 +19,7 @@ import {
  * project data.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 3;
 
 export interface ProjectSource {
   fileName: string;
@@ -179,7 +184,8 @@ export function valueAnnotations(annotations: Annotation[]): Annotation[] {
  * per value (dimension). */
 export function buildInspectionSheet(
   annotations: Annotation[],
-  extraColumns: string[] = []
+  extraColumns: string[] = [],
+  referenceTables: readonly PageReferenceTable[] = []
 ): InspectionSheet {
   const headers = [
     "S.no",
@@ -190,7 +196,7 @@ export function buildInspectionSheet(
     "Method",
     "Tool",
   ];
-  const rows = valueAnnotations(annotations)
+  const valueRows = valueAnnotations(annotations)
     .sort((a, b) => a.number - b.number)
     .map((a) => [
       String(a.number),
@@ -201,11 +207,28 @@ export function buildInspectionSheet(
       a.method ?? "",
       a.tool ?? "",
     ]);
+  const nextNumber =
+    valueRows.reduce(
+      (largest, row) => Math.max(largest, Number(row[0]) || 0),
+      0
+    ) + 1;
+  const referenceRows = buildReferenceValueRows(referenceTables).map(
+    (reference, index) => [
+      String(nextNumber + index),
+      reference.label,
+      reference.value,
+      "",
+      ...extraColumns.map(() => ""),
+      "",
+      "",
+    ]
+  );
   return {
     extraColumns,
     headers,
     rows: [
-      ...rows,
+      ...valueRows,
+      ...referenceRows,
       // Title-block fields first, then the notes paragraph below them.
       ...titleFieldRows(annotations, headers.length),
       ...notesRows(annotations, headers.length),
@@ -289,6 +312,8 @@ export interface ProjectBundle {
   source: ProjectSource;
   annotations: Annotation[];
   metadata: DocumentMetadata;
+  /** One detected coordinate-reference table per page. */
+  referenceTables: PageReferenceTable[];
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -302,29 +327,55 @@ export function buildVerificationPayload(
   projectName: string,
   endpoint = verificationEndpoint(),
   extraColumns?: string[],
-  metadata?: Partial<DocumentMetadata> | null
+  metadata?: Partial<DocumentMetadata> | null,
+  referenceTables: readonly PageReferenceTable[] = []
 ): VerificationPayload {
+  const values = valueAnnotations(annotations);
+  const nextNumber =
+    values.reduce(
+      (largest, annotation) => Math.max(largest, annotation.number),
+      0
+    ) + 1;
+  const referenceItems: VerificationItem[] = buildReferenceValueRows(
+    referenceTables
+  ).map((reference, index) => ({
+    number: nextNumber + index,
+    label: reference.label,
+    value: reference.value,
+    type: "Reference",
+    kind: "dimension",
+    method: "",
+    tool: "",
+    range: "",
+    labelId: "",
+    page: reference.page,
+    confidence: Math.max(0, ...reference.markers.map((marker) => marker.score)),
+    bbox: { ...(reference.markers[0]?.bbox ?? reference.nameBox) },
+  }));
   return {
     projectName,
     metadata: normalizeDocumentMetadata(metadata),
     endpoint,
     ...(extraColumns != null
-      ? { sheet: buildInspectionSheet(annotations, extraColumns) }
+      ? { sheet: buildInspectionSheet(annotations, extraColumns, referenceTables) }
       : {}),
-    items: valueAnnotations(annotations).map((a) => ({
-      number: a.number,
-      label: a.label ?? "",
-      value: a.value,
-      type: a.type,
-      kind: "dimension",
-      method: a.method ?? "",
-      tool: a.tool ?? "",
-      range: toleranceForExport(a.range, a.value),
-      labelId: "",
-      page: a.page,
-      confidence: a.confidence,
-      bbox: a.bbox,
-    })),
+    items: [
+      ...values.map((a) => ({
+        number: a.number,
+        label: a.label ?? "",
+        value: a.value,
+        type: a.type,
+        kind: "dimension" as const,
+        method: a.method ?? "",
+        tool: a.tool ?? "",
+        range: toleranceForExport(a.range, a.value),
+        labelId: "",
+        page: a.page,
+        confidence: a.confidence,
+        bbox: a.bbox,
+      })),
+      ...referenceItems,
+    ],
   };
 }
 
@@ -339,6 +390,7 @@ export function buildProjectBundle(args: {
   source: ProjectSource;
   annotations: Annotation[];
   metadata?: Partial<DocumentMetadata> | null;
+  referenceTables?: readonly PageReferenceTable[];
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -349,6 +401,7 @@ export function buildProjectBundle(args: {
     source: args.source,
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
     metadata: normalizeDocumentMetadata(args.metadata),
+    referenceTables: normalizePageReferenceTables(args.referenceTables ?? []),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -375,6 +428,9 @@ export function parseProjectBundle(text: string): ProjectBundle {
     ...(b as ProjectBundle),
     version: Number(b.version) || 1,
     metadata: normalizeDocumentMetadata(b.metadata),
+    referenceTables: normalizePageReferenceTables(
+      Array.isArray(b.referenceTables) ? b.referenceTables : []
+    ),
   };
 }
 

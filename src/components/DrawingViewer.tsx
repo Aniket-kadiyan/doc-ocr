@@ -41,6 +41,13 @@ import {
   type ScanRunOutcome,
   type SectionQueuePosition,
 } from "@/lib/sectionScanQueue";
+import {
+  completedReferencePages,
+  referenceScanNotices,
+  referenceTablesAfterPageResult,
+  runReferenceScanQueue,
+} from "@/lib/referenceScanQueue";
+import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import { annotationsFromRegions } from "@/lib/scanAnnotations";
 import { readPdfTextLayer, regionsWithin } from "@/lib/pdfTextLayer";
 import { useClientOcr } from "@/hooks/useClientOcr";
@@ -56,6 +63,7 @@ import {
   loadAnnotations,
   saveProject,
   saveProjectMetadata,
+  saveProjectReferenceTables,
   getMostRecentProject,
   deleteProject,
 } from "@/lib/db";
@@ -213,8 +221,10 @@ export function DrawingViewer() {
   const [selectedScanSections, setSelectedScanSections] = useState<
     QueuedScanSection[]
   >([]);
-  const [referenceTable, setReferenceTable] =
-    useState<PageReferenceTable | null>(null);
+  const [referenceTables, setReferenceTables] = useState<
+    PageReferenceTable[]
+  >([]);
+  const referenceTablesRef = useRef<PageReferenceTable[]>([]);
   const [selectedReferenceSymbol, setSelectedReferenceSymbol] = useState<
     string | null
   >(null);
@@ -293,10 +303,11 @@ export function DrawingViewer() {
   )?.label;
   // Carried with their table position, because that is what fixes a point's
   // colour: the row keeps its hue whether or not its name was found.
-  const pageReferencePoints =
-    referenceTable && referenceTable.page === currentPage
-      ? referenceTable.points.map((point, index) => ({ point, index }))
-      : [];
+  const referenceTable =
+    referenceTables.find((table) => table.page === currentPage) ?? null;
+  const pageReferencePoints = referenceTable
+    ? referenceTable.points.map((point, index) => ({ point, index }))
+    : [];
   const selectedReferenceRow = pageReferencePoints
     .filter(({ point }) => point.symbol === selectedReferenceSymbol)
     .map(({ point, index }) => ({
@@ -329,6 +340,24 @@ export function DrawingViewer() {
       setScanReviewCandidates(next);
     },
     []
+  );
+
+  const replaceReferenceTables = useCallback(
+    (next: readonly PageReferenceTable[]) => {
+      const normalized = normalizePageReferenceTables(next);
+      referenceTablesRef.current = normalized;
+      setReferenceTables(normalized);
+      return normalized;
+    },
+    []
+  );
+
+  const persistReferenceTables = useCallback(
+    async (next: readonly PageReferenceTable[], targetProjectId: string) => {
+      const normalized = replaceReferenceTables(next);
+      await saveProjectReferenceTables(targetProjectId, normalized);
+    },
+    [replaceReferenceTables]
   );
 
   /**
@@ -393,15 +422,13 @@ export function DrawingViewer() {
   }, [currentPage, projectId]);
 
   useEffect(() => {
-    // Review boxes are temporary scan output, never project data. A read
-    // reference table is the same: it belongs to the sheet it was read from,
-    // so opening another drawing has to drop it rather than leave its
-    // markers floating over different artwork.
+    // Review boxes are temporary scan output, never project data. Reference
+    // tables are reset explicitly by each project load path because they are
+    // durable project data and must survive a reload.
     replaceScanReviewCandidates([]);
     reviewOrderRef.current = 0;
     setSelectedReviewCandidateId(null);
     setSelectedScanSections([]);
-    setReferenceTable(null);
     setSelectedReferenceSymbol(null);
   }, [projectId, replaceScanReviewCandidates]);
 
@@ -506,10 +533,17 @@ export function DrawingViewer() {
       await loadAnnotations(recent.id)
     );
     setAnnotations(migration.annotations);
+    replaceReferenceTables(recent.referenceTables ?? []);
     await saveAnnotations(recent.id, migration.annotations);
     const warning = legacyMigrationWarning(migration.orphanLabelCount);
     if (warning) setSelectionError(warning);
-  }, [loadSource, setAnnotations, setDocumentMetadata, setProjectName]);
+  }, [
+    loadSource,
+    replaceReferenceTables,
+    setAnnotations,
+    setDocumentMetadata,
+    setProjectName,
+  ]);
 
   useEffect(() => {
     if (restoredRef.current) return;
@@ -525,6 +559,7 @@ export function DrawingViewer() {
     setSelectedId(null);
     setSelectedReviewCandidateId(null);
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -550,6 +585,7 @@ export function DrawingViewer() {
       mimeType: file.type,
       fileBlob: file,
       metadata: normalizeDocumentMetadata(),
+      referenceTables: [],
       updatedAt: Date.now(),
     });
     await loadSource(file);
@@ -571,6 +607,7 @@ export function DrawingViewer() {
       source,
       annotations,
       metadata,
+      referenceTables,
       savedAt: Date.now(),
     });
     downloadFile(json, `${base}.docbox.json`, "application/json");
@@ -588,6 +625,7 @@ export function DrawingViewer() {
     setSelectedId(null);
     setSelectedReviewCandidateId(null);
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -610,6 +648,7 @@ export function DrawingViewer() {
     setScanSummary(null);
     setSelectedReviewCandidateId(null);
     setSelectedScanSections([]);
+    replaceReferenceTables([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setActiveMetadataField(null);
@@ -620,6 +659,7 @@ export function DrawingViewer() {
       sourceFileRef.current = bundle.source;
       setProjectName(bundle.projectName);
       setDocumentMetadata(bundle.metadata);
+      replaceReferenceTables(bundle.referenceTables);
       const srcFile = dataUrlToFile(
         bundle.source.dataUrl,
         bundle.source.fileName,
@@ -641,6 +681,7 @@ export function DrawingViewer() {
         mimeType: bundle.source.mimeType,
         fileBlob: srcFile,
         metadata: bundle.metadata,
+        referenceTables: bundle.referenceTables,
         updatedAt: Date.now(),
       });
       await saveAnnotations(id, migration.annotations);
@@ -1233,6 +1274,106 @@ export function DrawingViewer() {
     );
   }, [balloonsVisible, projectId, setAllBalloonVisibility]);
 
+  const renderReferencePage = useCallback(
+    async (
+      page: number
+    ): Promise<{ canvas: HTMLCanvasElement; displayScale: number }> => {
+      const displayedCanvas =
+        page === currentPage ? sourceCanvasRef.current : null;
+
+      if (pdfDoc) {
+        const pdfPage = await pdfDoc.getPage(page);
+        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const pixelBudgetScale = Math.sqrt(
+          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
+        );
+        const renderScale = Math.min(
+          REFERENCE_RENDER_SCALE,
+          pixelBudgetScale
+        );
+
+        if (renderScale > PDF_RENDER_SCALE) {
+          try {
+            const rendered = await renderPdfPage(pdfDoc, page, renderScale);
+            return {
+              canvas: rendered.canvas,
+              displayScale: renderScale / PDF_RENDER_SCALE,
+            };
+          } catch {
+            // Fall through to the displayed or standard-resolution page.
+          }
+        }
+
+        if (displayedCanvas) {
+          return { canvas: displayedCanvas, displayScale: 1 };
+        }
+        const fallbackScale = Math.min(PDF_RENDER_SCALE, pixelBudgetScale);
+        const rendered = await renderPdfPage(pdfDoc, page, fallbackScale);
+        return {
+          canvas: rendered.canvas,
+          displayScale: fallbackScale / PDF_RENDER_SCALE,
+        };
+      }
+
+      if (displayedCanvas) {
+        return { canvas: displayedCanvas, displayScale: 1 };
+      }
+      throw new Error("No drawing is available for reference detection.");
+    },
+    [currentPage, pdfDoc]
+  );
+
+  /** Run reference detection after balloon results have already been saved. */
+  const runAutomaticReferencePass = useCallback(
+    async (pages: readonly number[]) => {
+      if (pages.length === 0) return;
+
+      const projectAtStart = projectIdRef.current;
+      setSelectedReferenceSymbol(null);
+      setFindingReferencePoints(true);
+      try {
+        const outcomes = await runReferenceScanQueue({
+          pages,
+          runPage: async (page) => {
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed before reference detection.");
+            }
+            const { canvas, displayScale } = await renderReferencePage(page);
+            const result = await runPageReferencePoints(canvas, displayScale);
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed during reference detection.");
+            }
+            return result;
+          },
+          applyResult: async (page, result) => {
+            if (projectIdRef.current !== projectAtStart) {
+              throw new Error("The drawing changed before references were saved.");
+            }
+            await persistReferenceTables(
+              referenceTablesAfterPageResult(
+                referenceTablesRef.current,
+                page,
+                result
+              ),
+              projectAtStart
+            );
+          },
+        });
+
+        if (projectIdRef.current !== projectAtStart) return;
+        const notices = referenceScanNotices(outcomes);
+        if (notices.length > 0) {
+          setSelectionError((current) =>
+            [...new Set([...(current ? [current] : []), ...notices])].join(" ")
+          );
+        }
+      } finally {
+        setFindingReferencePoints(false);
+      }
+    },
+    [persistReferenceTables, renderReferencePage]
+  );
+
   const finishSegmentBox = useCallback(
     (bbox: BBox) => {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
@@ -1278,12 +1419,16 @@ export function DrawingViewer() {
       });
       if (result.completedSections > 0) {
         setScanSummary(result.summary);
+        await runAutomaticReferencePass(
+          completedReferencePages(sections, result.completedSections)
+        );
       }
     } finally {
       setIsProcessing(false);
     }
   }, [
     runAutoBalloon,
+    runAutomaticReferencePass,
     selectedScanSections,
     setIsDrawingValue,
     setIsProcessing,
@@ -1294,139 +1439,44 @@ export function DrawingViewer() {
     const source = sourceCanvasRef.current;
     if (!source) return;
     setSelectedScanSections([]);
+    setSelectedReferenceSymbol(null);
     setActiveMetadataField(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
-    setReferenceTable(null);
-    const outcome = await runAutoBalloon(
-      { x: 0, y: 0, width: source.width, height: source.height },
-      "page",
-      currentPage
-    );
-    // A coordinate point table is part of reading the whole sheet, so the
-    // page scan looks for one too rather than leaving it to a second click.
-    // It runs after, not instead: it needs its own much finer render, and a
-    // sheet without such a table must still get its balloons.
-    if (outcome.status === "succeeded") {
-      await findReferencePointsRef.current?.({ announce: false });
-    }
-  }, [currentPage, runAutoBalloon, setIsDrawingValue, setIsSegmenting]
-  );
-
-  // findReferencePoints is declared below and depends on state this callback
-  // does not, so it is reached through a ref rather than by reordering the
-  // two and making scanWholePage rebuild on every change to it.
-  const findReferencePointsRef = useRef<
-    ((options?: { announce?: boolean }) => Promise<void>) | null
-  >(null);
-
-  /**
-   * Read the sheet's coordinate table and tag its points in the views.
-   *
-   * Deliberately not part of auto-ballooning. These are not values to be
-   * inspected: they carry no tolerance and no balloon number, the page
-   * scanner masks the table they come from out before it starts, and the
-   * sheet is re-rendered here several times finer than a scan needs.
-   */
-  const findReferencePoints = useCallback(async (
-    { announce = true }: { announce?: boolean } = {}
-  ) => {
-    const source = sourceCanvasRef.current;
-    if (!source) return;
-
-    setActiveMetadataField(null);
-
-    if (announce) {
-      // Chained onto a page scan this would wipe the balloon count the scan
-      // just reported, and most sheets have no coordinate table at all — so
-      // saying so is news only when the operator asked the question.
-      setSelectionError(null);
-      setScanSummary(null);
-      setSelectedScanSections([]);
-      setIsDrawingValue(false);
-      setIsSegmenting(false);
-    }
-    setSelectedReferenceSymbol(null);
-    setFindingReferencePoints(true);
     setIsProcessing(true);
-
-    const projectAtStart = projectIdRef.current;
-    const page = currentPage;
     try {
-      // Fall back to the displayed canvas for an image file, or if the
-      // re-render is refused — a coarser look is better than none.
-      let readCanvas = source;
-      let readScale = 1;
-      if (pdfDoc) {
-        const base = await pdfDoc.getPage(page);
-        const unscaled = base.getViewport({ scale: 1 });
-        const budget = Math.sqrt(
-          REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
-        );
-        const renderScale = Math.min(REFERENCE_RENDER_SCALE, budget);
-        if (renderScale > PDF_RENDER_SCALE) {
-          try {
-            const { canvas } = await renderPdfPage(pdfDoc, page, renderScale);
-            readCanvas = canvas;
-            readScale = renderScale / PDF_RENDER_SCALE;
-          } catch {
-            readCanvas = source;
-            readScale = 1;
-          }
-        }
-      }
-
-      const result = await runPageReferencePoints(readCanvas, readScale);
-      if (projectIdRef.current !== projectAtStart) return;
-
-      if (!result.found || !result.table) {
-        setReferenceTable(null);
-        if (announce) {
-          setSelectionError(
-            result.tableCount === 0
-              ? "No ruled table was found on this sheet."
-              : "None of this sheet's tables has a point column with X/Y/Z coordinates."
-          );
-        }
-        return;
-      }
-
-      setReferenceTable({ ...result.table, page });
-      const located = result.table.points.length -
-        result.unmatchedSymbols.length;
-      // Missing names are worth saying either way: the row is shown with the
-      // coordinates it does have, and only the callout is absent.
-      if (located === 0) {
-        setSelectionError(
-          "The coordinate table was read, but none of its point names could be found in the views."
-        );
-      } else if (result.unmatchedSymbols.length > 0) {
-        setSelectionError(
-          `Not found in the views: ${result.unmatchedSymbols.join(", ")}.`
-        );
-      }
-    } catch (error) {
-      setReferenceTable(null);
-      if (announce) {
-        setSelectionError(
-          error instanceof Error
-            ? error.message
-            : "Reading the reference table failed."
-        );
+      const outcome = await runAutoBalloon(
+        { x: 0, y: 0, width: source.width, height: source.height },
+        "page",
+        currentPage,
+        { manageProcessing: false }
+      );
+      if (outcome.status === "succeeded") {
+        await runAutomaticReferencePass([currentPage]);
       }
     } finally {
-      setFindingReferencePoints(false);
       setIsProcessing(false);
     }
   }, [
     currentPage,
-    pdfDoc,
+    runAutoBalloon,
+    runAutomaticReferencePass,
     setIsDrawingValue,
     setIsProcessing,
     setIsSegmenting,
   ]);
 
-  findReferencePointsRef.current = findReferencePoints;
+  const clearReferencePoints = useCallback(() => {
+    const next = referenceTablesRef.current.filter(
+      (table) => table.page !== currentPage
+    );
+    void persistReferenceTables(next, projectIdRef.current).catch(() => {
+      setSelectionError((current) =>
+        current ?? "Reference points could not be saved locally."
+      );
+    });
+    setSelectedReferenceSymbol(null);
+  }, [currentPage, persistReferenceTables]);
 
   /**
    * Find feature control frames and GD&T symbols on this page.
@@ -1868,7 +1918,6 @@ export function DrawingViewer() {
           setIsSegmenting(true);
         }}
         onScanWholePage={() => void scanWholePage()}
-        onFindReferencePoints={() => void findReferencePoints()}
         findingReferencePoints={findingReferencePoints}
         onFindGdtSymbols={() => void findGdtSymbols()}
         findingGdtSymbols={findingGdtSymbols}
@@ -1892,6 +1941,7 @@ export function DrawingViewer() {
         onLoadProject={() => loadProjectInputRef.current?.click()}
         onRemoveDrawing={() => void handleRemoveDrawing()}
         canSaveProject={konvaImage !== null}
+        referenceTables={referenceTables}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -2129,16 +2179,13 @@ export function DrawingViewer() {
 
         <Sidebar
           referencePanel={
-            referenceTable && referenceTable.page === currentPage ? (
+            referenceTable ? (
               <ReferencePanel
                 table={referenceTable}
                 selectedSymbol={selectedReferenceSymbol}
                 disabled={isProcessing}
                 onSelect={setSelectedReferenceSymbol}
-                onClear={() => {
-                  setReferenceTable(null);
-                  setSelectedReferenceSymbol(null);
-                }}
+                onClear={clearReferencePoints}
               />
             ) : null
           }

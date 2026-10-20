@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -208,6 +209,9 @@ class ChecksheetStorage:
                         method TEXT NOT NULL,
                         tool TEXT NOT NULL,
                         dimension_type TEXT NOT NULL,
+                        item_kind TEXT NOT NULL DEFAULT 'balloon'
+                            CHECK (item_kind IN ('balloon', 'reference')),
+                        reference_json TEXT,
                         position INTEGER NOT NULL CHECK (position >= 0),
                         UNIQUE (revision_id, annotation_id),
                         UNIQUE (revision_id, balloon_number)
@@ -246,6 +250,21 @@ class ChecksheetStorage:
                     );
                     """
                 )
+                item_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(checksheet_items)"
+                    ).fetchall()
+                }
+                if "item_kind" not in item_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_items ADD COLUMN item_kind "
+                        "TEXT NOT NULL DEFAULT 'balloon'"
+                    )
+                if "reference_json" not in item_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_items ADD COLUMN reference_json TEXT"
+                    )
                 connection.commit()
             finally:
                 connection.close()
@@ -408,8 +427,8 @@ class ChecksheetStorage:
                     id, revision_id, annotation_id, balloon_number, page,
                     bbox_x, bbox_y, bbox_width, bbox_height, rotation,
                     label, specification, tolerance, method, tool,
-                    dimension_type, position
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    dimension_type, item_kind, reference_json, position
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid4()),
@@ -428,6 +447,12 @@ class ChecksheetStorage:
                     item.method,
                     item.tool,
                     item.dimension_type,
+                    item.item_kind,
+                    (
+                        json.dumps(item.reference.model_dump(mode="json"))
+                        if item.reference is not None
+                        else None
+                    ),
                     position,
                 ),
             )
@@ -853,6 +878,12 @@ class ChecksheetStorage:
                     "id": str(item["id"]),
                     "annotation_id": str(item["annotation_id"]),
                     "balloon_number": int(item["balloon_number"]),
+                    "item_kind": str(item["item_kind"]),
+                    "reference": (
+                        json.loads(str(item["reference_json"]))
+                        if item["reference_json"]
+                        else None
+                    ),
                     "page": int(item["page"]),
                     "bbox": {
                         "x": float(item["bbox_x"]),
@@ -1177,8 +1208,8 @@ class ChecksheetStorage:
                         id, revision_id, annotation_id, balloon_number, page,
                         bbox_x, bbox_y, bbox_width, bbox_height, rotation,
                         label, specification, tolerance, method, tool,
-                        dimension_type, position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        dimension_type, item_kind, reference_json, position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
@@ -1197,6 +1228,8 @@ class ChecksheetStorage:
                         item["method"],
                         item["tool"],
                         item["dimension_type"],
+                        item["item_kind"],
+                        item["reference_json"],
                         item["position"],
                     ),
                 )

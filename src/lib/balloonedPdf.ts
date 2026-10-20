@@ -11,6 +11,7 @@ import {
   balloonGeometry,
 } from "@/lib/balloonGeometry";
 import type { BalloonedPage } from "@/lib/ballooned";
+import type { PageReferenceTable } from "@/types/referencePoint";
 
 /**
  * "Ballooned drawing" PDF — the shareable deliverable of a finished project:
@@ -151,6 +152,7 @@ export interface BalloonedPdfArgs {
   annotations: Annotation[];
   /** Inspector-filled columns to leave blank for the recipient to fill in. */
   extraColumns?: string[];
+  referenceTables?: readonly PageReferenceTable[];
   savedAt?: number;
 }
 
@@ -164,6 +166,7 @@ export async function buildBalloonedPdf({
   pages,
   annotations,
   extraColumns = [],
+  referenceTables = [],
   savedAt = Date.now(),
 }: BalloonedPdfArgs): Promise<Blob> {
   // jsPDF and the table plugin are only needed for this one export — load them
@@ -234,7 +237,11 @@ export async function buildBalloonedPdf({
   });
 
   // Inspection table, on its own landscape sheet(s) so wide checksheets fit.
-  const sheet = buildInspectionSheet(annotations, extraColumns);
+  const sheet = buildInspectionSheet(
+    annotations,
+    extraColumns,
+    referenceTables
+  );
   doc.addPage(TABLE_PAGE, "landscape");
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);

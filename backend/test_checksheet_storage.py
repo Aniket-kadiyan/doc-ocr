@@ -14,6 +14,7 @@ def _snapshot(
     *,
     name: str = "Bracket inspection",
     metadata: dict[str, str] | None = None,
+    include_references: bool = False,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -38,6 +39,44 @@ def _snapshot(
             }
         ],
     }
+    if include_references:
+        items = payload["items"]
+        assert isinstance(items, list)
+        box = {"x": 40, "y": 50, "width": 8, "height": 9}
+        for offset, (axis, value) in enumerate(
+            [("X", "1.2"), ("Y", ""), ("Z", "3.4")],
+            start=2,
+        ):
+            items.append(
+                {
+                    "annotation_id": f"reference:p1:r0:{axis.lower()}",
+                    "balloon_number": offset,
+                    "item_kind": "reference",
+                    "reference": {
+                        "symbol": "A",
+                        "axis": axis,
+                        "point_index": 0,
+                        "name_box": box,
+                        "row_box": {"x": 35, "y": 45, "width": 80, "height": 14},
+                        "coordinates": [
+                            {"axis": "X", "value": "1.2"},
+                            {"axis": "Z", "value": "3.4"},
+                        ],
+                        "markers": [
+                            {"bbox": box, "score": 0.93, "margin": 0.18}
+                        ],
+                    },
+                    "page": 1,
+                    "bbox": box,
+                    "rotation": 0,
+                    "label": f"A_{axis}",
+                    "specification": value,
+                    "tolerance": "",
+                    "method": "",
+                    "tool": "",
+                    "dimension_type": "Reference",
+                }
+            )
     if metadata is not None:
         payload["metadata"] = metadata
     return ChecksheetSnapshot.model_validate(payload)
@@ -161,3 +200,44 @@ def test_existing_database_without_metadata_table_migrates_to_blanks(
         "documentNumber": "",
         "revisionNumber": "",
     }
+
+
+def test_reference_rows_and_geometry_survive_storage_and_duplicate(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(storage, _snapshot(include_references=True))
+
+    reference_rows = created["rows"][1:]
+    assert [row["label"] for row in reference_rows] == ["A_X", "A_Y", "A_Z"]
+    assert [row["specification"] for row in reference_rows] == ["1.2", "", "3.4"]
+    assert all(row["item_kind"] == "reference" for row in reference_rows)
+    assert reference_rows[0]["reference"]["symbol"] == "A"
+    assert reference_rows[0]["reference"]["markers"][0]["score"] == 0.93
+
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    duplicated_references = duplicate["rows"][1:]
+    assert [row["reference"]["axis"] for row in duplicated_references] == [
+        "X",
+        "Y",
+        "Z",
+    ]
+
+
+def test_existing_item_table_gains_reference_columns(tmp_path: Path) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    storage.initialize()
+    with sqlite3.connect(storage.database_path) as connection:
+        connection.execute("ALTER TABLE checksheet_items DROP COLUMN reference_json")
+        connection.execute("ALTER TABLE checksheet_items DROP COLUMN item_kind")
+
+    reopened = ChecksheetStorage(tmp_path)
+    reopened.initialize()
+    with sqlite3.connect(reopened.database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(checksheet_items)"
+            ).fetchall()
+        }
+    assert {"item_kind", "reference_json"}.issubset(columns)
