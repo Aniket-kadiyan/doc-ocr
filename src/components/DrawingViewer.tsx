@@ -62,6 +62,7 @@ import {
   PDF_RENDER_SCALE,
   displayRenderScale,
 } from "@/lib/pdfLoader";
+import { detectSourceFileKind, isPdfKind } from "@/lib/sourceFile";
 import {
   saveAnnotations,
   loadAnnotations,
@@ -192,8 +193,13 @@ export function DrawingViewer() {
   >(null);
   /** Guards the async display render against a page flip landing after it. */
   const renderSeqRef = useRef(0);
+  const renderedRasterPageRef = useRef<{
+    file: File;
+    page: number;
+  } | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
+  const [rasterFile, setRasterFile] = useState<File | null>(null);
   const [projectId, setProjectId] = useState(() => uuidv4());
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -419,12 +425,42 @@ export function DrawingViewer() {
     []
   );
 
+  const renderCurrentImagePage = useCallback(
+    async (file: File, page: number) => {
+      const seq = ++renderSeqRef.current;
+      const { canvas, width, height, totalPages } = await loadImageFile(
+        file,
+        page
+      );
+      if (renderSeqRef.current !== seq) return;
+      sourceCanvasRef.current = canvas;
+      renderedRasterPageRef.current = { file, page };
+      setTotalPages(totalPages);
+      setStageSize({ width, height });
+      setKonvaImage(canvas);
+    },
+    [setTotalPages]
+  );
+
   // Re-render only when the document or page changes — never on zoom. Zoom is a
   // pure display transform applied to the Stage below.
   useEffect(() => {
     if (!pdfDoc) return;
     void renderCurrentPage(pdfDoc, currentPage);
   }, [pdfDoc, currentPage, renderCurrentPage]);
+
+  useEffect(() => {
+    if (!rasterFile) return;
+    const rendered = renderedRasterPageRef.current;
+    if (rendered?.file === rasterFile && rendered.page === currentPage) return;
+    void renderCurrentImagePage(rasterFile, currentPage).catch((reason) => {
+      setSelectionError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not render the selected image page."
+      );
+    });
+  }, [currentPage, rasterFile, renderCurrentImagePage]);
 
   useEffect(() => {
     // Overlay geometry belongs to one exact page/project and is never persisted.
@@ -472,10 +508,13 @@ export function DrawingViewer() {
         const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
         return canvas;
       }
-      // Single-page image: only page 1 exists, and it is already rendered.
-      return page === 1 ? sourceCanvasRef.current : null;
+      if (rasterFile) {
+        const { canvas } = await loadImageFile(rasterFile, page);
+        return canvas;
+      }
+      return null;
     },
-    [pdfDoc]
+    [pdfDoc, rasterFile]
   );
 
   useEffect(() => {
@@ -494,24 +533,26 @@ export function DrawingViewer() {
   // so both paths render at the same scale and produce matching bbox coords.
   const loadSource = useCallback(
     async (file: File) => {
-      if (file.type === "application/pdf") {
+      const sourceKind = await detectSourceFileKind(file);
+      if (isPdfKind(sourceKind)) {
         const doc = await loadPdfDocument(file);
+        renderedRasterPageRef.current = null;
+        setRasterFile(null);
         setPdfDoc(doc);
         setTotalPages(doc.numPages);
         setCurrentPage(1);
         setScale(1);
         await renderCurrentPage(doc, 1);
       } else {
-        const { canvas, width, height } = await loadImageFile(file);
-        sourceCanvasRef.current = canvas;
         setPdfDoc(null);
-        setTotalPages(1);
         setCurrentPage(1);
-        setStageSize({ width, height });
-        setKonvaImage(canvas);
+        setScale(1);
+        await renderCurrentImagePage(file, 1);
+        setRasterFile(file);
       }
     },
     [
+      renderCurrentImagePage,
       renderCurrentPage,
       setCurrentPage,
       setScale,
@@ -564,6 +605,7 @@ export function DrawingViewer() {
   }, [restoreLastProject]);
 
   const handleFile = async (file: File) => {
+    const sourceKind = await detectSourceFileKind(file);
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
     setProjectId(id);
@@ -584,7 +626,7 @@ export function DrawingViewer() {
     setScanScope(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
-    const fileType = file.type === "application/pdf" ? "pdf" : "image";
+    const fileType = isPdfKind(sourceKind) ? "pdf" : "image";
     sourceFileRef.current = {
       fileName: file.name,
       mimeType: file.type,
@@ -634,6 +676,8 @@ export function DrawingViewer() {
     const id = projectId;
     setKonvaImage(null);
     setPdfDoc(null);
+    setRasterFile(null);
+    renderedRasterPageRef.current = null;
     sourceCanvasRef.current = null;
     sourceFileRef.current = null;
     setAnnotations([]);
@@ -935,8 +979,8 @@ export function DrawingViewer() {
         return { status: "failed" };
       }
 
-      // Scan a higher-resolution render than the one on screen. Falls back to
-      // the displayed canvas for an image file, or if the re-render fails.
+      // Scan a higher-resolution PDF render when available. Raster drawings
+      // use their original pixels; a non-current TIFF page is decoded here.
       let scanCanvas = source;
       let scanScale = 1;
       if (pdfDoc) {
@@ -952,6 +996,8 @@ export function DrawingViewer() {
           scanCanvas = source;
           scanScale = 1;
         }
+      } else if (rasterFile && scanPage !== currentPage) {
+        scanCanvas = (await loadImageFile(rasterFile, scanPage)).canvas;
       }
 
       const projectAtStart = projectIdRef.current;
@@ -1289,7 +1335,10 @@ export function DrawingViewer() {
       replaceScanCandidates,
       setIsProcessing,
       setIsSegmenting,
-      pdfDoc,]
+      currentPage,
+      pdfDoc,
+      rasterFile,
+    ]
   );
 
   const stopActiveScan = useCallback(async () => {
@@ -1378,9 +1427,13 @@ export function DrawingViewer() {
       if (displayedCanvas) {
         return { canvas: displayedCanvas, displayScale: 1 };
       }
+      if (rasterFile) {
+        const rendered = await loadImageFile(rasterFile, page);
+        return { canvas: rendered.canvas, displayScale: 1 };
+      }
       throw new Error("No drawing is available for reference detection.");
     },
-    [currentPage, pdfDoc]
+    [currentPage, pdfDoc, rasterFile]
   );
 
   /** Run reference detection after balloon results have already been saved. */
@@ -1823,11 +1876,20 @@ export function DrawingViewer() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf,image/png,image/jpeg,image/webp,image/tiff"
+        accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,application/pdf,image/png,image/jpeg,image/tiff,image/webp"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) void handleFile(f);
+          if (f) {
+            void handleFile(f).catch((reason) => {
+              setSelectionError(
+                reason instanceof Error
+                  ? reason.message
+                  : "Could not open the selected drawing."
+              );
+            });
+          }
+          e.target.value = "";
         }}
       />
 

@@ -1,43 +1,60 @@
-# QTracX MVP2 — durable review-candidate lifecycle
+# QTracX MVP2 — image-source support
 
-Target branch: `mvp2-review-candidate-persistence`
+Apply this overlay only after the Review/Other candidate-persistence milestone.
+It is intended for the `mvp2-image-source-support` branch.
 
-Expected base commit: `19558ab` (`Merge branch 'mvp2-reference-export' into MVP2`)
+No commit or push was made while preparing this package.
+
+## Included behavior
+
+- Validates drawing files by their bytes instead of trusting only the extension or MIME type.
+- Supports PDF, PNG, JPG/JPEG, TIF/TIFF, and the previously accepted WebP format.
+- Decodes single- and multi-page TIFF drawings through the existing backend.
+- Makes TIFF pages available to page navigation, OCR/auto-ballooning, reference detection, checksheet previews, and drawing exports.
+- Keeps the Integration PDF-first and accepted-balloon detection paths unchanged.
+- Preserves the original source file in saved projects and checksheet revisions.
 
 ## Apply
 
-1. Check out `mvp2-review-candidate-persistence` in the QTracX repository.
-2. Confirm `git rev-parse --short HEAD` prints `19558ab`.
-3. Extract this ZIP into the repository root and allow matching files to be overwritten.
-4. Review with `git status --short` and `git diff --check`.
-5. Restart both the frontend and backend. The backend health payload should report `ocr_changeset` as `mvp2-review-candidate-persistence`.
+1. Stop the frontend and backend.
+2. Extract the ZIP into the repository root and allow the listed folders to merge.
+3. Review the overlay:
 
-## What changes
+   ```powershell
+   git status --short
+   git diff --check
+   ```
 
-- Keeps Integration's detector, OCR, filtering, and accepted-balloon pipeline unchanged.
-- Converts the backend's existing candidate outcome ledger into durable `Review`, `Other`, and `Ignored` records.
-- Shows filtered detections under **Other detections**, below **Review required**.
-- Accept creates a normal balloon; Ignore retains the record; Restore returns it to its previous queue.
-- Keeps the selected candidate highlighted when its popup is closed. Accepting, ignoring, selecting another object, or clicking blank drawing space clears the highlight.
-- Merges geometry-equivalent rescans and records duplicate source identities/counts.
-- Persists candidates in IndexedDB, portable `.docbox.json` projects, and checksheet revision audit data.
-- Keeps candidates out of inspection rows and normal accepted-value exports.
+4. Restart the backend. TIFF rendering requires the backend to be running.
 
-## Verification completed
+## Validate
 
-- `npm run lint` — passed.
-- `npm run typecheck` — passed.
-- `npm run test:frontend` — 24 files, 146 tests passed.
-- `npm run build` — passed with Next.js 15.5.20.
-- `python -m pytest -q test_checksheet_storage.py` — 7 tests passed.
-- `python -m compileall -q backend` — passed.
+From the repository root:
 
-`test_scan_progress.py` has three failures on both untouched base commit `19558ab` and this package. They are existing Integration fixture mismatches, not regressions from candidate persistence:
+```powershell
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+```
 
-- `test_segment_reports_real_stages_and_recognition_counters`
-- `test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches`
-- `test_page_scan_never_publishes_preliminary_garbage_as_review_text`
+From `doc-ocr\backend`:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m unittest -v test_source_images.py
+```
+
+Manual checks:
+
+1. Open one PNG and one JPG drawing.
+2. Open a multi-page TIFF and navigate between its pages.
+3. Auto-balloon a TIFF page and confirm ballooning behaves the same as an image/PDF scan.
+4. Create a checksheet from a value on TIFF page 2 and open its drawing preview.
+5. Export ballooned pages and confirm the relevant TIFF pages are present.
+6. Rename a non-image file to `.tif` and confirm the application rejects it clearly.
 
 ## Suggested commit message
 
-`feat(review): persist scan candidates and retain filtered detections`
+```text
+feat(source): add validated raster and multipage TIFF support
+```

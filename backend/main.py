@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -42,6 +43,7 @@ from page_layout import (
 from page_layout_cache import PageLayoutCache
 from page_value_filters import normalize_page_value_text
 from scan_jobs import ProgressReporter, ScanJobManager
+from source_images import SourceImageError, render_source_page
 
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
@@ -66,6 +68,12 @@ MAX_EXISTING_VALUE_BOXES = 5000
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
 # frontend on :3000, :4000, etc. all work without editing this file.
 _cors_origins = get_cors_origins()
+_raster_response_headers = [
+    "X-Document-Page-Count",
+    "X-Document-Page-Width",
+    "X-Document-Page-Height",
+    "X-Document-Format",
+]
 if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -73,6 +81,7 @@ if _cors_origins:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=_raster_response_headers,
     )
 else:
     app.add_middleware(
@@ -81,6 +90,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=_raster_response_headers,
     )
 
 
@@ -99,6 +109,42 @@ class ChecksheetTemplateRequest(BaseModel):
 
     source_json: dict[str, Any]
     source_file_name: str = Field(min_length=1, max_length=255)
+
+
+@app.post("/documents/raster-page")
+async def raster_document_page(
+    file: UploadFile = File(...),
+    page: int = Form(1),
+) -> Response:
+    """Return one PNG page from a validated PNG, JPEG, or TIFF drawing.
+
+    PNG and JPEG normally decode in the browser. The same endpoint supports
+    them as a validated fallback, while TIFF always uses this route so that
+    multi-page drawings work consistently in Chromium-based browsers.
+    """
+
+    data = await file.read()
+    try:
+        rendered = await run_in_threadpool(
+            render_source_page,
+            data,
+            page=page,
+            filename=file.filename or "",
+            content_type=file.content_type or "",
+        )
+    except SourceImageError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return Response(
+        content=rendered.png,
+        media_type="image/png",
+        headers={
+            "X-Document-Page-Count": str(rendered.page_count),
+            "X-Document-Page-Width": str(rendered.width),
+            "X-Document-Page-Height": str(rendered.height),
+            "X-Document-Format": rendered.format,
+        },
+    )
 
 
 def classify_dimension(text: str) -> DimensionType:
