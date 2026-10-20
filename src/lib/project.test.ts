@@ -9,6 +9,26 @@ import {
 } from "@/lib/project";
 import { makeAnnotation } from "@/test/annotationFixture";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import type { ScanCandidate } from "@/types/scanCandidate";
+
+const retainedCandidate: ScanCandidate = {
+  id: "candidate-1",
+  sourceCandidateId: "C0007",
+  page: 1,
+  order: 0,
+  state: "other",
+  text: "REV A",
+  rawText: "REV A",
+  confidence: 0.91,
+  recognized: true,
+  reason: "Title-block text is not a drawing value",
+  rule: "title_block",
+  orientation: "horizontal",
+  rotation: 0,
+  valueBox: { x: 100, y: 200, width: 40, height: 12 },
+  createdAt: 10,
+  updatedAt: 10,
+};
 
 const referenceBox = { x: 10, y: 20, width: 30, height: 12 };
 const referenceTables: PageReferenceTable[] = [
@@ -235,6 +255,32 @@ describe("project and integration exports", () => {
       revisionNumber: "",
     });
     expect(parseProjectBundle(serialized).referenceTables).toEqual([]);
+    expect(parseProjectBundle(serialized).scanCandidates).toEqual([]);
+  });
+
+  it("round-trips unresolved candidates without adding them to exports", () => {
+    const serialized = buildProjectBundle({
+      projectName: "Candidate lifecycle",
+      source: {
+        fileName: "drawing.png",
+        mimeType: "image/png",
+        fileType: "image",
+        dataUrl: "data:image/png;base64,AA==",
+      },
+      annotations: values,
+      scanCandidates: [retainedCandidate],
+      savedAt: 123,
+    });
+    const bundle = parseProjectBundle(serialized);
+    const exported = buildVerificationPayload(
+      bundle.annotations,
+      bundle.projectName
+    );
+
+    expect(bundle.version).toBe(4);
+    expect(bundle.scanCandidates).toEqual([retainedCandidate]);
+    expect(exported.items).toHaveLength(values.length);
+    expect(JSON.stringify(exported)).not.toContain("candidate-1");
   });
 
   it("persists individual visibility without removing hidden values from exports", () => {

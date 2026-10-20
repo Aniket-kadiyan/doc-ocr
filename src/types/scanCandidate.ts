@@ -1,0 +1,48 @@
+import type { BBox, DimensionType } from "@/types/annotation";
+
+export type ScanCandidateState = "review" | "other" | "ignored";
+export type RestorableScanCandidateState = Exclude<
+  ScanCandidateState,
+  "ignored"
+>;
+
+/**
+ * A detected OCR object that has not become an accepted balloon.
+ *
+ * Candidates deliberately live beside annotations rather than inside the
+ * annotation store. This keeps inspection exports accepted-only while every
+ * unresolved or deliberately ignored detector outcome remains inspectable.
+ */
+export interface ScanCandidate {
+  id: string;
+  /** Backend identity within the scan result (for diagnostics/audit). */
+  sourceCandidateId?: string;
+  page: number;
+  order: number;
+  state: ScanCandidateState;
+  /** State restored when an ignored candidate is returned to the queue. */
+  restoreState?: RestorableScanCandidateState;
+  text: string;
+  /** Unmodified OCR text before display-oriented symbol normalization. */
+  rawText: string;
+  preliminaryText?: string;
+  confidence: number;
+  recognized: boolean;
+  reason: string;
+  rule?: string;
+  type?: string;
+  category?: DimensionType | string;
+  subtype?: string;
+  label?: string;
+  orientation: "horizontal" | "vertical" | "rotated";
+  rotation: number;
+  recoveryAttempted?: boolean;
+  authoritativeReread?: boolean;
+  valueBox: BBox;
+  orientedBox?: BBox & { rotation: number };
+  /** Audit trail for geometry-equivalent reads merged during rescans. */
+  duplicateSourceIds?: string[];
+  duplicateCount?: number;
+  createdAt: number;
+  updatedAt: number;
+}
