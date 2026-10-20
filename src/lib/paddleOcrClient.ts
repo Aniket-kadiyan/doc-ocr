@@ -127,6 +127,7 @@ export interface SegmentRegion {
   type?: string;
   /** Feature category from the backend GD&T rule engine (e.g. "Hole"). */
   category?: string;
+  subtype?: string;
   /** Suggested balloon label from the rule engine (e.g. "4X Through Hole"). */
   label?: string;
   orientation: "horizontal" | "vertical" | "rotated";
@@ -164,6 +165,8 @@ export interface ApiSegmentRegion {
   label?: string;
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
+  /** Tight rotated rectangle in the same coordinate space as `bbox`. */
+  oriented_box?: BBox & { rotation: number };
   needs_review?: boolean;
   recognized?: boolean;
   page_filter_rule?: string;
@@ -185,17 +188,45 @@ export interface ApiSegmentResponse {
   coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
-  candidate_outcomes?: Array<{
-    candidate_id?: string;
-    bbox: BBox;
-    state: "eligible" | "excluded" | "review";
-    text?: string;
-    reason?: string;
-    rule?: string;
-  }>;
+  candidate_outcomes?: ApiCandidateOutcome[];
 }
 
-function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion {
+export interface ApiCandidateOutcome {
+  candidate_id?: string;
+  bbox: BBox;
+  state: "eligible" | "excluded" | "review";
+  text?: string;
+  raw_text?: string;
+  preliminary_text?: string;
+  confidence?: number;
+  recognized?: boolean;
+  reason?: string;
+  rule?: string;
+  type?: string;
+  category?: string;
+  subtype?: string;
+  label?: string;
+  orientation?: "horizontal" | "vertical" | "rotated";
+  rotation?: number;
+  oriented_box?: BBox & { rotation: number };
+  recovery_attempted?: boolean;
+  authoritative_reread?: boolean;
+}
+
+export interface SegmentCandidateOutcome extends SegmentRegion {
+  outcomeState: ApiCandidateOutcome["state"];
+  rawText: string;
+  preliminaryText?: string;
+  outcomeReason: string;
+  outcomeRule?: string;
+  authoritativeReread?: boolean;
+}
+
+function mappedSegmentRegion(
+  r: ApiSegmentRegion,
+  valueBox: BBox,
+  orientedBox?: BBox & { rotation: number }
+): SegmentRegion {
   return {
     candidateId: r.candidate_id,
     // Symbol fixing is for dimension callouts (Ø, °, ±) and it collapses
@@ -209,6 +240,7 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     confidence: r.confidence ?? 0,
     type: r.type,
     category: r.category,
+    subtype: r.subtype,
     label: r.label,
     orientation: r.orientation ?? "horizontal",
     rotation: r.rotation ?? 0,
@@ -219,6 +251,7 @@ function mappedSegmentRegion(r: ApiSegmentRegion, valueBox: BBox): SegmentRegion
     reviewReason: r.review_reason,
     recoveryAttempted: r.recovery_attempted,
     valueBox,
+    orientedBox,
   };
 }
 
@@ -257,7 +290,18 @@ export function mapSegmentRegions(
         }
       : mapped;
 
-    return mappedSegmentRegion(r, valueBox);
+    const orientedBox =
+      r.oriented_box && !outOfBounds
+        ? {
+            x: bbox.x + (r.oriented_box.x - CROP_PAD_PX) / displayScale,
+            y: bbox.y + (r.oriented_box.y - CROP_PAD_PX) / displayScale,
+            width: r.oriented_box.width / displayScale,
+            height: r.oriented_box.height / displayScale,
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, valueBox, orientedBox);
   });
 }
 
@@ -294,7 +338,63 @@ export function mapPageSegmentRegions(
       direct.x + direct.width > pageBounds.x + pageBounds.width ||
       direct.y + direct.height > pageBounds.y + pageBounds.height;
 
-    return mappedSegmentRegion(r, invalid ? pageBounds : direct);
+    const orientedBox =
+      r.oriented_box && !invalid
+        ? {
+            x: toBounds(r.oriented_box.x),
+            y: toBounds(r.oriented_box.y),
+            width: toBounds(r.oriented_box.width),
+            height: toBounds(r.oriented_box.height),
+            rotation: r.oriented_box.rotation,
+          }
+        : undefined;
+
+    return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
+  });
+}
+
+/** Map the detector outcome ledger through the same geometry path as rows. */
+export function mapSegmentCandidateOutcomes(
+  outcomes: ApiCandidateOutcome[],
+  bounds: BBox,
+  scale: number,
+  coordinateSpace: "scope" | "page"
+): SegmentCandidateOutcome[] {
+  const apiRegions: ApiSegmentRegion[] = outcomes.map((outcome) => ({
+    candidate_id: outcome.candidate_id,
+    bbox: outcome.bbox,
+    text: outcome.text ?? "",
+    confidence: outcome.confidence ?? 0,
+    type: outcome.type,
+    category: outcome.category,
+    subtype: outcome.subtype,
+    label: outcome.label,
+    orientation: outcome.orientation,
+    rotation: outcome.rotation,
+    oriented_box: outcome.oriented_box,
+    needs_review: outcome.state === "review",
+    recognized: outcome.recognized,
+    page_filter_rule: outcome.rule,
+    page_filter_reason: outcome.reason,
+    review_reason: outcome.state === "review" ? outcome.reason : undefined,
+    recovery_attempted: outcome.recovery_attempted,
+  }));
+  const mapped =
+    coordinateSpace === "page"
+      ? mapPageSegmentRegions(apiRegions, bounds, scale)
+      : mapSegmentRegions(apiRegions, bounds, scale);
+
+  return mapped.map((region, index) => {
+    const outcome = outcomes[index];
+    return {
+      ...region,
+      outcomeState: outcome.state,
+      rawText: outcome.raw_text ?? outcome.text ?? "",
+      preliminaryText: outcome.preliminary_text,
+      outcomeReason: outcome.reason ?? "",
+      outcomeRule: outcome.rule,
+      authoritativeReread: outcome.authoritative_reread,
+    };
   });
 }
 

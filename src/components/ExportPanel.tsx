@@ -40,10 +40,12 @@ import {
   type ExcelExportValues,
 } from "@/components/ExcelExportDialog";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import type { ScanCandidate } from "@/types/scanCandidate";
 
 interface ExportPanelProps {
   disabled?: boolean;
   referenceTables?: readonly PageReferenceTable[];
+  scanCandidates?: readonly ScanCandidate[];
 }
 
 async function loadCompanyLogo(): Promise<string> {
@@ -61,6 +63,7 @@ async function loadCompanyLogo(): Promise<string> {
 export function ExportPanel({
   disabled = false,
   referenceTables = [],
+  scanCandidates = [],
 }: ExportPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
@@ -199,6 +202,7 @@ export function ExportPanel({
         project,
         metadata,
         referenceTables,
+        scanCandidates: [...scanCandidates],
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(

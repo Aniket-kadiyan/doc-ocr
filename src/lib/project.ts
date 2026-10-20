@@ -1,4 +1,5 @@
 import type { Annotation } from "@/types/annotation";
+import type { ScanCandidate } from "@/types/scanCandidate";
 import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
@@ -19,7 +20,7 @@ import type { PageReferenceTable } from "@/types/referencePoint";
  * project data.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 3;
+export const PROJECT_VERSION = 4;
 
 export interface ProjectSource {
   fileName: string;
@@ -311,6 +312,8 @@ export interface ProjectBundle {
   savedAt: number;
   source: ProjectSource;
   annotations: Annotation[];
+  /** Unaccepted detector outcomes; never included in inspection rows. */
+  scanCandidates: ScanCandidate[];
   metadata: DocumentMetadata;
   /** One detected coordinate-reference table per page. */
   referenceTables: PageReferenceTable[];
@@ -389,6 +392,7 @@ export function buildProjectBundle(args: {
   projectName: string;
   source: ProjectSource;
   annotations: Annotation[];
+  scanCandidates?: ScanCandidate[];
   metadata?: Partial<DocumentMetadata> | null;
   referenceTables?: readonly PageReferenceTable[];
   savedAt: number;
@@ -400,6 +404,7 @@ export function buildProjectBundle(args: {
     savedAt: args.savedAt,
     source: args.source,
     annotations: normalizeLegacyAnnotations(args.annotations).annotations,
+    scanCandidates: args.scanCandidates ?? [],
     metadata: normalizeDocumentMetadata(args.metadata),
     referenceTables: normalizePageReferenceTables(args.referenceTables ?? []),
   };
@@ -427,6 +432,7 @@ export function parseProjectBundle(text: string): ProjectBundle {
   return {
     ...(b as ProjectBundle),
     version: Number(b.version) || 1,
+    scanCandidates: Array.isArray(b.scanCandidates) ? b.scanCandidates : [],
     metadata: normalizeDocumentMetadata(b.metadata),
     referenceTables: normalizePageReferenceTables(
       Array.isArray(b.referenceTables) ? b.referenceTables : []
