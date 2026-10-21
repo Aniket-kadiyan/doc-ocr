@@ -16,6 +16,8 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_port, 8000)
         self.assertTrue(config.backend_reload)
         self.assertIsNone(config.cors_origins)
+        self.assertEqual(config.auth_session_hours, 8)
+        self.assertFalse(config.auth_cookie_secure)
 
     def test_valid_values_are_normalized(self) -> None:
         values = {
@@ -25,6 +27,7 @@ class RuntimeConfigTests(unittest.TestCase):
             "DATABASE_URL": "postgresql://user:secret@db/qtracx",
             "QTRACX_LOG_LEVEL": "warning", "QTRACX_LOG_MAX_MB": "50",
             "QTRACX_LOG_BACKUP_COUNT": "20",
+            "AUTH_SESSION_HOURS": "12", "AUTH_COOKIE_SECURE": "true",
         }
         with patch.dict(os.environ, values, clear=True):
             config = load_runtime_config()
@@ -32,6 +35,8 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_port, 8100)
         self.assertFalse(config.backend_reload)
         self.assertEqual(config.log_level, "WARNING")
+        self.assertEqual(config.auth_session_hours, 12)
+        self.assertTrue(config.auth_cookie_secure)
         self.assertEqual(config.cors_origins, (
             "http://qtracx:3102", "http://192.168.1.20:3102"
         ))
@@ -42,6 +47,9 @@ class RuntimeConfigTests(unittest.TestCase):
                 load_runtime_config()
         with patch.dict(os.environ, {"OCR_RELOAD": "sometimes"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "must be one of"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"AUTH_SESSION_HOURS": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
 
     def test_cors_rejects_paths(self) -> None:

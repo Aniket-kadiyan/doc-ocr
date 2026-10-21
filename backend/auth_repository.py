@@ -104,7 +104,7 @@ def create_user(
         session.flush()
     except IntegrityError as error:
         raise DuplicateUserError("A user with that username already exists") from error
-    return _record(user)
+    return user_record(user)
 
 
 def get_user(session: Session, username: str) -> User:
@@ -125,7 +125,7 @@ def list_users(session: Session) -> list[UserRecord]:
         .options(selectinload(User.roles))
         .order_by(User.normalized_username)
     ).all()
-    return [_record(user) for user in users]
+    return [user_record(user) for user in users]
 
 
 def set_user_active(
@@ -153,7 +153,7 @@ def set_user_active(
     if not active:
         _revoke_user_sessions(session, user.id)
     session.flush()
-    return _record(user)
+    return user_record(user)
 
 
 def set_user_password(
@@ -167,7 +167,7 @@ def set_user_password(
     user.updated_at = utc_now()
     _revoke_user_sessions(session, user.id)
     session.flush()
-    return _record(user)
+    return user_record(user)
 
 
 def delete_expired_sessions(session: Session, *, before: datetime) -> int:
@@ -186,7 +186,9 @@ def _revoke_user_sessions(session: Session, user_id: str) -> None:
     )
 
 
-def _record(user: User) -> UserRecord:
+def user_record(user: User) -> UserRecord:
+    """Return the non-sensitive representation shared by CLI and HTTP APIs."""
+
     return UserRecord(
         id=user.id,
         username=user.username,

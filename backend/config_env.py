@@ -85,6 +85,8 @@ class RuntimeConfig:
     checksheet_data_dir: Path
     checksheet_max_document_mb: int
     database_url: str = field(repr=False)
+    auth_session_hours: int
+    auth_cookie_secure: bool
     log_dir: Path
     log_level: str
     log_max_mb: int
@@ -103,6 +105,8 @@ class RuntimeConfig:
             "checksheet_data_dir": str(self.checksheet_data_dir),
             "checksheet_max_document_mb": self.checksheet_max_document_mb,
             "database_configured": bool(self.database_url),
+            "auth_session_hours": self.auth_session_hours,
+            "auth_cookie_secure": self.auth_cookie_secure,
             "log_dir": str(self.log_dir),
             "log_level": self.log_level,
             "log_max_mb": self.log_max_mb,
@@ -190,6 +194,10 @@ def load_runtime_config() -> RuntimeConfig:
             "CHECKSHEET_MAX_DOCUMENT_MB", 200, minimum=1, maximum=2048
         ),
         database_url=os.environ.get("DATABASE_URL", "").strip(),
+        auth_session_hours=_strict_int(
+            "AUTH_SESSION_HOURS", 8, minimum=1, maximum=168
+        ),
+        auth_cookie_secure=_strict_bool("AUTH_COOKIE_SECURE", False),
         log_dir=_configured_path(
             "QTRACX_LOG_DIR", _REPO_ROOT / "backend" / "logs"
         ),

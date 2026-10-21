@@ -26,6 +26,8 @@ const fastTests = [
   "backend/test_auth_schema.py",
   "backend/test_auth_security.py",
   "backend/test_auth_repository.py",
+  "backend/test_auth_service.py",
+  "backend/test_auth_routes.py",
   "backend/test_manage_auth.py",
   "backend/test_config_env.py",
   "backend/test_app_logging.py",

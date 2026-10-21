@@ -24,6 +24,7 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from auth_routes import router as auth_router
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -45,6 +46,7 @@ from app_logging import (
 from client_diagnostics import ClientDiagnosticEvent, record_client_diagnostic
 from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
+from database import DatabaseManager
 from gdt_routes import router as gdt_router
 from ocr_pipeline import get_pipeline
 from page_layout import (
@@ -68,6 +70,15 @@ app = FastAPI(
     description="Self-hosted engineering drawing OCR",
     version="0.2.0",
 )
+auth_database_manager = (
+    DatabaseManager(runtime_config.database_url)
+    if runtime_config.database_url
+    else None
+)
+app.state.auth_database_manager = auth_database_manager
+app.state.auth_session_hours = runtime_config.auth_session_hours
+app.state.auth_cookie_secure = runtime_config.auth_cookie_secure
+app.include_router(auth_router)
 app.include_router(checksheet_router)
 app.include_router(gdt_router)
 
@@ -268,6 +279,8 @@ def startup() -> None:
 def shutdown() -> None:
     logger.info("QTracX backend stopping", extra={"event": "backend_stopping"})
     scan_job_manager.shutdown(wait=False)
+    if auth_database_manager is not None:
+        auth_database_manager.dispose()
     logger.info("QTracX backend stopped", extra={"event": "backend_stopped"})
     shutdown_logging()
 
@@ -275,7 +288,14 @@ def shutdown() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
-    return {"status": "ok", **pipeline.status, "debug_dump": dump_status()}
+    return {
+        "status": "ok",
+        **pipeline.status,
+        "authentication": {
+            "configured": auth_database_manager is not None,
+        },
+        "debug_dump": dump_status(),
+    }
 
 
 @app.post("/checksheet/templates")

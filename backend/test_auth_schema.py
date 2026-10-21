@@ -36,6 +36,15 @@ class AuthenticationSchemaTests(unittest.TestCase):
                 self.assertIn("token_hash", session_columns)
                 self.assertIn("csrf_token_hash", session_columns)
                 self.assertNotIn("token", session_columns)
+                user_columns = {
+                    column["name"]
+                    for column in inspector.get_columns("qtracx_users")
+                }
+                self.assertTrue({
+                    "failed_login_count",
+                    "locked_until",
+                    "last_login_at",
+                }.issubset(user_columns))
             finally:
                 engine.dispose()
 

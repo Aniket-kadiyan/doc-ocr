@@ -2,3 +2,5 @@
 
 # Test-only dependency. Runtime deployments can continue using requirements.txt.
 pytest>=8.3,<9
+# FastAPI test client transport; BSD-3-Clause. Runtime deployments do not need it.
+httpx>=0.27,<1.0

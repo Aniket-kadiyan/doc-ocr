@@ -1,8 +1,9 @@
 # QTracX authentication database foundation
 
-The authentication milestone introduces the database schema, password hashing,
-and administrative user tooling required for login. It does not yet enable the
-HTTP login endpoint or protect application endpoints.
+The authentication milestone provides the database schema, password hashing,
+administrative user tooling, and database-backed browser login sessions.
+Existing drawing, OCR, checksheet, and export endpoints are not protected yet;
+route protection and the frontend login screen are separate follow-up stages.
 
 Production supports PostgreSQL and Microsoft SQL Server. SQLite is used only
 by automated schema tests and is deliberately rejected by deployment commands.
@@ -65,6 +66,47 @@ The first migration creates:
 Session and CSRF values will be stored as one-way hashes. Plain session tokens
 are never stored in the database.
 
+The second migration also adds `failed_login_count`, `locked_until`, and
+`last_login_at` to `qtracx_users`. Five consecutive invalid passwords lock the
+account for 15 minutes. Login failures always return the same message, whether
+the username is absent, inactive, locked, or has a wrong password.
+
+## Configure browser sessions
+
+The defaults are suitable for the current HTTP deployment:
+
+```dotenv
+AUTH_SESSION_HOURS=8
+AUTH_COOKIE_SECURE=false
+```
+
+`AUTH_SESSION_HOURS` accepts 1 through 168. Change `AUTH_COOKIE_SECURE` to
+`true` when the optional HTTPS milestone is deployed. A secure cookie is not
+sent by browsers over plain HTTP.
+
+Login creates two `SameSite=Lax` cookies:
+
+- `qtracx_session` is `HttpOnly` and contains an opaque random session token.
+- `qtracx_csrf` is readable by the frontend and must be returned in the
+  `X-CSRF-Token` header for logout and future state-changing protected routes.
+
+Only SHA-256 hashes of these values are stored in `qtracx_auth_sessions`.
+Passwords remain Argon2id hashes. Authentication responses use
+`Cache-Control: no-store`, and request logging does not record request bodies.
+
+## Authentication API
+
+```text
+POST /auth/login   JSON: {"username":"...","password":"..."}
+GET  /auth/me      Requires qtracx_session cookie
+POST /auth/logout  Requires both cookies and X-CSRF-Token header
+```
+
+Login returns the public user profile and session expiry. `/auth/me` returns
+the currently authenticated public profile. Logout revokes the database
+session and clears both cookies. Password hashes and raw session secrets are
+never returned.
+
 ## Create the first administrator
 
 After `db upgrade` and `db check` succeed, run:
@@ -99,8 +141,10 @@ From `doc-ocr/backend`:
 ```powershell
 .\.venv-gpu\Scripts\python.exe -m pytest -q `
   test_database.py test_auth_schema.py test_auth_security.py `
-  test_auth_repository.py test_manage_auth.py test_config_env.py `
+  test_auth_repository.py test_auth_service.py test_auth_routes.py `
+  test_manage_auth.py test_config_env.py `
   test_app_logging.py test_scan_jobs.py
 ```
 
-Expected result: `40 passed` plus 6 existing subtests.
+Apply `db upgrade` before starting the backend so migration
+`0002_auth_login_security` is present in MSSQL or PostgreSQL.

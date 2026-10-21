@@ -1,0 +1,68 @@
+QTracX Authentication A3 — Login sessions
+============================================
+
+Expected base
+-------------
+Branch: authentication
+Commit: 567ccb30d9f6d7b39b78ce96ef29ac7720086ceb
+
+Apply
+-----
+1. Stop the backend.
+2. Extract this ZIP over the repository root.
+3. From doc-ocr/backend, install/update development dependencies:
+
+   .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+4. Confirm DATABASE_URL in the repository .env.local.
+5. Apply the new migration:
+
+   .\.venv-gpu\Scripts\python.exe manage_auth.py db upgrade
+   .\.venv-gpu\Scripts\python.exe manage_auth.py db check
+
+6. Run the focused checks:
+
+   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+     test_database.py test_auth_schema.py test_auth_security.py `
+     test_auth_repository.py test_auth_service.py test_auth_routes.py `
+     test_manage_auth.py test_config_env.py
+
+7. Start the backend normally.
+
+HTTP deployment settings
+------------------------
+Use these values in .env.local for the current HTTP setup:
+
+AUTH_SESSION_HOURS=8
+AUTH_COOKIE_SECURE=false
+
+Set AUTH_COOKIE_SECURE=true only after HTTPS is enabled. Browsers do not send
+Secure cookies over ordinary HTTP.
+
+Manual API check (PowerShell)
+-----------------------------
+$body = @{
+  username = "admin"
+  password = "supersuccess2023"
+} | ConvertTo-Json
+
+$login = Invoke-WebRequest `
+  -Uri http://127.0.0.1:8000/auth/login `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body `
+  -SessionVariable qtracxSession
+
+$login.Content
+
+Invoke-WebRequest `
+  -Uri http://127.0.0.1:8000/auth/me `
+  -WebSession $qtracxSession
+
+Notes
+-----
+- Existing OCR, ballooning, checksheet, and export routes remain unprotected.
+- The frontend login screen and application-wide route protection come next.
+- This stage adds no runtime library. httpx is a BSD-3-Clause test dependency.
+- Suggested commit message:
+  feat(auth): add database-backed login sessions
