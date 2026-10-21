@@ -32,47 +32,55 @@ class StructuredLoggingTests(unittest.TestCase):
 
     def test_json_context_and_database_secret(self) -> None:
         with TemporaryDirectory() as temporary:
-            with patch.dict(os.environ, {
-                "QTRACX_LOG_DIR": temporary,
-                "DATABASE_URL": "postgresql://user:secret@db/qtracx",
-            }, clear=True):
-                config = load_runtime_config()
-                path = configure_logging(config)
-            with log_context(request_id="request-1", job_id="job-1"):
-                get_logger("test").info(
-                    "Synthetic", extra={"event": "synthetic_event", "candidate_count": 3}
-                )
-            for handler in logging.getLogger("qtracx").handlers:
-                handler.flush()
-            payload = json.loads(path.read_text(encoding="utf-8").strip())
-            self.assertEqual(payload["request_id"], "request-1")
-            self.assertEqual(payload["candidate_count"], 3)
-            self.assertNotIn("postgresql://", path.read_text(encoding="utf-8"))
+            try:
+                with patch.dict(os.environ, {
+                    "QTRACX_LOG_DIR": temporary,
+                    "DATABASE_URL": "postgresql://user:secret@db/qtracx",
+                }, clear=True):
+                    config = load_runtime_config()
+                    path = configure_logging(config)
+                with log_context(request_id="request-1", job_id="job-1"):
+                    get_logger("test").info(
+                        "Synthetic", extra={"event": "synthetic_event", "candidate_count": 3}
+                    )
+                for handler in logging.getLogger("qtracx").handlers:
+                    handler.flush()
+                payload = json.loads(path.read_text(encoding="utf-8").strip())
+                self.assertEqual(payload["request_id"], "request-1")
+                self.assertEqual(payload["candidate_count"], 3)
+                self.assertNotIn("postgresql://", path.read_text(encoding="utf-8"))
+            finally:
+                # Windows will not remove a temporary directory while its log
+                # file is still held open by RotatingFileHandler.
+                shutdown_logging()
 
     def test_request_context_reaches_background_job(self) -> None:
         with TemporaryDirectory() as temporary:
-            with patch.dict(os.environ, {"QTRACX_LOG_DIR": temporary}, clear=True):
-                path = configure_logging(load_runtime_config())
-            manager = ScanJobManager(max_workers=1)
             try:
-                with log_context(request_id="scan-request"):
-                    initial = manager.submit(
-                        lambda _report: {"count": 2, "regions": []},
-                        metadata={"scope_kind": "page", "page": 3},
-                    )
-                deadline = monotonic() + 2
-                while monotonic() < deadline:
-                    if manager.get(initial["job_id"])["status"] == "succeeded":
-                        break
-                    sleep(0.01)
+                with patch.dict(os.environ, {"QTRACX_LOG_DIR": temporary}, clear=True):
+                    path = configure_logging(load_runtime_config())
+                manager = ScanJobManager(max_workers=1)
+                try:
+                    with log_context(request_id="scan-request"):
+                        initial = manager.submit(
+                            lambda _report: {"count": 2, "regions": []},
+                            metadata={"scope_kind": "page", "page": 3},
+                        )
+                    deadline = monotonic() + 2
+                    while monotonic() < deadline:
+                        if manager.get(initial["job_id"])["status"] == "succeeded":
+                            break
+                        sleep(0.01)
+                finally:
+                    manager.shutdown()
+                for handler in logging.getLogger("qtracx").handlers:
+                    handler.flush()
+                events = [json.loads(line) for line in path.read_text().splitlines()]
+                completed = next(e for e in events if e["event"] == "scan_job_completed")
+                self.assertEqual(completed["request_id"], "scan-request")
+                self.assertEqual(completed["candidate_count"], 2)
             finally:
-                manager.shutdown()
-            for handler in logging.getLogger("qtracx").handlers:
-                handler.flush()
-            events = [json.loads(line) for line in path.read_text().splitlines()]
-            completed = next(e for e in events if e["event"] == "scan_job_completed")
-            self.assertEqual(completed["request_id"], "scan-request")
-            self.assertEqual(completed["candidate_count"], 2)
+                shutdown_logging()
 
 
 if __name__ == "__main__":

@@ -1,36 +1,21 @@
-# QTracX MVP2 configuration and logging overlay
+# QTracX Windows logging-test cleanup fix
 
-Base commit: `a8b8b01545281893a58ac02ec404de0b393c1854`
+Apply this archive over the current uncommitted configuration-and-logging changes.
+It replaces only `backend/test_app_logging.py`; do not revert the other changes.
 
-This overlay is for `mvp2-configuration-and-logging`. It adds validated
-HTTP/LAN runtime settings, configurable UI/backend ports, structured rotating
-backend logs, request correlation, safe frontend diagnostics, and tests. It
-does not add HTTPS or change OCR, detection, filtering, or balloon placement.
+The fix closes QTracX logging handlers before each `TemporaryDirectory` exits.
+This prevents Windows `WinError 32` cleanup failures caused by an open
+`qtracx-backend.log` file.
 
-## Apply
-
-1. Check out `mvp2-configuration-and-logging` and pull its latest changes.
-2. Extract this ZIP directly into the `doc-ocr` repository root.
-3. Allow the extracted files to replace matching files.
-4. Copy the required deployment values from `.env.local.example` to your
-   `.env.local`.
-5. Run the checks below and perform one manual auto-balloon scan.
+From the repository root, rerun:
 
 ```powershell
-npm run typecheck
-npm run lint
-npm run test:frontend
-npm run build
-
 cd backend
 .\.venv-gpu\Scripts\python.exe -m pytest -q `
   test_config_env.py test_app_logging.py test_client_diagnostics.py `
   test_scan_jobs.py
 ```
 
-Logs are written to `backend/logs/qtracx-backend.log` unless
-`QTRACX_LOG_DIR` overrides the location.
+Expected result: `22 passed`.
 
-Suggested commit message:
-
-`feat(diagnostics): add validated runtime config and correlated logging`
+No production/backend runtime behavior is changed by this hotfix.
