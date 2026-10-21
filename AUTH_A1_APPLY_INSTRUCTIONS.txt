@@ -1,0 +1,30 @@
+QTracX authentication milestone — A1 database foundation
+=========================================================
+
+Base branch: authentication
+Base commit: e0f1af29292ad578fd69f8ec8d12fbec76aeea98
+
+1. Extract this ZIP into the doc-ocr repository root and replace files.
+2. Do not merge or copy files from the older user-authentication branch.
+3. From doc-ocr/backend, install only the new database dependencies:
+
+   .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-auth.txt
+
+4. Run:
+
+   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+     test_database.py test_auth_schema.py test_config_env.py `
+     test_app_logging.py test_scan_jobs.py
+
+   Expected: 26 passed (plus the existing unittest subtests).
+
+5. A real PostgreSQL/MSSQL server is not required for these unit tests.
+   Do not run the database migration until DATABASE_URL points to the database
+   selected for QTracX.
+
+No OCR, detection, scan, annotation, export, or ballooning implementation is
+changed in this stage.
+
+Suggested commit message:
+
+feat(auth): add portable database schema and migration foundation
