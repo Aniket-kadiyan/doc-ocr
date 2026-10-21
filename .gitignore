@@ -37,6 +37,7 @@ backend/.venv
 # debug step dumps
 backend/debug_output/
 backend/data
+backend/logs/
 
 
 .specstory/

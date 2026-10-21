@@ -12,6 +12,7 @@
 
 import { cropRegion, CROP_PAD_PX } from "@/lib/canvasUtils";
 import { getOcrApiUrl } from "@/lib/paddleOcrClient";
+import { apiRequestError, fetchWithRequestId } from "@/lib/requestDiagnostics";
 import type { BBox } from "@/types/annotation";
 import type {
   GdtCorrection,
@@ -31,14 +32,17 @@ async function fetchJson<T>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${getOcrApiUrl()}${path}`, {
-      ...rest,
-      signal: controller.signal,
-    });
+    const response = await fetchWithRequestId(
+      `${getOcrApiUrl()}${path}`,
+      { ...rest, signal: controller.signal },
+      { operation: "gdt.request" }
+    );
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      throw new Error(
-        `${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`
+      throw apiRequestError(
+        response,
+        `${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`,
+        "gdt.request"
       );
     }
     return (await response.json()) as T;
@@ -118,9 +122,10 @@ export async function recognizeGdtSymbols(
   const timer = setTimeout(() => controller.abort(), RECOGNIZE_TIMEOUT_MS);
   signal?.addEventListener("abort", () => controller.abort());
   try {
-    const response = await fetch(
+    const response = await fetchWithRequestId(
       `${getOcrApiUrl()}/ocr/gdt-symbols?${query.toString()}`,
-      { method: "POST", body: form, signal: controller.signal }
+      { method: "POST", body: form, signal: controller.signal },
+      { operation: "gdt.recognize" }
     );
     if (!response.ok) return null;
     const result = (await response.json()) as GdtPageResult;

@@ -5,6 +5,7 @@ import { getTitleKeywords } from "@/lib/titleKeywords";
 import { isOcrDebugDumpEnabled, isOcrDebugDumpForce } from "@/lib/ocrDebugDump";
 import { mergeSymbolHints } from "@/lib/visualSymbols";
 import type { ReferencePointsResult } from "@/types/referencePoint";
+import { apiRequestError, fetchWithRequestId } from "@/lib/requestDiagnostics";
 
 export type OcrEngine = "paddleocr" | "paddleocr+vision" | "paddleocr+compose";
 
@@ -51,7 +52,9 @@ export async function checkOcrApiHealth(
   }
 
   try {
-    const res = await fetch(`${url}/health`, { method: "GET" });
+    const res = await fetchWithRequestId(
+      `${url}/health`, { method: "GET" }, { operation: "health.read" }
+    );
     if (!res.ok) throw new Error("health check failed");
     const data = (await res.json()) as {
       paddleocr?: boolean;
@@ -451,14 +454,14 @@ export async function runSegmentOcr(
   if (debugDump) headers["X-Debug-Dump"] = "1";
   if (debugForce) headers["X-Debug-Dump-Force"] = "1";
 
-  const res = await fetch(segmentUrl, {
-    method: "POST",
-    headers,
-    body: form,
-  });
+  const res = await fetchWithRequestId(
+    segmentUrl,
+    { method: "POST", headers, body: form },
+    { operation: "ocr.segment" }
+  );
 
   if (!res.ok) {
-    throw new Error(`Segment API error: ${res.status}`);
+    throw apiRequestError(res, `Segment API error: ${res.status}`, "ocr.segment");
   }
 
   const data = (await res.json()) as ApiSegmentResponse;
@@ -503,12 +506,15 @@ export async function runTitleFields(
   form.append("file", blob, "page.png");
   form.append("keywords", keywords.join(","));
 
-  const res = await fetch(`${getOcrApiUrl()}/ocr/title-fields`, {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetchWithRequestId(
+    `${getOcrApiUrl()}/ocr/title-fields`,
+    { method: "POST", body: form },
+    { operation: "ocr.title-fields" }
+  );
   if (!res.ok) {
-    throw new Error(`Title fields API error: ${res.status}`);
+    throw apiRequestError(
+      res, `Title fields API error: ${res.status}`, "ocr.title-fields"
+    );
   }
 
   const data = (await res.json()) as { fields?: TitleField[] };
@@ -537,12 +543,15 @@ export async function runReferencePoints(
   form.append("file", blob, "page.png");
   form.append("display_scale", String(displayScale));
 
-  const res = await fetch(`${getOcrApiUrl()}/ocr/reference-points`, {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetchWithRequestId(
+    `${getOcrApiUrl()}/ocr/reference-points`,
+    { method: "POST", body: form },
+    { operation: "ocr.reference-points" }
+  );
   if (!res.ok) {
-    throw new Error(`Reference points API error: ${res.status}`);
+    throw apiRequestError(
+      res, `Reference points API error: ${res.status}`, "ocr.reference-points"
+    );
   }
   return (await res.json()) as ReferencePointsResult;
 }
@@ -578,14 +587,14 @@ export async function runPaddleOcr(
   if (debugDump) headers["X-Debug-Dump"] = "1";
   if (debugForce) headers["X-Debug-Dump-Force"] = "1";
 
-  const res = await fetch(recognizeUrl, {
-    method: "POST",
-    headers,
-    body: form,
-  });
+  const res = await fetchWithRequestId(
+    recognizeUrl,
+    { method: "POST", headers, body: form },
+    { operation: "ocr.recognize" }
+  );
 
   if (!res.ok) {
-    throw new Error(`OCR API error: ${res.status}`);
+    throw apiRequestError(res, `OCR API error: ${res.status}`, "ocr.recognize");
   }
 
   const data = (await res.json()) as ApiRecognizeResponse;

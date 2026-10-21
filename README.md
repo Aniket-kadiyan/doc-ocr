@@ -74,7 +74,7 @@ npm run ocr-api
 npm run dev
 ```
 
-Open `http://localhost:3000`. Check `http://127.0.0.1:8000/health` if the
+Open `http://localhost:3002`. Check `http://127.0.0.1:8000/health` if the
 frontend cannot reach OCR. A healthy configured service reports
 `"paddleocr": true`.
 
@@ -86,6 +86,23 @@ scripts\win-ocr-setup.bat
 
 The `ocr-api`, `ocr-api:debug`, and `ocr-api:debug:force` commands choose the
 correct virtual-environment Python path on Windows, macOS, and Linux.
+
+## Diagnostic logs
+
+The backend writes newline-delimited JSON diagnostics to
+`backend/logs/qtracx-backend.log` by default. `QTRACX_LOG_DIR`,
+`QTRACX_LOG_LEVEL`, `QTRACX_LOG_MAX_MB`, and `QTRACX_LOG_BACKUP_COUNT` control
+the destination, detail level, rotation size, and retained file count.
+
+Each API response includes `X-Request-ID`. The same identifier follows a
+queued OCR scan through its background worker without logging the uploaded
+drawing, request body, recognized values, password, token, or database
+connection string. Health and scan-progress polling log only at `DEBUG`.
+
+The frontend includes the correlation ID on internal backend requests. Failed
+API messages include the diagnostic reference. Browser failure reports use an
+allow-listed schema and do not accept messages, stacks, drawing values,
+filenames, browser URLs, or uploaded content.
 
 ## Internal checksheets
 

@@ -17,6 +17,13 @@ from time import time
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
+from app_logging import (
+    current_log_context,
+    get_logger,
+    log_context,
+    safe_exception_details,
+)
+
 ScanJobStatus = Literal[
     "queued",
     "running",
@@ -38,6 +45,17 @@ ScanLiveness = Literal[
 ]
 ProgressReporter = Callable[..., None]
 ScanWork = Callable[[ProgressReporter], dict[str, Any]]
+logger = get_logger("scan_jobs")
+
+
+def _safe_job_details(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return operational counts only, never drawing content or coordinates."""
+
+    allowed = (
+        "scope_kind", "page", "scope_pixel_area",
+        "existing_value_box_count", "native_pdf_supplied",
+    )
+    return {key: metadata[key] for key in allowed if key in metadata}
 
 
 class _ScanJobCancelled(Exception):
@@ -151,7 +169,21 @@ class ScanJobManager:
         if supersede:
             for job_id in displaced:
                 self.cancel(job_id)
-        self._executor.submit(self._run, job.job_id, work)
+        inherited_context = current_log_context()
+        inherited_context.update({
+            key: job.metadata[key]
+            for key in ("scope_kind", "page")
+            if key in job.metadata
+        })
+        with log_context(**inherited_context, job_id=job.job_id):
+            logger.info(
+                "OCR scan job queued",
+                extra={
+                    "event": "scan_job_queued",
+                    "details": _safe_job_details(job.metadata),
+                },
+            )
+        self._executor.submit(self._run, job.job_id, work, inherited_context)
         return self.get(job.job_id) or {}
 
     def get(self, job_id: str) -> dict[str, Any] | None:
@@ -173,26 +205,43 @@ class ScanJobManager:
             if job is None:
                 return None
             if job.status in {"cancelled", "succeeded", "failed"}:
-                return self._snapshot(job)
-
-            now = time()
-            job.cancel_requested = True
-            job.error = None
-            job.updated_at = now
-            job.last_progress_at = now
-            job.step_started_at = now
-            job.heartbeat_at = now
-            if job.status == "queued":
-                job.status = "cancelled"
-                job.stage = "cancelled"
-                job.message = "Scan stopped before processing began"
-                job.finished_at = now
+                snapshot = self._snapshot(job)
             else:
-                job.status = "cancelling"
-                job.stage = "cancelling"
-                job.message = "Stopping after the current OCR operation"
-                job.operation_label = "Cancellation requested"
-            return self._snapshot(job)
+                now = time()
+                job.cancel_requested = True
+                job.error = None
+                job.updated_at = now
+                job.last_progress_at = now
+                job.step_started_at = now
+                job.heartbeat_at = now
+                if job.status == "queued":
+                    job.status = "cancelled"
+                    job.stage = "cancelled"
+                    job.message = "Scan stopped before processing began"
+                    job.finished_at = now
+                else:
+                    job.status = "cancelling"
+                    job.stage = "cancelling"
+                    job.message = "Stopping after the current OCR operation"
+                    job.operation_label = "Cancellation requested"
+                snapshot = self._snapshot(job)
+            metadata = dict(job.metadata)
+        with log_context(
+            job_id=job_id,
+            **{
+                key: metadata[key]
+                for key in ("scope_kind", "page")
+                if key in metadata
+            },
+        ):
+            logger.info(
+                "OCR scan cancellation requested",
+                extra={
+                    "event": "scan_job_cancel_requested",
+                    "details": {"status": snapshot["status"]},
+                },
+            )
+        return snapshot
 
     def shutdown(self, *, wait: bool = True) -> None:
         """Release worker threads; primarily used by fast unit tests."""
@@ -218,8 +267,18 @@ class ScanJobManager:
             error=None,
             finished_at=time(),
         )
+        logger.info("OCR scan job cancelled", extra={"event": "scan_job_cancelled"})
 
-    def _run(self, job_id: str, work: ScanWork) -> None:
+    def _run(
+        self,
+        job_id: str,
+        work: ScanWork,
+        inherited_context: dict[str, object] | None = None,
+    ) -> None:
+        with log_context(**(inherited_context or {}), job_id=job_id):
+            self._run_with_context(job_id, work)
+
+    def _run_with_context(self, job_id: str, work: ScanWork) -> None:
         if self._cancel_was_requested(job_id):
             self._finish_cancelled(job_id)
             return
@@ -233,6 +292,7 @@ class ScanJobManager:
             started_at=started_at,
             heartbeat_at=started_at,
         )
+        logger.info("OCR scan job started", extra={"event": "scan_job_started"})
         if self._cancel_was_requested(job_id):
             self._finish_cancelled(job_id)
             return
@@ -244,6 +304,7 @@ class ScanJobManager:
             daemon=True,
         )
         heartbeat_thread.start()
+        last_logged_stage = "preparing"
 
         def report_progress(
             *,
@@ -264,6 +325,7 @@ class ScanJobManager:
             operation_label: str = "",
             overlay: dict[str, Any] | None = None,
         ) -> None:
+            nonlocal last_logged_stage
             self._raise_if_cancelled(job_id)
             changes: dict[str, Any] = {
                 "status": "running",
@@ -288,6 +350,21 @@ class ScanJobManager:
             if overlay is not None:
                 changes["overlay"] = deepcopy(overlay)
             self._update(job_id, **changes)
+            if stage != last_logged_stage:
+                last_logged_stage = stage
+                logger.info(
+                    "OCR scan stage changed",
+                    extra={
+                        "event": "scan_job_stage",
+                        "candidate_count": candidate_count,
+                        "details": {
+                            "stage": stage,
+                            "percent": percent,
+                            "completed": completed,
+                            "total": total,
+                        },
+                    },
+                )
             self._raise_if_cancelled(job_id)
 
         try:
@@ -308,6 +385,14 @@ class ScanJobManager:
                     error=str(exc) or exc.__class__.__name__,
                     finished_at=time(),
                 )
+                logger.error(
+                    "OCR scan job failed",
+                    extra={
+                        "event": "scan_job_failed",
+                        "duration_ms": round((time() - started_at) * 1000, 2),
+                        **safe_exception_details(exc),
+                    },
+                )
         else:
             self._update(
                 job_id,
@@ -318,6 +403,19 @@ class ScanJobManager:
                 result=result,
                 error=None,
                 finished_at=time(),
+            )
+            candidate_count = 0
+            if isinstance(result, dict):
+                candidate_count = int(
+                    result.get("eligible_count", result.get("count", 0)) or 0
+                )
+            logger.info(
+                "OCR scan job completed",
+                extra={
+                    "event": "scan_job_completed",
+                    "duration_ms": round((time() - started_at) * 1000, 2),
+                    "candidate_count": candidate_count,
+                },
             )
         finally:
             heartbeat_stop.set()

@@ -9,13 +9,15 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
 from enum import Enum
+from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -32,7 +34,16 @@ from checksheet_index import (
 )
 from checksheet_routes import router as checksheet_router
 from checksheet_storage import initialize_checksheet_storage
-from config_env import get_cors_origins, load_env_files
+from app_logging import (
+    configure_logging,
+    get_logger,
+    log_context,
+    request_id,
+    safe_exception_details,
+    shutdown_logging,
+)
+from client_diagnostics import ClientDiagnosticEvent, record_client_diagnostic
+from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from gdt_routes import router as gdt_router
 from ocr_pipeline import get_pipeline
@@ -48,6 +59,9 @@ from source_images import SourceImageError, render_source_page
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
 load_env_files()
+runtime_config = load_runtime_config()
+log_path = configure_logging(runtime_config)
+logger = get_logger("api")
 
 app = FastAPI(
     title="Doc OCR Box — PaddleOCR + TrOCR",
@@ -56,6 +70,57 @@ app = FastAPI(
 )
 app.include_router(checksheet_router)
 app.include_router(gdt_router)
+
+
+@app.middleware("http")
+async def request_diagnostics(request: Request, call_next):
+    """Correlate each request without recording its query string or body."""
+
+    correlation_id = request_id(request.headers.get("X-Request-ID"))
+    started = perf_counter()
+    client_ip = request.client.host if request.client else ""
+    fields = {
+        "request_id": correlation_id,
+        "method": request.method,
+        "path": request.url.path,
+        "client_ip": client_ip,
+    }
+    with log_context(**fields):
+        quiet_request = request.url.path == "/health" or (
+            request.method == "GET"
+            and request.url.path.startswith("/ocr/scan-jobs/")
+        )
+        logger.debug("HTTP request started", extra={"event": "request_started"})
+        try:
+            response = await call_next(request)
+        except Exception as error:
+            logger.error(
+                "HTTP request failed",
+                extra={
+                    "event": "request_failed",
+                    "status_code": 500,
+                    "duration_ms": round((perf_counter() - started) * 1000, 2),
+                    **safe_exception_details(error),
+                },
+            )
+            raise
+        response.headers["X-Request-ID"] = correlation_id
+        completion_level = (
+            logging.ERROR if response.status_code >= 500
+            else logging.WARNING if response.status_code >= 400
+            else logging.DEBUG if quiet_request
+            else logging.INFO
+        )
+        logger.log(
+            completion_level,
+            "HTTP request completed",
+            extra={
+                "event": "request_completed",
+                "status_code": response.status_code,
+                "duration_ms": round((perf_counter() - started) * 1000, 2),
+            },
+        )
+        return response
 
 # PaddleOCR is expensive and the local service normally serves one operator.
 # A single worker prevents concurrent scans from competing for the same model
@@ -67,12 +132,13 @@ MAX_EXISTING_VALUE_BOXES = 5000
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
 # frontend on :3000, :4000, etc. all work without editing this file.
-_cors_origins = get_cors_origins()
+_cors_origins = runtime_config.cors_origins
 _raster_response_headers = [
     "X-Document-Page-Count",
     "X-Document-Page-Width",
     "X-Document-Page-Height",
     "X-Document-Format",
+    "X-Request-ID",
 ]
 if _cors_origins:
     app.add_middleware(
@@ -109,6 +175,14 @@ class ChecksheetTemplateRequest(BaseModel):
 
     source_json: dict[str, Any]
     source_file_name: str = Field(min_length=1, max_length=255)
+
+
+@app.post("/diagnostics/client-events", status_code=204)
+def client_diagnostic(event: ClientDiagnosticEvent) -> Response:
+    """Persist allow-listed frontend failure metadata for local support."""
+
+    record_client_diagnostic(event, get_logger("frontend"))
+    return Response(status_code=204)
 
 
 @app.post("/documents/raster-page")
@@ -166,20 +240,36 @@ def classify_dimension(text: str) -> DimensionType:
 
 @app.on_event("startup")
 def startup() -> None:
+    configure_logging(runtime_config)
+    logger.info(
+        "QTracX backend starting",
+        extra={
+            "event": "backend_starting",
+            "details": {
+                **runtime_config.public_summary(),
+                "log_file": str(log_path),
+            },
+        },
+    )
     initialize_checksheet_storage()
     get_pipeline()
     st = dump_status()
     if st["enabled"]:
-        print(f"[debug_dump] ON → {st['root']}")  # noqa: T201
-    else:
-        print(  # noqa: T201
-            "[debug_dump] OFF — set DEBUG_DUMP=1 on server, or use ?debug_dump=1 per request"
+        logger.warning(
+            "OCR debug dump is enabled",
+            extra={"event": "debug_dump_enabled", "details": {"root": st["root"]}},
         )
+    else:
+        logger.info("OCR debug dump is disabled", extra={"event": "debug_dump_disabled"})
+    logger.info("QTracX backend ready", extra={"event": "backend_ready"})
 
 
 @app.on_event("shutdown")
 def shutdown() -> None:
+    logger.info("QTracX backend stopping", extra={"event": "backend_stopping"})
     scan_job_manager.shutdown(wait=False)
+    logger.info("QTracX backend stopped", extra={"event": "backend_stopped"})
+    shutdown_logging()
 
 
 @app.get("/health")
@@ -1004,11 +1094,9 @@ if __name__ == "__main__":
     # Run from this directory so uvicorn's reloader can import "main:app".
     import uvicorn
 
-    from config_env import get_bool, get_int, get_str
-
     uvicorn.run(
         "main:app",
-        host=get_str("OCR_HOST", "127.0.0.1"),
-        port=get_int("OCR_PORT", 8000),
-        reload=get_bool("OCR_RELOAD", True),
+        host=runtime_config.backend_host,
+        port=runtime_config.backend_port,
+        reload=runtime_config.backend_reload,
     )
