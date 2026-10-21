@@ -112,6 +112,7 @@ class ScanJobManager:
     ) -> None:
         self._jobs: dict[str, _ScanJob] = {}
         self._lock = Lock()
+        self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="auto-balloon-scan",
@@ -191,6 +192,32 @@ class ScanJobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             return self._snapshot(job) if job else None
+
+    def capacity_status(self) -> dict[str, Any]:
+        """Return executor capacity and live workload without job contents."""
+
+        with self._lock:
+            self._discard_expired_locked()
+            queued_jobs = sum(
+                job.status == "queued" for job in self._jobs.values()
+            )
+            running_jobs = sum(
+                job.status in {"running", "cancelling"}
+                for job in self._jobs.values()
+            )
+            active_jobs = queued_jobs + running_jobs
+            return {
+                "executor": "thread_pool",
+                "worker_threads": self._max_workers,
+                "maximum_concurrent_jobs": self._max_workers,
+                "running_jobs": running_jobs,
+                "queued_jobs": queued_jobs,
+                "active_jobs": active_jobs,
+                "available_worker_slots": max(
+                    0,
+                    self._max_workers - running_jobs,
+                ),
+            }
 
     def cancel(self, job_id: str) -> dict[str, Any] | None:
         """Request atomic cancellation and return the updated snapshot.

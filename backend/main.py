@@ -48,6 +48,7 @@ from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
+from ocr_capacity import build_ocr_capacity_status
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -268,7 +269,15 @@ def startup() -> None:
         },
     )
     initialize_checksheet_storage()
-    get_pipeline()
+    pipeline = get_pipeline()
+    capacity = build_ocr_capacity_status(
+        pipeline.status,
+        scan_job_manager.capacity_status(),
+    )
+    logger.info(
+        "OCR capacity detected",
+        extra={"event": "ocr_capacity_detected", "details": capacity},
+    )
     st = dump_status()
     if st["enabled"]:
         logger.warning(
@@ -293,9 +302,14 @@ def shutdown() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
+    capacity = build_ocr_capacity_status(
+        pipeline.status,
+        scan_job_manager.capacity_status(),
+    )
     return {
         "status": "ok",
         **pipeline.status,
+        "ocr_capacity": capacity,
         "authentication": {
             "configured": auth_database_manager is not None,
         },

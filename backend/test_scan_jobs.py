@@ -186,6 +186,39 @@ def test_queued_job_can_be_cancelled_before_its_worker_starts() -> None:
         manager.shutdown()
 
 
+def test_capacity_status_reports_workers_and_live_job_counts() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release_first = Event()
+
+    def blocking_work(_report):
+        first_started.set()
+        assert release_first.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        manager.submit(blocking_work, supersede=False)
+        assert first_started.wait(1.0)
+        manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            supersede=False,
+        )
+
+        status = manager.capacity_status()
+        assert status == {
+            "executor": "thread_pool",
+            "worker_threads": 1,
+            "maximum_concurrent_jobs": 1,
+            "running_jobs": 1,
+            "queued_jobs": 1,
+            "active_jobs": 2,
+            "available_worker_slots": 0,
+        }
+    finally:
+        release_first.set()
+        manager.shutdown()
+
+
 def test_a_new_scan_supersedes_the_one_still_running() -> None:
     # One worker, and a whole-page scan runs for minutes. A scan nobody is
     # watching any more must not hold the queue shut against the next one.
