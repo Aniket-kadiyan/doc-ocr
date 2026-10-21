@@ -17,6 +17,29 @@ body {
     sans-serif;
 }
 
+.qtracx-auth {
+  font-family:
+    "Outfit",
+    "Segoe UI",
+    Arial,
+    sans-serif;
+}
+
+.qtracx-auth-grid {
+  background-color: #f1f7fd;
+  background-image:
+    linear-gradient(rgba(105, 151, 197, 0.13) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(105, 151, 197, 0.13) 1px, transparent 1px),
+    linear-gradient(rgba(105, 151, 197, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(105, 151, 197, 0.06) 1px, transparent 1px);
+  background-position: -1px -1px;
+  background-size:
+    80px 80px,
+    80px 80px,
+    16px 16px,
+    16px 16px;
+}
+
 * {
   box-sizing: border-box;
 }

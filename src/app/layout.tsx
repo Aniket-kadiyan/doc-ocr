@@ -4,9 +4,9 @@ import { AuthProvider } from "@/components/AuthProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Doc OCR Box — Engineering Drawing Annotation",
+  title: "QTraX — Drawing to Quality Intelligence",
   description:
-    "In-house OCR annotation tool for technical drawings with balloon numbering and reading-order detection.",
+    "Engineering drawing inspection, ballooning and checksheet generation.",
 };
 
 export default function RootLayout({
