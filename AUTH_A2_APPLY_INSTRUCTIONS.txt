@@ -1,0 +1,54 @@
+QTracX authentication milestone A2
+==================================
+
+Base branch: authentication
+Expected base commit: 62365f97c3374ece12b04aac3dcba27a8f24a883
+
+This package adds password security and local account-administration tooling.
+It does not add login endpoints or a login screen yet, and it does not change
+the OCR, detection, ballooning, checksheet, or export pipelines.
+
+Apply
+-----
+
+1. Confirm that you are on the authentication branch at the expected base.
+2. Extract this ZIP over the repository root (the doc-ocr folder).
+3. From doc-ocr/backend, install the authentication dependency group:
+
+   .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-auth.txt
+
+4. Run the focused verification:
+
+   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+     test_database.py test_auth_schema.py test_auth_security.py `
+     test_auth_repository.py test_manage_auth.py test_config_env.py `
+     test_app_logging.py test_scan_jobs.py
+
+   Expected: 40 passed, 6 subtests passed.
+
+Database setup (only after DATABASE_URL is configured)
+------------------------------------------------------
+
+   .\.venv-gpu\Scripts\python.exe manage_auth.py db upgrade
+   .\.venv-gpu\Scripts\python.exe manage_auth.py db check
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user create-admin `
+     --username admin `
+     --display-name "QTracX Administrator"
+
+The administrator command securely prompts for the password twice. Do not add
+a password to the command line. PostgreSQL with pg8000 is the preferred
+deployment database. MSSQL with pyodbc and Microsoft ODBC Driver 18 is also
+supported.
+
+Other account commands
+----------------------
+
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user list
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user disable USERNAME
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user enable USERNAME
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user set-password USERNAME
+
+Suggested commit message
+------------------------
+
+feat(auth): add password security and account administration

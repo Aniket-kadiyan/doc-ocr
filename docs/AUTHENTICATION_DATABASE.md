@@ -1,7 +1,8 @@
 # QTracX authentication database foundation
 
-This stage introduces only the database schema and migration tooling required
-for login. It does not yet enable login or protect application endpoints.
+The authentication milestone introduces the database schema, password hashing,
+and administrative user tooling required for login. It does not yet enable the
+HTTP login endpoint or protect application endpoints.
 
 Production supports PostgreSQL and Microsoft SQL Server. SQLite is used only
 by automated schema tests and is deliberately rejected by deployment commands.
@@ -64,14 +65,42 @@ The first migration creates:
 Session and CSRF values will be stored as one-way hashes. Plain session tokens
 are never stored in the database.
 
+## Create the first administrator
+
+After `db upgrade` and `db check` succeed, run:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe manage_auth.py user create-admin `
+  --username admin `
+  --display-name "QTracX Administrator"
+```
+
+The command prompts twice for the password. The password is not accepted as a
+command-line argument, written to the console, stored in shell history, or
+included in application logs. Passwords require at least 12 characters and are
+stored as Argon2id hashes.
+
+Additional administration commands:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe manage_auth.py user list
+.\.venv-gpu\Scripts\python.exe manage_auth.py user disable USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user enable USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user set-password USERNAME
+```
+
+The final active administrator cannot be disabled. Disabling a user or changing
+a password revokes that user's active sessions.
+
 ## Test this stage
 
 From `doc-ocr/backend`:
 
 ```powershell
 .\.venv-gpu\Scripts\python.exe -m pytest -q `
-  test_database.py test_auth_schema.py test_config_env.py `
+  test_database.py test_auth_schema.py test_auth_security.py `
+  test_auth_repository.py test_manage_auth.py test_config_env.py `
   test_app_logging.py test_scan_jobs.py
 ```
 
-Expected result: `26 passed` plus the existing subtests.
+Expected result: `40 passed` plus 6 existing subtests.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from getpass import getpass
 from pathlib import Path
 from typing import Sequence
 
@@ -17,6 +18,14 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect
 
+from auth_repository import (
+    AuthenticationRepositoryError,
+    create_user,
+    list_users,
+    set_user_active,
+    set_user_password,
+)
+from auth_security import AuthenticationInputError
 from config_env import load_env_files, load_runtime_config
 from database import DatabaseConfigurationError, DatabaseManager, database_backend
 
@@ -77,11 +86,73 @@ def _run_db_command(action: str) -> int:
         manager.dispose()
 
 
+def _prompt_password() -> str:
+    password = getpass("Password: ")
+    confirmation = getpass("Confirm password: ")
+    if password != confirmation:
+        raise AuthenticationInputError("Passwords do not match")
+    return password
+
+
+def _run_user_command(arguments: argparse.Namespace) -> int:
+    manager = DatabaseManager(_database_url())
+    try:
+        with manager.session() as session:
+            if arguments.user_action == "create-admin":
+                record = create_user(
+                    session,
+                    username=arguments.username,
+                    display_name=arguments.display_name or arguments.username,
+                    password=_prompt_password(),
+                    administrator=True,
+                )
+                output: object = record.as_public_dict()
+            elif arguments.user_action == "list":
+                output = [record.as_public_dict() for record in list_users(session)]
+            elif arguments.user_action == "enable":
+                output = set_user_active(
+                    session,
+                    username=arguments.username,
+                    active=True,
+                ).as_public_dict()
+            elif arguments.user_action == "disable":
+                output = set_user_active(
+                    session,
+                    username=arguments.username,
+                    active=False,
+                ).as_public_dict()
+            elif arguments.user_action == "set-password":
+                output = set_user_password(
+                    session,
+                    username=arguments.username,
+                    password=_prompt_password(),
+                ).as_public_dict()
+            else:
+                return 2
+        print(json.dumps({"status": "ok", "result": output}))
+        return 0
+    finally:
+        manager.dispose()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QTracX authentication administration")
     commands = parser.add_subparsers(dest="command", required=True)
     database = commands.add_parser("db", help="manage the authentication database")
     database.add_argument("action", choices=("upgrade", "current", "check"))
+
+    user = commands.add_parser("user", help="manage QTracX users")
+    user_actions = user.add_subparsers(dest="user_action", required=True)
+    create_admin = user_actions.add_parser(
+        "create-admin",
+        help="create an administrator using an interactive password prompt",
+    )
+    create_admin.add_argument("--username", required=True)
+    create_admin.add_argument("--display-name")
+    user_actions.add_parser("list", help="list users without password data")
+    for action in ("enable", "disable", "set-password"):
+        action_parser = user_actions.add_parser(action)
+        action_parser.add_argument("username")
     return parser
 
 
@@ -90,8 +161,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "db":
             return _run_db_command(arguments.action)
+        if arguments.command == "user":
+            return _run_user_command(arguments)
     except DatabaseConfigurationError as error:
         print(f"Configuration error: {error}")
+        return 2
+    except (AuthenticationInputError, AuthenticationRepositoryError) as error:
+        print(f"User operation rejected: {error}")
         return 2
     except Exception as error:
         # Connection exceptions can echo credentials. Expose only the type;
