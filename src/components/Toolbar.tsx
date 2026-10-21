@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { ExportPanel } from "@/components/ExportPanel";
 import { KeywordSettings } from "@/components/KeywordSettings";
 import { AutoBalloonMenu } from "@/components/AutoBalloonMenu";
+import { BalloonStylePicker } from "@/components/BalloonStylePicker";
 import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
 
@@ -189,6 +190,8 @@ export function Toolbar({
       >
         {balloonsVisible ? "Hide Balloons" : "Show Balloons"}
       </button>
+
+      <BalloonStylePicker disabled={isProcessing} />
 
       {findingReferencePoints && (
         <span className="text-sm text-teal-700 animate-pulse">

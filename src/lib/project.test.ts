@@ -203,7 +203,7 @@ describe("project and integration exports", () => {
     ]);
   });
 
-  it("saves a values-only project without embedding balloon artwork", () => {
+  it("saves the balloon registry key without embedding SVG artwork", () => {
     const serialized = buildProjectBundle({
       projectName: "Test drawing",
       source: {
@@ -230,7 +230,12 @@ describe("project and integration exports", () => {
       revisionNumber: "C",
     });
     expect(bundle.referenceTables).toEqual(referenceTables);
-    expect(serialized).not.toContain("balloon-style");
+    expect(bundle.balloonStyle).toEqual({
+      styleId: "circle",
+      styleVersion: 1,
+      size: "medium",
+    });
+    expect(serialized).toContain('"balloonStyle"');
     expect(serialized).not.toContain("artwork");
   });
 
@@ -256,6 +261,11 @@ describe("project and integration exports", () => {
     });
     expect(parseProjectBundle(serialized).referenceTables).toEqual([]);
     expect(parseProjectBundle(serialized).scanCandidates).toEqual([]);
+    expect(parseProjectBundle(serialized).balloonStyle).toEqual({
+      styleId: "circle",
+      styleVersion: 1,
+      size: "medium",
+    });
   });
 
   it("round-trips unresolved candidates without adding them to exports", () => {
@@ -277,7 +287,7 @@ describe("project and integration exports", () => {
       bundle.projectName
     );
 
-    expect(bundle.version).toBe(4);
+    expect(bundle.version).toBe(5);
     expect(bundle.scanCandidates).toEqual([retainedCandidate]);
     expect(exported.items).toHaveLength(values.length);
     expect(JSON.stringify(exported)).not.toContain("candidate-1");

@@ -1,9 +1,19 @@
 import type { Annotation } from "@/types/annotation";
 import { balloonGeometry } from "@/lib/balloonGeometry";
 import {
+  fitBalloonFontSize,
+  getAnchoredBalloonGeometry,
+} from "@/lib/balloonStyle";
+import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import type { BalloonStyle } from "@/types/balloonStyle";
+
+export interface BalloonRenderStyle {
+  style: BalloonStyle;
+  artworkImage: HTMLImageElement;
+}
 
 /**
  * "Ballooned drawing" exports — the shareable view of a finished project.
@@ -37,7 +47,8 @@ export interface BalloonedPageImage {
 /** Draw one annotation's box, leader and balloon onto a 2D context at zoom 1. */
 function drawBalloon(
   ctx: CanvasRenderingContext2D,
-  annotation: Annotation
+  annotation: Annotation,
+  renderStyle?: BalloonRenderStyle
 ): void {
   const g = balloonGeometry(annotation);
 
@@ -51,7 +62,33 @@ function drawBalloon(
   ctx.strokeRect(0, 0, g.box.width, g.box.height);
   ctx.restore();
 
-  // Leader line from the bubble down to the top edge of the box.
+  if (renderStyle) {
+    const { style, artworkImage } = renderStyle;
+    const anchorX = annotation.bbox.x + annotation.bbox.width / 2;
+    const anchorY = annotation.bbox.y;
+    const marker = getAnchoredBalloonGeometry(style, anchorX, anchorY, 1);
+    ctx.drawImage(artworkImage, marker.x, marker.y, marker.width, marker.height);
+    const digits = String(annotation.number);
+    const fontSize = fitBalloonFontSize(
+      digits,
+      marker.numberWidth,
+      marker.numberHeight,
+      marker.width,
+      style
+    );
+    ctx.fillStyle = style.text.color;
+    ctx.font = `${style.text.fontWeight} ${fontSize}px ${style.text.fontFamily}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      digits,
+      marker.numberX + marker.numberWidth / 2,
+      marker.numberY + marker.numberHeight / 2
+    );
+    return;
+  }
+
+  // Legacy fallback while artwork is unavailable.
   ctx.save();
   ctx.setLineDash([]);
   ctx.beginPath();
@@ -88,7 +125,8 @@ export function renderBalloonedCanvas(
   header?: {
     projectName?: string;
     metadata?: Partial<DocumentMetadata> | null;
-  }
+  },
+  renderStyle?: BalloonRenderStyle
 ): HTMLCanvasElement {
   const headerHeight = header ? 52 : 0;
   const out = document.createElement("canvas");
@@ -124,7 +162,7 @@ export function renderBalloonedCanvas(
   ctx.save();
   ctx.translate(0, headerHeight);
   // Boxes first, then balloons, matching the viewer's layer order.
-  for (const a of annotations) drawBalloon(ctx, a);
+  for (const a of annotations) drawBalloon(ctx, a, renderStyle);
   ctx.restore();
   return out;
 }
@@ -193,7 +231,8 @@ export async function collectBalloonedPageImages(
   header?: {
     projectName?: string;
     metadata?: Partial<DocumentMetadata> | null;
-  }
+  },
+  renderStyle?: BalloonRenderStyle
 ): Promise<BalloonedPageImage[]> {
   const pages: BalloonedPageImage[] = [];
   for (const page of pageNumbers) {
@@ -202,7 +241,8 @@ export async function collectBalloonedPageImages(
     const rendered = renderBalloonedCanvas(
       source,
       annotations.filter((annotation) => annotation.page === page),
-      header
+      header,
+      renderStyle
     );
     pages.push({
       page,

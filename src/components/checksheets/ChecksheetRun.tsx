@@ -321,6 +321,7 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
             document={data.document}
             pdfRenderScale={data.revision.pdf_render_scale}
             row={previewRow}
+            balloonStyle={data.revision.balloon_style}
           />
           {activeRow && (
             <ChecksheetRowCharts columns={data.columns} row={activeRow} />

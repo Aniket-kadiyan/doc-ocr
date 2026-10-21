@@ -23,11 +23,15 @@ interface ChecksheetPreviewLoaderProps {
   document: ChecksheetRunResponse["document"];
   pdfRenderScale: number;
   row: ChecksheetRow | null;
+  balloonStyle: ChecksheetRunResponse["revision"]["balloon_style"];
 }
 
-export function ChecksheetPreviewLoader(props: ChecksheetPreviewLoaderProps) {
+export function ChecksheetPreviewLoader({
+  balloonStyle,
+  ...props
+}: ChecksheetPreviewLoaderProps) {
   return (
-    <BalloonStyleProvider>
+    <BalloonStyleProvider selection={balloonStyle}>
       <ChecksheetDrawingPreview {...props} />
     </BalloonStyleProvider>
   );

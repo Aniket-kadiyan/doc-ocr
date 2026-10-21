@@ -13,6 +13,8 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import { normalizeBalloonStyleSelection } from "@/lib/balloonStyle";
+import type { BalloonStyleSelection } from "@/types/balloonStyle";
 
 interface BuildChecksheetSnapshotArgs {
   checksheetName: string;
@@ -24,6 +26,7 @@ interface BuildChecksheetSnapshotArgs {
   metadata: DocumentMetadata;
   referenceTables?: readonly PageReferenceTable[];
   scanCandidates?: ScanCandidate[];
+  balloonStyle?: BalloonStyleSelection;
 }
 
 export interface ChecksheetCreationSnapshot {
@@ -42,6 +45,7 @@ export function buildChecksheetCreationSnapshot({
   metadata,
   referenceTables = [],
   scanCandidates = [],
+  balloonStyle,
 }: BuildChecksheetSnapshotArgs): ChecksheetCreationSnapshot {
   if (!project.fileBlob) {
     throw new Error(
@@ -127,6 +131,9 @@ export function buildChecksheetCreationSnapshot({
       source_file_type: project.fileType,
       pdf_render_scale: PDF_RENDER_SCALE,
       metadata: normalizeDocumentMetadata(metadata),
+      balloon_style: normalizeBalloonStyleSelection(
+        balloonStyle ?? project.balloonStyle
+      ),
       scan_candidates: scanCandidates.map((candidate) => ({
         candidate_id: candidate.id,
         source_candidate_id: candidate.sourceCandidateId,

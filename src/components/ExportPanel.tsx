@@ -41,6 +41,8 @@ import {
 } from "@/components/ExcelExportDialog";
 import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import { useBalloonStyle } from "@/components/BalloonStyleProvider";
+import { balloonArtworkPngDataUrl } from "@/lib/balloonStyle";
 
 interface ExportPanelProps {
   disabled?: boolean;
@@ -71,6 +73,11 @@ export function ExportPanel({
   const currentPage = useAnnotationStore((s) => s.currentPage);
   const pageCanvasProvider = useAnnotationStore((s) => s.pageCanvasProvider);
   const metadata = useDocumentMetadataStore((s) => s.metadata);
+  const {
+    style: balloonStyle,
+    artworkImage: balloonArtworkImage,
+    selection: balloonStyleSelection,
+  } = useBalloonStyle();
   const [actionStatus, setActionStatus] = useState<{
     kind:
       | "idle"
@@ -203,6 +210,7 @@ export function ExportPanel({
         metadata,
         referenceTables,
         scanCandidates: [...scanCandidates],
+        balloonStyle: balloonStyleSelection,
       });
       const result = await createChecksheet(creation.payload, creation.document);
       const runPath = `/checksheets/${encodeURIComponent(
@@ -273,7 +281,10 @@ export function ExportPanel({
               pageCanvasProvider,
               annotations,
               pagesToExport(annotations, currentPage),
-              { projectName, metadata }
+              { projectName, metadata },
+              balloonArtworkImage
+                ? { style: balloonStyle, artworkImage: balloonArtworkImage }
+                : undefined
             )
           : [];
       const referencePages = await renderReferencePages({
@@ -347,6 +358,10 @@ export function ExportPanel({
         annotations,
         extraColumns,
         referenceTables,
+        balloonStyle,
+        balloonArtworkPng: balloonArtworkImage
+          ? balloonArtworkPngDataUrl(balloonStyle, balloonArtworkImage)
+          : undefined,
       });
       downloadBlob(pdf, `${base}_ballooned.pdf`);
       setActionStatus({
@@ -384,7 +399,10 @@ export function ExportPanel({
       const canvas = renderBalloonedCanvas(
         source,
         annotations.filter((a) => a.page === currentPage),
-        { projectName, metadata }
+        { projectName, metadata },
+        balloonArtworkImage
+          ? { style: balloonStyle, artworkImage: balloonArtworkImage }
+          : undefined
       );
       downloadBlob(
         await canvasToPngBlob(canvas),
