@@ -17,14 +17,14 @@ from enum import Enum
 from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from auth_routes import router as auth_router
+from auth_routes import require_protected_request, router as auth_router
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -79,8 +79,9 @@ app.state.auth_database_manager = auth_database_manager
 app.state.auth_session_hours = runtime_config.auth_session_hours
 app.state.auth_cookie_secure = runtime_config.auth_cookie_secure
 app.include_router(auth_router)
-app.include_router(checksheet_router)
-app.include_router(gdt_router)
+protected_request = [Depends(require_protected_request)]
+app.include_router(checksheet_router, dependencies=protected_request)
+app.include_router(gdt_router, dependencies=protected_request)
 
 
 @app.middleware("http")
@@ -188,7 +189,11 @@ class ChecksheetTemplateRequest(BaseModel):
     source_file_name: str = Field(min_length=1, max_length=255)
 
 
-@app.post("/diagnostics/client-events", status_code=204)
+@app.post(
+    "/diagnostics/client-events",
+    status_code=204,
+    dependencies=protected_request,
+)
 def client_diagnostic(event: ClientDiagnosticEvent) -> Response:
     """Persist allow-listed frontend failure metadata for local support."""
 
@@ -196,7 +201,7 @@ def client_diagnostic(event: ClientDiagnosticEvent) -> Response:
     return Response(status_code=204)
 
 
-@app.post("/documents/raster-page")
+@app.post("/documents/raster-page", dependencies=protected_request)
 async def raster_document_page(
     file: UploadFile = File(...),
     page: int = Form(1),
@@ -298,7 +303,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/checksheet/templates")
+@app.post("/checksheet/templates", dependencies=protected_request)
 def create_checksheet_template(
     request: ChecksheetTemplateRequest,
 ) -> dict[str, Any]:
@@ -360,7 +365,7 @@ def create_checksheet_template(
         }
 
 
-@app.post("/ocr/recognize")
+@app.post("/ocr/recognize", dependencies=protected_request)
 async def recognize_region(
     file: UploadFile = File(...),
     debug_dump: bool = Query(
@@ -428,7 +433,7 @@ async def recognize_region(
     return response
 
 
-@app.post("/ocr/segment")
+@app.post("/ocr/segment", dependencies=protected_request)
 async def segment_region(
     file: UploadFile = File(...),
     debug_dump: bool = Query(
@@ -692,7 +697,11 @@ def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
     return boxes
 
 
-@app.post("/ocr/scan-jobs", status_code=202)
+@app.post(
+    "/ocr/scan-jobs",
+    status_code=202,
+    dependencies=protected_request,
+)
 async def create_scan_job(
     file: UploadFile = File(...),
     scope_kind: str = Form("section"),
@@ -872,7 +881,7 @@ async def create_scan_job(
     )
 
 
-@app.get("/ocr/scan-jobs/{job_id}")
+@app.get("/ocr/scan-jobs/{job_id}", dependencies=protected_request)
 def get_scan_job(job_id: str) -> dict[str, Any]:
     """Poll genuine scan progress; candidates appear only after success."""
     job = scan_job_manager.get(job_id)
@@ -881,7 +890,10 @@ def get_scan_job(job_id: str) -> dict[str, Any]:
     return job
 
 
-@app.post("/ocr/scan-jobs/{job_id}/cancel")
+@app.post(
+    "/ocr/scan-jobs/{job_id}/cancel",
+    dependencies=protected_request,
+)
 def cancel_scan_job(job_id: str) -> dict[str, Any]:
     """Stop a scan cooperatively without publishing partial results."""
 
@@ -891,7 +903,7 @@ def cancel_scan_job(job_id: str) -> dict[str, Any]:
     return job
 
 
-@app.post("/ocr/reference-points")
+@app.post("/ocr/reference-points", dependencies=protected_request)
 async def read_reference_points(
     file: UploadFile = File(..., description="The whole rendered sheet"),
     display_scale: float = Form(
@@ -984,7 +996,7 @@ async def read_reference_points(
     }
 
 
-@app.post("/ocr/text-layer")
+@app.post("/ocr/text-layer", dependencies=protected_request)
 async def read_pdf_text_layer(
     file: UploadFile = File(..., description="The drawing PDF itself"),
     page: int = Form(1, description="1-based page number"),
@@ -1045,7 +1057,7 @@ async def read_pdf_text_layer(
     }
 
 
-@app.post("/ocr/title-fields")
+@app.post("/ocr/title-fields", dependencies=protected_request)
 async def read_title_fields(
     file: UploadFile = File(...),
     keywords: str = Form(
@@ -1090,7 +1102,7 @@ async def read_title_fields(
     }
 
 
-@app.post("/training/export-labels")
+@app.post("/training/export-labels", dependencies=protected_request)
 async def export_training_labels(
     annotations: list[dict[str, Any]],
 ) -> dict[str, Any]:

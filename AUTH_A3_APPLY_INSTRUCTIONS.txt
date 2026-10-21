@@ -43,7 +43,7 @@ Manual API check (PowerShell)
 -----------------------------
 $body = @{
   username = "admin"
-  password = "supersuccess2023"
+  password = "YOUR_APPLICATION_PASSWORD"
 } | ConvertTo-Json
 
 $login = Invoke-WebRequest `

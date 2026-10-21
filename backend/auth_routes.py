@@ -69,7 +69,7 @@ def _public_user(authenticated: AuthenticatedSession) -> AuthenticatedUserRespon
 
 
 def require_authenticated_session(request: Request) -> AuthenticatedSession:
-    """Reusable dependency for routes protected in a later milestone."""
+    """Resolve the current database session for protected routes."""
 
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     manager = _database_manager(request)
@@ -82,6 +82,28 @@ def require_authenticated_session(request: Request) -> AuthenticatedSession:
         raise HTTPException(
             status_code=503, detail="Authentication service unavailable"
         ) from error
+
+
+def require_protected_request(
+    request: Request,
+    authenticated: AuthenticatedSession = Depends(require_authenticated_session),
+    csrf_header: str | None = Header(None, alias="X-CSRF-Token"),
+) -> AuthenticatedSession:
+    """Require a session and CSRF proof for state-changing HTTP methods."""
+
+    if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        try:
+            validate_csrf_token(
+                authenticated,
+                header_token=csrf_header,
+                cookie_token=request.cookies.get(CSRF_COOKIE_NAME),
+            )
+        except InvalidCsrfTokenError as error:
+            raise HTTPException(
+                status_code=403,
+                detail="A valid CSRF token is required",
+            ) from error
+    return authenticated
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -150,18 +172,8 @@ def current_user(
 def logout(
     request: Request,
     response: Response,
-    authenticated: AuthenticatedSession = Depends(require_authenticated_session),
-    csrf_header: str | None = Header(None, alias="X-CSRF-Token"),
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
 ) -> None:
-    try:
-        validate_csrf_token(
-            authenticated,
-            header_token=csrf_header,
-            cookie_token=request.cookies.get(CSRF_COOKIE_NAME),
-        )
-    except InvalidCsrfTokenError as error:
-        raise HTTPException(status_code=403, detail="A valid CSRF token is required") from error
-
     manager = _database_manager(request)
     try:
         with manager.session() as session:

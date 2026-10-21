@@ -1,0 +1,84 @@
+QTracX Authentication A4 — Frontend sign-in and route protection
+================================================================
+
+Expected base
+-------------
+Branch: authentication
+Commit: f78f3ef2c4cd5eb57b22b2410d3a2e10e52c8e1b
+
+Apply
+-----
+1. Stop the Next.js UI and Python backend.
+2. Extract this ZIP over the repository root.
+3. No new runtime dependency or database migration is introduced by A4.
+4. Confirm these existing settings in .env.local:
+
+   AUTH_SESSION_HOURS=8
+   AUTH_COOKIE_SECURE=false
+
+5. For local development, use the same host label for both applications:
+
+   UI:      http://localhost:3002
+   Backend: http://localhost:8000
+   NEXT_PUBLIC_OCR_API_URL=http://localhost:8000
+
+   For LAN use, use the server's same IP or hostname for both URLs, with ports
+   3002 and 8000 respectively. Do not mix localhost, 127.0.0.1, an IP address,
+   and a DNS name while using HTTP cookie authentication.
+
+6. Start the backend and frontend normally.
+
+Focused verification
+--------------------
+From doc-ocr/backend:
+
+   .\.venv-gpu\Scripts\python.exe -m pytest -q `
+     test_database.py test_auth_schema.py test_auth_security.py `
+     test_auth_repository.py test_auth_service.py test_auth_routes.py `
+     test_manage_auth.py test_config_env.py
+
+From doc-ocr:
+
+   npm run typecheck
+   npm run lint
+   npm run test:frontend
+   npm run build
+
+Manual browser verification
+---------------------------
+1. Open http://localhost:3002. The QTracX sign-in screen should appear.
+2. Sign in with the application administrator account.
+3. Refresh the browser. The drawing screen should remain authenticated.
+4. Run one small OCR/drawn-value request and one auto-balloon scan.
+5. Open Saved Checksheets and confirm the list loads.
+6. Sign out. The sign-in screen should return.
+7. Refresh again. The application should remain signed out.
+
+If login succeeds but OCR/checksheet requests return HTTP 403, verify that the
+UI address and NEXT_PUBLIC_OCR_API_URL use the same host label or IP, then clear
+the old QTracX cookies and sign in again.
+
+Security note
+-------------
+The pushed A3 instruction file contained a literal application password in its
+PowerShell example. A4 replaces it with a placeholder, but the prior value
+remains in Git history. Reset that QTracX user's password with:
+
+   .\.venv-gpu\Scripts\python.exe manage_auth.py user set-password admin
+
+If anyone outside the trusted development team can access the repository,
+remove the secret from Git history as a separate repository-administration
+operation.
+
+Scope
+-----
+- Public: /health and /auth/login.
+- Authenticated: OCR, ballooning, scan jobs, references, GD&T, drawings,
+  checksheets, training export, and client diagnostics.
+- Protected non-GET requests require the CSRF cookie/header pair.
+- The OCR and balloon-detection algorithms are unchanged.
+- A5 will add administrator-facing user management inside the application.
+
+Suggested commit message
+------------------------
+feat(auth): protect app and add frontend sign-in

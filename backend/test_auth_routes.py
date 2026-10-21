@@ -4,13 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from auth_models import AuthSession, Base
 from auth_repository import create_user
-from auth_routes import router
+from auth_routes import require_protected_request, router
 from auth_service import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
 from database import DatabaseManager
 
@@ -35,6 +35,15 @@ class AuthenticationRouteTests(unittest.TestCase):
         app.state.auth_session_hours = 8
         app.state.auth_cookie_secure = False
         app.include_router(router)
+
+        @app.get("/protected", dependencies=[Depends(require_protected_request)])
+        def protected_read() -> dict[str, bool]:
+            return {"ok": True}
+
+        @app.post("/protected", dependencies=[Depends(require_protected_request)])
+        def protected_write() -> dict[str, bool]:
+            return {"ok": True}
+
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
@@ -78,6 +87,21 @@ class AuthenticationRouteTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Invalid username or password")
+
+    def test_protected_routes_require_session_and_csrf(self) -> None:
+        self.assertEqual(self.client.get("/protected").status_code, 401)
+        login = self.client.post("/auth/login", json={
+            "username": "operator.one",
+            "password": "operator secure password 2026",
+        })
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(self.client.get("/protected").status_code, 200)
+        self.assertEqual(self.client.post("/protected").status_code, 403)
+        csrf_token = self.client.cookies.get(CSRF_COOKIE_NAME)
+        accepted = self.client.post(
+            "/protected", headers={"X-CSRF-Token": csrf_token}
+        )
+        self.assertEqual(accepted.status_code, 200)
 
     def test_unconfigured_database_returns_service_unavailable(self) -> None:
         app = FastAPI()

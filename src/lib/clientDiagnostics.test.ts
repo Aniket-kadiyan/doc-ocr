@@ -25,6 +25,7 @@ describe("client diagnostics", () => {
       { kind: "unhandled_rejection", operation: "scan.create" }
     );
     const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.credentials).toBe("include");
     const payload = JSON.parse(String(init.body));
     expect(payload).toEqual({
       kind: "api_error", operation: "scan.create",

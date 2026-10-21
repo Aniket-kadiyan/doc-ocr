@@ -1,10 +1,15 @@
 const REQUEST_ID_HEADER = "X-Request-ID";
+const CSRF_HEADER = "X-CSRF-Token";
+const CSRF_COOKIE = "qtracx_csrf";
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const responseRequestIds = new WeakMap<object, string>();
+
+export const AUTHENTICATION_REQUIRED_EVENT = "qtracx:authentication-required";
 
 export interface DiagnosticFetchOptions {
   operation: string;
   networkErrorMessage?: string;
+  notifyAuthenticationRequired?: boolean;
 }
 
 export class ApiRequestError extends Error {
@@ -62,6 +67,29 @@ export function apiRequestError(
   });
 }
 
+export function csrfTokenFromDocumentCookie(): string {
+  if (typeof document === "undefined") return "";
+  const prefix = `${CSRF_COOKIE}=`;
+  const entry = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  if (!entry) return "";
+  try {
+    return decodeURIComponent(entry.slice(prefix.length));
+  } catch {
+    return "";
+  }
+}
+
+function requestMethod(input: RequestInfo | URL, init: RequestInit): string {
+  if (init.method) return init.method.toUpperCase();
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return input.method.toUpperCase();
+  }
+  return "GET";
+}
+
 export async function fetchWithRequestId(
   input: RequestInfo | URL,
   init: RequestInit = {},
@@ -75,9 +103,26 @@ export async function fetchWithRequestId(
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
   const requestId = normalizeRequestId(headers.get(REQUEST_ID_HEADER)) || createRequestId();
   headers.set(REQUEST_ID_HEADER, requestId);
+  if (!["GET", "HEAD", "OPTIONS"].includes(requestMethod(input, init))) {
+    const csrfToken = csrfTokenFromDocumentCookie();
+    if (csrfToken && !headers.has(CSRF_HEADER)) {
+      headers.set(CSRF_HEADER, csrfToken);
+    }
+  }
   try {
-    const response = await fetch(input, { ...init, headers });
+    const response = await fetch(input, {
+      ...init,
+      credentials: init.credentials ?? "include",
+      headers,
+    });
     responseRequestIds.set(response, responseRequestId(response) || requestId);
+    if (
+      response.status === 401 &&
+      options.notifyAuthenticationRequired !== false &&
+      typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(new Event(AUTHENTICATION_REQUIRED_EVENT));
+    }
     return response;
   } catch {
     const message = options.networkErrorMessage ?? "Could not contact the QTracX backend.";

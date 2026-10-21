@@ -96,6 +96,9 @@ class AuthenticationRepositoryTests(unittest.TestCase):
                 expires_at=utc_now() + timedelta(hours=1),
             ))
         with self.database.session() as session:
+            user = session.get(User, user_id)
+            user.failed_login_count = 5
+            user.locked_until = utc_now() + timedelta(minutes=15)
             set_user_password(
                 session,
                 username="admin",
@@ -109,6 +112,8 @@ class AuthenticationRepositoryTests(unittest.TestCase):
                 user.password_hash,
             ))
             self.assertIsNotNone(stored_session.revoked_at)
+            self.assertEqual(user.failed_login_count, 0)
+            self.assertIsNone(user.locked_until)
 
     def test_users_are_listed_without_password_data(self) -> None:
         self._create_admin("z.admin")

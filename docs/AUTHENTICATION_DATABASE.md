@@ -1,9 +1,10 @@
-# QTracX authentication database foundation
+# QTracX authentication and session management
 
 The authentication milestone provides the database schema, password hashing,
 administrative user tooling, and database-backed browser login sessions.
-Existing drawing, OCR, checksheet, and export endpoints are not protected yet;
-route protection and the frontend login screen are separate follow-up stages.
+The frontend restores the current session before showing the application, and
+the backend now protects drawing, OCR, GD&T, checksheet, training, and
+diagnostic routes.
 
 Production supports PostgreSQL and Microsoft SQL Server. SQLite is used only
 by automated schema tests and is deliberately rejected by deployment commands.
@@ -84,6 +85,13 @@ AUTH_COOKIE_SECURE=false
 `true` when the optional HTTPS milestone is deployed. A secure cookie is not
 sent by browsers over plain HTTP.
 
+For an HTTP LAN deployment, the UI and backend must use the same browser host
+name or IP address, although their ports may differ. For example, use
+`http://192.168.1.20:3002` for the UI and
+`http://192.168.1.20:8000` for the backend. Do not open the UI using an IP while
+configuring `NEXT_PUBLIC_OCR_API_URL` with a different alias such as
+`localhost`; `SameSite=Lax` cookies are intentionally not sent cross-site.
+
 Login creates two `SameSite=Lax` cookies:
 
 - `qtracx_session` is `HttpOnly` and contains an opaque random session token.
@@ -106,6 +114,20 @@ Login returns the public user profile and session expiry. `/auth/me` returns
 the currently authenticated public profile. Logout revokes the database
 session and clears both cookies. Password hashes and raw session secrets are
 never returned.
+
+## Protected application routes
+
+`/health` and `/auth/login` remain public. Application routes require a valid
+`qtracx_session` cookie. All protected POST, PUT, PATCH, and DELETE requests
+also require the `qtracx_csrf` value in the `X-CSRF-Token` header.
+
+The frontend request helper supplies credentials and the CSRF header for OCR,
+scan jobs, document rendering, GD&T, checksheets, training data, and client
+diagnostics. A backend `401` returns the user to the sign-in screen. Refreshing
+the browser restores an unexpired session through `/auth/me`.
+
+Scan-progress polling still validates every request, but writes
+`last_seen_at` at most once per minute to avoid unnecessary database writes.
 
 ## Create the first administrator
 
@@ -132,7 +154,8 @@ Additional administration commands:
 ```
 
 The final active administrator cannot be disabled. Disabling a user or changing
-a password revokes that user's active sessions.
+a password revokes that user's active sessions. Changing a password also clears
+the failed-login counter and any current timed lockout.
 
 ## Test this stage
 
@@ -148,3 +171,12 @@ From `doc-ocr/backend`:
 
 Apply `db upgrade` before starting the backend so migration
 `0002_auth_login_security` is present in MSSQL or PostgreSQL.
+
+Frontend verification from the repository root:
+
+```powershell
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+```

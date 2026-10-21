@@ -25,6 +25,7 @@ from auth_security import (
 
 MAX_FAILED_LOGINS = 5
 LOCKOUT_MINUTES = 15
+LAST_SEEN_UPDATE_SECONDS = 60
 SESSION_COOKIE_NAME = "qtracx_session"
 CSRF_COOKIE_NAME = "qtracx_csrf"
 
@@ -171,8 +172,13 @@ def get_authenticated_session(
     ):
         raise InvalidSessionError("Authentication required")
 
-    stored.last_seen_at = current
-    session.flush()
+    # Scan progress polling can call this endpoint several times per second.
+    # Keep authorization immediate while limiting audit timestamp writes.
+    if _as_utc(stored.last_seen_at) <= current - timedelta(
+        seconds=LAST_SEEN_UPDATE_SECONDS
+    ):
+        stored.last_seen_at = current
+        session.flush()
     return AuthenticatedSession(
         session_id=stored.id,
         token_hash=stored.token_hash,

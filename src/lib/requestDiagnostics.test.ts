@@ -20,7 +20,29 @@ describe("request diagnostics", () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     const id = new Headers(init.headers).get("X-Request-ID");
     expect(id).toBeTruthy();
+    expect(init.credentials).toBe("include");
     expect(responseRequestId(received)).toBe(id);
+  });
+
+  it("adds the browser CSRF cookie to state-changing requests", async () => {
+    vi.stubGlobal("document", { cookie: "theme=dark; qtracx_csrf=csrf%20proof" });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWithRequestId(
+      "http://localhost:8000/ocr/segment",
+      { method: "POST" },
+      { operation: "ocr.segment" }
+    );
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf proof");
   });
 
   it("uses the backend response ID in an error", () => {

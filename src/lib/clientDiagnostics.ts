@@ -3,6 +3,7 @@ import {
   createRequestId,
   normalizeRequestId,
   requestIdFromError,
+  csrfTokenFromDocumentCookie,
 } from "@/lib/requestDiagnostics";
 
 export type ClientDiagnosticKind = "runtime_error" | "unhandled_rejection" | "api_error";
@@ -60,9 +61,15 @@ export async function reportClientError(
       : {}),
   };
   try {
+    const csrfToken = csrfTokenFromDocumentCookie();
     await fetch(`${backendUrl.replace(/\/+$/, "")}/diagnostics/client-events`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Request-ID": referenceId },
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": referenceId,
+        ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+      },
       body: JSON.stringify(payload),
       keepalive: true,
     });

@@ -164,6 +164,8 @@ def set_user_password(
 ) -> UserRecord:
     user = get_user(session, username)
     user.password_hash = hash_password(password, username=user.username)
+    user.failed_login_count = 0
+    user.locked_until = None
     user.updated_at = utc_now()
     _revoke_user_sessions(session, user.id)
     session.flush()

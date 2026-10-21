@@ -274,16 +274,16 @@ export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
  * superseded scan when a new one arrives, which covers a reload; this covers
  * simply walking away.
  *
- * `sendBeacon` because the document is being torn down — a normal fetch is
- * cancelled with it.
+ * A keepalive fetch is used because the document is being torn down. Unlike
+ * sendBeacon, it can carry the session cookie and required CSRF header.
  */
 export function abandonScanJob(jobId: string): void {
-  if (!jobId || typeof navigator === "undefined" || !navigator.sendBeacon) {
-    return;
-  }
-  navigator.sendBeacon(
-    `${getOcrApiUrl()}/ocr/scan-jobs/${encodeURIComponent(jobId)}/cancel`
-  );
+  if (!jobId || typeof window === "undefined") return;
+  void fetchWithRequestId(
+    `${getOcrApiUrl()}/ocr/scan-jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: "POST", cache: "no-store", keepalive: true },
+    { operation: "scan.abandon" }
+  ).catch(() => undefined);
 }
 
 /**

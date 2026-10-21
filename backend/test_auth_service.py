@@ -147,6 +147,36 @@ class AuthenticationServiceTests(unittest.TestCase):
                     now=current + timedelta(hours=2),
                 )
 
+    def test_last_seen_database_writes_are_throttled(self) -> None:
+        current = utc_now()
+        with self.database.session() as session:
+            created = create_login_session(
+                session,
+                username="quality.admin",
+                password="correct secure password 2026",
+                session_hours=8,
+                now=current,
+            )
+        with self.database.session() as session:
+            get_authenticated_session(
+                session,
+                session_token=created.session_token,
+                now=current + timedelta(seconds=30),
+            )
+        with self.database.session() as session:
+            stored = session.scalar(select(AuthSession))
+            self.assertEqual(stored.last_seen_at.replace(tzinfo=current.tzinfo), current)
+        with self.database.session() as session:
+            get_authenticated_session(
+                session,
+                session_token=created.session_token,
+                now=current + timedelta(seconds=61),
+            )
+        with self.database.session() as session:
+            stored = session.scalar(select(AuthSession))
+            observed = stored.last_seen_at.replace(tzinfo=current.tzinfo)
+            self.assertEqual(observed, current + timedelta(seconds=61))
+
 
 if __name__ == "__main__":
     unittest.main()
