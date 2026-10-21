@@ -1,60 +1,36 @@
-# QTracX MVP2 — image-source support
+# QTracX MVP2 configuration and logging overlay
 
-Apply this overlay only after the Review/Other candidate-persistence milestone.
-It is intended for the `mvp2-image-source-support` branch.
+Base commit: `a8b8b01545281893a58ac02ec404de0b393c1854`
 
-No commit or push was made while preparing this package.
-
-## Included behavior
-
-- Validates drawing files by their bytes instead of trusting only the extension or MIME type.
-- Supports PDF, PNG, JPG/JPEG, TIF/TIFF, and the previously accepted WebP format.
-- Decodes single- and multi-page TIFF drawings through the existing backend.
-- Makes TIFF pages available to page navigation, OCR/auto-ballooning, reference detection, checksheet previews, and drawing exports.
-- Keeps the Integration PDF-first and accepted-balloon detection paths unchanged.
-- Preserves the original source file in saved projects and checksheet revisions.
+This overlay is for `mvp2-configuration-and-logging`. It adds validated
+HTTP/LAN runtime settings, configurable UI/backend ports, structured rotating
+backend logs, request correlation, safe frontend diagnostics, and tests. It
+does not add HTTPS or change OCR, detection, filtering, or balloon placement.
 
 ## Apply
 
-1. Stop the frontend and backend.
-2. Extract the ZIP into the repository root and allow the listed folders to merge.
-3. Review the overlay:
-
-   ```powershell
-   git status --short
-   git diff --check
-   ```
-
-4. Restart the backend. TIFF rendering requires the backend to be running.
-
-## Validate
-
-From the repository root:
+1. Check out `mvp2-configuration-and-logging` and pull its latest changes.
+2. Extract this ZIP directly into the `doc-ocr` repository root.
+3. Allow the extracted files to replace matching files.
+4. Copy the required deployment values from `.env.local.example` to your
+   `.env.local`.
+5. Run the checks below and perform one manual auto-balloon scan.
 
 ```powershell
 npm run typecheck
 npm run lint
 npm run test:frontend
 npm run build
+
+cd backend
+.\.venv-gpu\Scripts\python.exe -m pytest -q `
+  test_config_env.py test_app_logging.py test_client_diagnostics.py `
+  test_scan_jobs.py
 ```
 
-From `doc-ocr\backend`:
+Logs are written to `backend/logs/qtracx-backend.log` unless
+`QTRACX_LOG_DIR` overrides the location.
 
-```powershell
-.\.venv-gpu\Scripts\python.exe -m unittest -v test_source_images.py
-```
+Suggested commit message:
 
-Manual checks:
-
-1. Open one PNG and one JPG drawing.
-2. Open a multi-page TIFF and navigate between its pages.
-3. Auto-balloon a TIFF page and confirm ballooning behaves the same as an image/PDF scan.
-4. Create a checksheet from a value on TIFF page 2 and open its drawing preview.
-5. Export ballooned pages and confirm the relevant TIFF pages are present.
-6. Rename a non-image file to `.tif` and confirm the application rejects it clearly.
-
-## Suggested commit message
-
-```text
-feat(source): add validated raster and multipage TIFF support
-```
+`feat(diagnostics): add validated runtime config and correlated logging`

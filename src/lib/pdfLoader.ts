@@ -5,6 +5,7 @@ import {
   isTiffKind,
   type SourceFileKind,
 } from "@/lib/sourceFile";
+import { apiRequestError, fetchWithRequestId } from "@/lib/requestDiagnostics";
 
 /** Base PDF raster scale used by stored annotation coordinates and previews. */
 export const PDF_RENDER_SCALE = 1.5;
@@ -117,11 +118,16 @@ async function loadTiffPage(
   const form = new FormData();
   form.append("file", file, file.name || "drawing.tiff");
   form.append("page", String(page));
-  const response = await fetch(`${getOcrApiUrl()}/documents/raster-page`, {
-    method: "POST",
-    body: form,
-  });
-  if (!response.ok) throw new Error(await responseError(response));
+  const response = await fetchWithRequestId(
+    `${getOcrApiUrl()}/documents/raster-page`,
+    { method: "POST", body: form },
+    { operation: "document.raster-page" }
+  );
+  if (!response.ok) {
+    throw apiRequestError(
+      response, await responseError(response), "document.raster-page"
+    );
+  }
 
   const totalPages = Number(
     response.headers.get("X-Document-Page-Count") || "1"

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e .env.local -- next dev --turbopack",
+    "dev": "node scripts/run-next.mjs dev",
     "build": "next build",
-    "start": "dotenv -e .env.local -- next start",
+    "start": "node scripts/run-next.mjs start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test:frontend": "vitest run",

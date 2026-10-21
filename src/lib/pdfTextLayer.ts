@@ -4,6 +4,7 @@ import {
   type SegmentRegion,
 } from "@/lib/paddleOcrClient";
 import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
+import { fetchWithRequestId } from "@/lib/requestDiagnostics";
 import type { BBox } from "@/types/annotation";
 
 /**
@@ -43,10 +44,11 @@ export async function readPdfTextLayer(
 
   let response: Response;
   try {
-    response = await fetch(`${getOcrApiUrl()}/ocr/text-layer`, {
-      method: "POST",
-      body: form,
-    });
+    response = await fetchWithRequestId(
+      `${getOcrApiUrl()}/ocr/text-layer`,
+      { method: "POST", body: form },
+      { operation: "pdf.text-layer" }
+    );
   } catch {
     return UNUSABLE;
   }
