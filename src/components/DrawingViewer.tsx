@@ -71,6 +71,7 @@ import {
   saveProject,
   saveProjectMetadata,
   saveProjectReferenceTables,
+  saveProjectBalloonStyle,
   getMostRecentProject,
   deleteProject,
 } from "@/lib/db";
@@ -124,6 +125,8 @@ import type {
 import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { useBalloonStyle } from "@/components/BalloonStyleProvider";
+import { DEFAULT_BALLOON_STYLE_SELECTION } from "@/types/balloonStyle";
 
 /**
  * Scale the page is re-rendered at for scanning, independent of the viewer's
@@ -180,6 +183,10 @@ const legacyMigrationWarning = (orphanLabelCount: number) =>
 
 export function DrawingViewer() {
   const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
+  const {
+    selection: balloonStyleSelection,
+    setSelection: setBalloonStyleSelection,
+  } = useBalloonStyle();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadProjectInputRef = useRef<HTMLInputElement>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -529,6 +536,13 @@ export function DrawingViewer() {
     projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
 
+  useEffect(() => {
+    void saveProjectBalloonStyle(projectId, balloonStyleSelection).catch(() => {
+      // A fresh in-memory id may not have a project row yet. The subsequent
+      // saveProject call writes the same selection.
+    });
+  }, [balloonStyleSelection, projectId]);
+
   // Render a drawing onto the stage. Shared by fresh uploads and project loads
   // so both paths render at the same scale and produce matching bbox coords.
   const loadSource = useCallback(
@@ -568,6 +582,9 @@ export function DrawingViewer() {
     const file = new File([recent.fileBlob], recent.fileName, {
       type: recent.mimeType ?? recent.fileBlob.type,
     });
+    setBalloonStyleSelection(
+      recent.balloonStyle ?? DEFAULT_BALLOON_STYLE_SELECTION
+    );
     setProjectId(recent.id);
     setProjectName(recent.name.replace(/\.[^.]+$/, ""));
     setDocumentMetadata(recent.metadata);
@@ -593,6 +610,7 @@ export function DrawingViewer() {
     loadSource,
     replaceReferenceTables,
     restoreScanCandidates,
+    setBalloonStyleSelection,
     setAnnotations,
     setDocumentMetadata,
     setProjectName,
@@ -609,6 +627,7 @@ export function DrawingViewer() {
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
     setProjectId(id);
+    setBalloonStyleSelection(DEFAULT_BALLOON_STYLE_SELECTION);
     setAnnotations([]);
     setSelectedId(null);
     replaceScanCandidates([]);
@@ -642,6 +661,7 @@ export function DrawingViewer() {
       fileBlob: file,
       metadata: normalizeDocumentMetadata(),
       referenceTables: [],
+      balloonStyle: DEFAULT_BALLOON_STYLE_SELECTION,
       updatedAt: Date.now(),
     });
     await loadSource(file);
@@ -665,6 +685,7 @@ export function DrawingViewer() {
       scanCandidates,
       metadata,
       referenceTables,
+      balloonStyle: balloonStyleSelection,
       savedAt: Date.now(),
     });
     downloadFile(json, `${base}.docbox.json`, "application/json");
@@ -699,6 +720,7 @@ export function DrawingViewer() {
     setCurrentPage(1);
     setTotalPages(1);
     setProjectName("Untitled Drawing");
+    setBalloonStyleSelection(DEFAULT_BALLOON_STYLE_SELECTION);
     setProjectId(uuidv4());
     await deleteProject(id);
   };
@@ -718,6 +740,7 @@ export function DrawingViewer() {
     try {
       const bundle = parseProjectBundle(await file.text());
       const id = uuidv4();
+      setBalloonStyleSelection(bundle.balloonStyle);
       setProjectId(id);
       sourceFileRef.current = bundle.source;
       setProjectName(bundle.projectName);
@@ -753,6 +776,7 @@ export function DrawingViewer() {
         fileBlob: srcFile,
         metadata: bundle.metadata,
         referenceTables: bundle.referenceTables,
+        balloonStyle: bundle.balloonStyle,
         updatedAt: Date.now(),
       });
       await Promise.all([

@@ -7,6 +7,10 @@ import {
 } from "@/types/documentMetadata";
 import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import {
+  normalizeBalloonStyleSelection,
+} from "@/lib/balloonStyle";
+import type { BalloonStyleSelection } from "@/types/balloonStyle";
 
 export interface ProjectRecord {
   id: string;
@@ -20,6 +24,8 @@ export interface ProjectRecord {
   metadata?: DocumentMetadata;
   /** Optional for compatibility with projects saved before reference support. */
   referenceTables?: PageReferenceTable[];
+  /** Optional for compatibility with projects saved before selectable balloons. */
+  balloonStyle?: BalloonStyleSelection;
   updatedAt: number;
 }
 
@@ -135,6 +141,16 @@ export async function saveProjectReferenceTables(
 ): Promise<void> {
   await db.projects.update(projectId, {
     referenceTables: normalizePageReferenceTables(referenceTables),
+    updatedAt: Date.now(),
+  });
+}
+
+export async function saveProjectBalloonStyle(
+  projectId: string,
+  balloonStyle: BalloonStyleSelection
+): Promise<void> {
+  await db.projects.update(projectId, {
+    balloonStyle: normalizeBalloonStyleSelection(balloonStyle),
     updatedAt: Date.now(),
   });
 }

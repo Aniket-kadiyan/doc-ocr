@@ -68,6 +68,11 @@ def _max_document_bytes() -> int:
 
 
 _METADATA_FIELDS = ("partName", "documentNumber", "revisionNumber")
+_DEFAULT_BALLOON_STYLE = {
+    "styleId": "circle",
+    "styleVersion": 1,
+    "size": "medium",
+}
 
 
 def _blank_metadata() -> dict[str, str]:
@@ -181,6 +186,8 @@ class ChecksheetStorage:
                         source_document_id TEXT NOT NULL
                             REFERENCES source_documents(id),
                         pdf_render_scale REAL NOT NULL CHECK (pdf_render_scale > 0),
+                        balloon_style_json TEXT NOT NULL DEFAULT
+                            '{"styleId":"circle","styleVersion":1,"size":"medium"}',
                         created_at TEXT NOT NULL,
                         UNIQUE (checksheet_id, revision_number)
                     );
@@ -298,6 +305,18 @@ class ChecksheetStorage:
                 if "reference_json" not in item_columns:
                     connection.execute(
                         "ALTER TABLE checksheet_items ADD COLUMN reference_json TEXT"
+                    )
+                revision_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(checksheet_revisions)"
+                    ).fetchall()
+                }
+                if "balloon_style_json" not in revision_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_revisions ADD COLUMN "
+                        "balloon_style_json TEXT NOT NULL DEFAULT "
+                        "'{\"styleId\":\"circle\",\"styleVersion\":1,\"size\":\"medium\"}'"
                     )
                 connection.commit()
             finally:
@@ -419,8 +438,8 @@ class ChecksheetStorage:
             """
             INSERT INTO checksheet_revisions (
                 id, checksheet_id, revision_number, source_document_id,
-                pdf_render_scale, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                pdf_render_scale, balloon_style_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision_id,
@@ -428,6 +447,7 @@ class ChecksheetStorage:
                 revision_number,
                 document_id,
                 snapshot.pdf_render_scale,
+                json.dumps(snapshot.balloon_style.model_dump(by_alias=True)),
                 created_at,
             ),
         )
@@ -848,6 +868,7 @@ class ChecksheetStorage:
                     d.archived_at,
                     r.revision_number,
                     r.pdf_render_scale,
+                    r.balloon_style_json,
                     doc.id AS document_id,
                     doc.original_name,
                     doc.mime_type,
@@ -910,6 +931,9 @@ class ChecksheetStorage:
                 "revision_number": int(row["revision_number"]),
                 "pdf_render_scale": float(row["pdf_render_scale"]),
                 "metadata": metadata,
+                "balloon_style": json.loads(
+                    str(row["balloon_style_json"])
+                ) if row["balloon_style_json"] else dict(_DEFAULT_BALLOON_STYLE),
                 "scan_candidates": scan_candidates,
             },
             "run": {
@@ -1203,14 +1227,15 @@ class ChecksheetStorage:
                 """
                 INSERT INTO checksheet_revisions (
                     id, checksheet_id, revision_number, source_document_id,
-                    pdf_render_scale, created_at
-                ) VALUES (?, ?, 1, ?, ?, ?)
+                    pdf_render_scale, balloon_style_json, created_at
+                ) VALUES (?, ?, 1, ?, ?, ?, ?)
                 """,
                 (
                     new_revision_id,
                     new_checksheet_id,
                     revision["source_document_id"],
                     revision["pdf_render_scale"],
+                    revision["balloon_style_json"],
                     now,
                 ),
             )

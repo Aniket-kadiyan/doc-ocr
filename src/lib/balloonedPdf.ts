@@ -12,6 +12,11 @@ import {
 } from "@/lib/balloonGeometry";
 import type { BalloonedPage } from "@/lib/ballooned";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import {
+  fitBalloonFontSize,
+  getAnchoredBalloonGeometry,
+} from "@/lib/balloonStyle";
+import type { BalloonStyle } from "@/types/balloonStyle";
 
 /**
  * "Ballooned drawing" PDF — the shareable deliverable of a finished project:
@@ -81,7 +86,9 @@ function layoutPage(width: number, height: number): PageLayout {
 function drawBalloon(
   doc: import("jspdf").jsPDF,
   annotation: Annotation,
-  layout: PageLayout
+  layout: PageLayout,
+  balloonStyle?: BalloonStyle,
+  balloonArtworkPng?: string
 ): void {
   const g = balloonGeometry(annotation);
   const colors = g.isLabel ? BALLOON_COLORS.label : BALLOON_COLORS.dimension;
@@ -120,6 +127,43 @@ function drawBalloon(
   }
   doc.setLineDashPattern([], 0);
 
+  if (balloonStyle && balloonArtworkPng) {
+    const sourceMarker = getAnchoredBalloonGeometry(
+      balloonStyle,
+      annotation.bbox.x + annotation.bbox.width / 2,
+      annotation.bbox.y,
+      1
+    );
+    const width = Math.max(sourceMarker.width * s, MIN_BALLOON_RADIUS * 2);
+    const height = width * (sourceMarker.height / sourceMarker.width);
+    const anchorX = px(annotation.bbox.x + annotation.bbox.width / 2);
+    const anchorY = py(annotation.bbox.y);
+    const x = anchorX - balloonStyle.anchor.x * width;
+    const y = anchorY - balloonStyle.anchor.y * height;
+    doc.addImage(balloonArtworkPng, "PNG", x, y, width, height);
+
+    const numberX = x + balloonStyle.numberArea.x * width;
+    const numberY = y + balloonStyle.numberArea.y * height;
+    const numberWidth = balloonStyle.numberArea.width * width;
+    const numberHeight = balloonStyle.numberArea.height * height;
+    const digits = String(annotation.number);
+    const fontSize = fitBalloonFontSize(
+      digits,
+      numberWidth,
+      numberHeight,
+      width,
+      balloonStyle
+    );
+    doc.setTextColor(...rgb(balloonStyle.text.color));
+    doc.setFont("helvetica", balloonStyle.text.fontWeight);
+    doc.setFontSize(fontSize);
+    doc.text(digits, numberX + numberWidth / 2, numberY + numberHeight / 2, {
+      align: "center",
+      baseline: "middle",
+    });
+    return;
+  }
+
   // Balloons keep a floor size in points, so the bubble may be larger relative
   // to the drawing than on screen; it stays centered on the same anchor.
   const radius = Math.max(g.circle.r * s, MIN_BALLOON_RADIUS);
@@ -154,6 +198,8 @@ export interface BalloonedPdfArgs {
   extraColumns?: string[];
   referenceTables?: readonly PageReferenceTable[];
   savedAt?: number;
+  balloonStyle?: BalloonStyle;
+  balloonArtworkPng?: string;
 }
 
 /**
@@ -168,6 +214,8 @@ export async function buildBalloonedPdf({
   extraColumns = [],
   referenceTables = [],
   savedAt = Date.now(),
+  balloonStyle,
+  balloonArtworkPng,
 }: BalloonedPdfArgs): Promise<Blob> {
   // jsPDF and the table plugin are only needed for this one export — load them
   // on use so they stay out of the app's initial bundle.
@@ -233,7 +281,9 @@ export async function buildBalloonedPdf({
       layout.imageWidth,
       layout.imageHeight
     );
-    for (const a of page.annotations) drawBalloon(doc, a, layout);
+    for (const a of page.annotations) {
+      drawBalloon(doc, a, layout, balloonStyle, balloonArtworkPng);
+    }
   });
 
   // Inspection table, on its own landscape sheet(s) so wide checksheets fit.

@@ -16,6 +16,7 @@ def _snapshot(
     metadata: dict[str, str] | None = None,
     include_references: bool = False,
     with_candidate: bool = False,
+    balloon_style: dict[str, object] | None = None,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -80,6 +81,8 @@ def _snapshot(
             )
     if metadata is not None:
         payload["metadata"] = metadata
+    if balloon_style is not None:
+        payload["balloon_style"] = balloon_style
     if with_candidate:
         payload["scan_candidates"] = [
             {
@@ -207,6 +210,33 @@ def test_missing_metadata_defaults_to_blank_values(tmp_path: Path) -> None:
         "documentNumber": "",
         "revisionNumber": "",
     }
+    assert created["revision"]["balloon_style"] == {
+        "styleId": "circle",
+        "styleVersion": 1,
+        "size": "medium",
+    }
+
+
+def test_balloon_style_is_revision_data_and_survives_duplicate(tmp_path: Path) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(
+        storage,
+        _snapshot(
+            balloon_style={
+                "styleId": "hexagon",
+                "styleVersion": 1,
+                "size": "large",
+            }
+        ),
+    )
+
+    assert created["revision"]["balloon_style"] == {
+        "styleId": "hexagon",
+        "styleVersion": 1,
+        "size": "large",
+    }
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["revision"]["balloon_style"] == created["revision"]["balloon_style"]
 
 
 def test_candidates_are_revision_data_not_checksheet_rows(tmp_path: Path) -> None:

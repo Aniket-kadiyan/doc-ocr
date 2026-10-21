@@ -126,6 +126,21 @@ class ChecksheetMetadata(BaseModel):
         return value.strip()
 
 
+class ChecksheetBalloonStyle(BaseModel):
+    """Versioned registry key for the balloon SVG used by one revision."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    style_id: str = Field(default="circle", alias="styleId", min_length=1, max_length=80)
+    style_version: int = Field(default=1, alias="styleVersion", ge=1, le=999)
+    size: Literal["small", "medium", "large"] = "medium"
+
+    @field_validator("style_id")
+    @classmethod
+    def strip_style_id(cls, value: str) -> str:
+        return value.strip()
+
+
 class ChecksheetSnapshot(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     drawing_name: str = Field(min_length=1, max_length=255)
@@ -133,6 +148,9 @@ class ChecksheetSnapshot(BaseModel):
     source_file_type: Literal["pdf", "image"]
     pdf_render_scale: float = Field(default=1.5, gt=0, le=10)
     metadata: ChecksheetMetadata = Field(default_factory=ChecksheetMetadata)
+    balloon_style: ChecksheetBalloonStyle = Field(
+        default_factory=ChecksheetBalloonStyle
+    )
     scan_candidates: list[ChecksheetScanCandidate] = Field(
         default_factory=list,
         max_length=10000,

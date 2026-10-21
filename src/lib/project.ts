@@ -12,6 +12,8 @@ import {
   normalizePageReferenceTables,
 } from "@/lib/referenceValues";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import { normalizeBalloonStyleSelection } from "@/lib/balloonStyle";
+import type { BalloonStyleSelection } from "@/types/balloonStyle";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -20,7 +22,7 @@ import type { PageReferenceTable } from "@/types/referencePoint";
  * project data.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 5;
 
 export interface ProjectSource {
   fileName: string;
@@ -317,6 +319,8 @@ export interface ProjectBundle {
   metadata: DocumentMetadata;
   /** One detected coordinate-reference table per page. */
   referenceTables: PageReferenceTable[];
+  /** Registry key only. SVG artwork remains deployment-owned. */
+  balloonStyle: BalloonStyleSelection;
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -395,6 +399,7 @@ export function buildProjectBundle(args: {
   scanCandidates?: ScanCandidate[];
   metadata?: Partial<DocumentMetadata> | null;
   referenceTables?: readonly PageReferenceTable[];
+  balloonStyle?: Partial<BalloonStyleSelection> | null;
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -407,6 +412,7 @@ export function buildProjectBundle(args: {
     scanCandidates: args.scanCandidates ?? [],
     metadata: normalizeDocumentMetadata(args.metadata),
     referenceTables: normalizePageReferenceTables(args.referenceTables ?? []),
+    balloonStyle: normalizeBalloonStyleSelection(args.balloonStyle),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -437,6 +443,7 @@ export function parseProjectBundle(text: string): ProjectBundle {
     referenceTables: normalizePageReferenceTables(
       Array.isArray(b.referenceTables) ? b.referenceTables : []
     ),
+    balloonStyle: normalizeBalloonStyleSelection(b.balloonStyle),
   };
 }
 
