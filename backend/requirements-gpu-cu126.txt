@@ -1,0 +1,8 @@
+# NVIDIA CUDA 12.6 runtime. Do not install requirements.txt in this same
+# environment: paddlepaddle and paddlepaddle-gpu provide the same module.
+-r requirements-common.txt
+
+# Official PaddlePaddle CUDA 12.6 package index. Version 3.2.2 is the validated
+# QTracX runtime; 3.3.1 caused the oneDNN PIR inference failure.
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddlepaddle-gpu==3.2.2

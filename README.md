@@ -64,6 +64,17 @@ py -m venv backend\.venv
 backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
 ```
 
+For the validated NVIDIA CUDA 12.6 environment, keep a separate virtual
+environment and use the GPU manifest instead:
+
+```bat
+py -m venv backend\.venv-gpu
+backend\.venv-gpu\Scripts\python -m pip install -r backend\requirements-gpu-cu126.txt
+```
+
+Do not install `requirements.txt` inside `.venv-gpu`: the CPU and GPU Paddle
+packages provide the same `paddle` module and cannot safely share an environment.
+
 Start the two processes from the repository root:
 
 ```bash
@@ -309,8 +320,11 @@ backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
 npm run verify
 ```
 
-Use the equivalent `backend\.venv\Scripts\python` path on Windows. OCR/model
-integration tests are intentionally separate:
+Install `requirements-dev.txt` only after the appropriate CPU or GPU runtime
+manifest. It contains test tools only and will not change the selected Paddle
+build. Use the equivalent `backend\.venv\Scripts\python` or
+`backend\.venv-gpu\Scripts\python` path on Windows. OCR/model integration tests
+are intentionally separate:
 
 ```bash
 npm run test:ocr

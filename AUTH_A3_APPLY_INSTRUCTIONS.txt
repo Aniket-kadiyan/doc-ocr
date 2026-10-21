@@ -10,7 +10,9 @@ Apply
 -----
 1. Stop the backend.
 2. Extract this ZIP over the repository root.
-3. From doc-ocr/backend, install/update development dependencies:
+3. From doc-ocr/backend, install/update test-only dependencies. The GPU runtime
+   must already be installed from requirements-gpu-cu126.txt. This command does
+   not install or replace PaddlePaddle:
 
    .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-dev.txt
 

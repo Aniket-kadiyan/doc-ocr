@@ -7,13 +7,13 @@ The test strategy has two levels:
 
 ## Setup
 
-Install JavaScript and Python development dependencies from the repository
-root. Runtime deployments can continue using `backend/requirements.txt`; only
-developers need `requirements-dev.txt`. Use Node.js 20.19 or newer so the
-Vitest/Vite test toolchain is within its supported engine range.
+Install JavaScript dependencies from the repository root. Install one Python
+runtime manifest, then add the test-only dependencies. Use Node.js 20.19 or
+newer so the Vitest/Vite test toolchain is within its supported engine range.
 
 ```bash
 npm install
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
 backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
 ```
 
@@ -21,8 +21,21 @@ Windows:
 
 ```bat
 npm install
+backend\.venv\Scripts\python -m pip install -r backend\requirements.txt
 backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
 ```
+
+The examples above use the CPU runtime. For the validated CUDA 12.6 runtime,
+use a separate `.venv-gpu` environment:
+
+```bat
+backend\.venv-gpu\Scripts\python -m pip install -r backend\requirements-gpu-cu126.txt
+backend\.venv-gpu\Scripts\python -m pip install -r backend\requirements-dev.txt
+```
+
+`requirements-dev.txt` intentionally does not include a runtime manifest. This
+prevents a test-tool update from replacing `paddlepaddle-gpu` with the CPU-only
+`paddlepaddle` package.
 
 ## Commands
 
