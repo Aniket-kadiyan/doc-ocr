@@ -156,6 +156,43 @@ def set_user_active(
     return user_record(user)
 
 
+def set_user_administrator(
+    session: Session,
+    *,
+    username: str,
+    administrator: bool,
+) -> UserRecord:
+    """Grant or revoke the administrator role without removing normal access."""
+
+    user = get_user(session, username)
+    roles = seed_default_roles(session)
+    admin_role = roles["admin"]
+    is_administrator = any(role.name == "admin" for role in user.roles)
+    if administrator == is_administrator:
+        return user_record(user)
+
+    if not administrator and user.is_active:
+        active_admin_count = session.scalar(
+            select(func.count(User.id))
+            .select_from(User)
+            .join(User.roles)
+            .where(User.is_active.is_(True), Role.name == "admin")
+        ) or 0
+        if active_admin_count <= 1:
+            raise LastAdministratorError(
+                "The administrator role cannot be removed from the final active administrator"
+            )
+
+    if administrator:
+        user.roles.append(admin_role)
+    else:
+        user.roles.remove(admin_role)
+    user.updated_at = utc_now()
+    _revoke_user_sessions(session, user.id)
+    session.flush()
+    return user_record(user)
+
+
 def set_user_password(
     session: Session,
     *,

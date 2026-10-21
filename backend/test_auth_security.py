@@ -36,9 +36,11 @@ class AuthenticationSecurityTests(unittest.TestCase):
         self.assertTrue(verify_password(password, encoded))
         self.assertFalse(verify_password("incorrect passphrase", encoded))
 
-    def test_short_password_and_username_password_are_rejected(self) -> None:
+    def test_four_character_minimum_and_username_password_policy(self) -> None:
         with self.assertRaisesRegex(AuthenticationInputError, "at least"):
-            hash_password("too-short")
+            hash_password("abc")
+        encoded = hash_password("abcd")
+        self.assertTrue(verify_password("abcd", encoded))
         with self.assertRaisesRegex(AuthenticationInputError, "username"):
             hash_password("administrator", username="Administrator")
 

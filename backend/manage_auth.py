@@ -4,6 +4,14 @@ Run from ``backend`` using the same Python environment as the OCR service:
 
     python manage_auth.py db upgrade
     python manage_auth.py db check
+    python manage_auth.py user create-user --username operator.one --display-name "Operator One"
+    python manage_auth.py user grant-admin operator.one
+    python manage_auth.py user revoke-admin operator.one
+
+Creation and password-reset commands collect the password through an
+interactive prompt. Passwords are deliberately not accepted as command-line
+arguments because command lines can be retained in shell history or process
+inspection output.
 """
 
 from __future__ import annotations
@@ -22,6 +30,7 @@ from auth_repository import (
     AuthenticationRepositoryError,
     create_user,
     list_users,
+    set_user_administrator,
     set_user_active,
     set_user_password,
 )
@@ -98,13 +107,13 @@ def _run_user_command(arguments: argparse.Namespace) -> int:
     manager = DatabaseManager(_database_url())
     try:
         with manager.session() as session:
-            if arguments.user_action == "create-admin":
+            if arguments.user_action in {"create-user", "create-admin"}:
                 record = create_user(
                     session,
                     username=arguments.username,
                     display_name=arguments.display_name or arguments.username,
                     password=_prompt_password(),
-                    administrator=True,
+                    administrator=arguments.user_action == "create-admin",
                 )
                 output: object = record.as_public_dict()
             elif arguments.user_action == "list":
@@ -127,6 +136,18 @@ def _run_user_command(arguments: argparse.Namespace) -> int:
                     username=arguments.username,
                     password=_prompt_password(),
                 ).as_public_dict()
+            elif arguments.user_action == "grant-admin":
+                output = set_user_administrator(
+                    session,
+                    username=arguments.username,
+                    administrator=True,
+                ).as_public_dict()
+            elif arguments.user_action == "revoke-admin":
+                output = set_user_administrator(
+                    session,
+                    username=arguments.username,
+                    administrator=False,
+                ).as_public_dict()
             else:
                 return 2
         print(json.dumps({"status": "ok", "result": output}))
@@ -143,14 +164,21 @@ def _parser() -> argparse.ArgumentParser:
 
     user = commands.add_parser("user", help="manage QTracX users")
     user_actions = user.add_subparsers(dest="user_action", required=True)
-    create_admin = user_actions.add_parser(
-        "create-admin",
-        help="create an administrator using an interactive password prompt",
-    )
-    create_admin.add_argument("--username", required=True)
-    create_admin.add_argument("--display-name")
+    for action, help_text in (
+        ("create-user", "create a regular user using an interactive password prompt"),
+        ("create-admin", "create an administrator using an interactive password prompt"),
+    ):
+        create_parser = user_actions.add_parser(action, help=help_text)
+        create_parser.add_argument("--username", required=True)
+        create_parser.add_argument("--display-name")
     user_actions.add_parser("list", help="list users without password data")
-    for action in ("enable", "disable", "set-password"):
+    for action in (
+        "enable",
+        "disable",
+        "set-password",
+        "grant-admin",
+        "revoke-admin",
+    ):
         action_parser = user_actions.add_parser(action)
         action_parser.add_argument("username")
     return parser

@@ -13,6 +13,7 @@ from auth_repository import (
     create_user,
     get_user,
     list_users,
+    set_user_administrator,
     set_user_active,
     set_user_password,
 )
@@ -59,6 +60,56 @@ class AuthenticationRepositoryTests(unittest.TestCase):
                     username="quality.admin",
                     display_name="Duplicate",
                     password="another secure password 2026",
+                )
+
+    def test_regular_user_can_be_promoted_and_demoted(self) -> None:
+        self._create_admin("primary.admin")
+        with self.database.session() as session:
+            record = create_user(
+                session,
+                username="quality.user",
+                display_name="Quality User",
+                password="quality user secure password 2026",
+            )
+            user_id = record.id
+        with self.database.session() as session:
+            session.add(AuthSession(
+                id=str(uuid4()),
+                token_hash="e" * 64,
+                csrf_token_hash="f" * 64,
+                user_id=user_id,
+                expires_at=utc_now() + timedelta(hours=1),
+            ))
+
+        with self.database.session() as session:
+            promoted = set_user_administrator(
+                session,
+                username="quality.user",
+                administrator=True,
+            )
+            self.assertEqual(set(promoted.roles), {"admin", "user"})
+        with self.database.session() as session:
+            stored_session = session.scalar(
+                select(AuthSession).where(AuthSession.user_id == user_id)
+            )
+            self.assertIsNotNone(stored_session.revoked_at)
+
+        with self.database.session() as session:
+            demoted = set_user_administrator(
+                session,
+                username="quality.user",
+                administrator=False,
+            )
+            self.assertEqual(demoted.roles, ("user",))
+
+    def test_final_active_administrator_role_cannot_be_revoked(self) -> None:
+        self._create_admin()
+        with self.database.session() as session:
+            with self.assertRaises(LastAdministratorError):
+                set_user_administrator(
+                    session,
+                    username="admin",
+                    administrator=False,
                 )
 
     def test_final_active_administrator_cannot_be_disabled(self) -> None:
