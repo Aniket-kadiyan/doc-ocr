@@ -77,6 +77,7 @@ class RuntimeConfig:
     """Validated runtime settings shared by startup and diagnostics."""
 
     environment: str
+    ui_host: str
     ui_port: int
     backend_host: str
     backend_port: int
@@ -97,6 +98,7 @@ class RuntimeConfig:
 
         return {
             "environment": self.environment,
+            "ui_host": self.ui_host,
             "ui_port": self.ui_port,
             "backend_host": self.backend_host,
             "backend_port": self.backend_port,
@@ -179,6 +181,7 @@ def load_runtime_config() -> RuntimeConfig:
 
     return RuntimeConfig(
         environment=environment,
+        ui_host=get_str("UI_HOST", "127.0.0.1"),
         ui_port=_strict_int("PORT", 3002, minimum=1, maximum=65535),
         backend_host=get_str("OCR_HOST", "127.0.0.1"),
         backend_port=_strict_int("OCR_PORT", 8000, minimum=1, maximum=65535),
