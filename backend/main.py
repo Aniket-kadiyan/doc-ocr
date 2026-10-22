@@ -25,6 +25,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from auth_routes import require_protected_request, router as auth_router
+from cad_documents import CadDocumentError, convert_cad_to_pdf
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -234,6 +235,29 @@ async def raster_document_page(
             "X-Document-Page-Height": str(rendered.height),
             "X-Document-Format": rendered.format,
         },
+    )
+
+
+@app.post("/documents/cad-to-pdf", dependencies=protected_request)
+async def cad_document_to_pdf(file: UploadFile = File(...)) -> Response:
+    """Convert a DWG or DXF drawing to a vector PDF.
+
+    The browser then opens the PDF like any other drawing, so scans,
+    checksheets and exports need no CAD-specific handling.
+    """
+
+    data = await file.read()
+    try:
+        pdf, page_count = await run_in_threadpool(
+            convert_cad_to_pdf, data, file.filename or ""
+        )
+    except CadDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"X-Document-Page-Count": str(page_count)},
     )
 
 

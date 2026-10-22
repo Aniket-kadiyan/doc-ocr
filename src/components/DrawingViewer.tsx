@@ -59,6 +59,7 @@ import {
   loadPdfDocument,
   renderPdfPage,
   loadImageFile,
+  openableDrawing,
   PDF_RENDER_SCALE,
   displayRenderScale,
 } from "@/lib/pdfLoader";
@@ -622,7 +623,8 @@ export function DrawingViewer() {
     void restoreLastProject();
   }, [restoreLastProject]);
 
-  const handleFile = async (file: File) => {
+  const handleFile = async (selected: File) => {
+    const file = await openableDrawing(selected);
     const sourceKind = await detectSourceFileKind(file);
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
@@ -1900,7 +1902,7 @@ export function DrawingViewer() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,application/pdf,image/png,image/jpeg,image/tiff,image/webp"
+        accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg,.tif,.tiff,.webp,application/pdf,image/png,image/jpeg,image/tiff,image/webp"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];

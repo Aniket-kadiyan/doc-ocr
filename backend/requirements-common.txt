@@ -15,6 +15,12 @@ python-multipart>=0.0.12,<1.0
 # Image processing
 Pillow>=11,<13
 
+# DWG/DXF drawings are rendered to PDF with ezdxf's matplotlib backend.
+# DWG additionally needs an external DWG->DXF converter: the ODA File
+# Converter, or LibreDWG's dwg2dxf (brew install libredwg). See cad_documents.py.
+ezdxf>=1.3,<2
+matplotlib>=3.8,<4
+
 # PaddleX 3.7.2 requires NumPy >=1.24,<2.4.
 # Pinning prevents pip from installing the incompatible NumPy 2.5.x release.
 numpy==2.3.5

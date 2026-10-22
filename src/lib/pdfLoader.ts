@@ -2,6 +2,7 @@ import * as pdfjs from "pdfjs-dist";
 import { getOcrApiUrl } from "@/lib/paddleOcrClient";
 import {
   detectSourceFileKind,
+  isCadKind,
   isTiffKind,
   type SourceFileKind,
 } from "@/lib/sourceFile";
@@ -153,8 +154,38 @@ export async function loadImageFile(
   if (sourceFormat === "pdf") {
     throw new Error("Use the PDF loader for PDF drawings.");
   }
+  if (isCadKind(sourceFormat)) {
+    throw new Error("Convert DWG/DXF drawings with openableDrawing first.");
+  }
   if (isTiffKind(sourceFormat)) return loadTiffPage(file, page);
   if (page !== 1) throw new Error("This image contains only one page.");
   const rendered = await blobToCanvas(file);
   return { ...rendered, totalPages: 1, sourceFormat };
+}
+
+/**
+ * The file the viewer should open for a user's selection. DWG and DXF are
+ * converted to PDF by the backend once, here, so the project, its stored
+ * blob, scans and exports all see an ordinary PDF drawing.
+ */
+export async function openableDrawing(file: File): Promise<File> {
+  const kind = await detectSourceFileKind(file);
+  if (!isCadKind(kind)) return file;
+
+  const form = new FormData();
+  form.append("file", file, file.name || `drawing.${kind}`);
+  const response = await fetchWithRequestId(
+    `${getOcrApiUrl()}/documents/cad-to-pdf`,
+    { method: "POST", body: form },
+    { operation: "document.cad-to-pdf" }
+  );
+  if (!response.ok) {
+    throw apiRequestError(
+      response, await responseError(response), "document.cad-to-pdf"
+    );
+  }
+  const base = file.name.replace(/\.[^.]+$/, "") || "drawing";
+  return new File([await response.blob()], `${base}.pdf`, {
+    type: "application/pdf",
+  });
 }
