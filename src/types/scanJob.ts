@@ -81,6 +81,15 @@ export interface ScanProgress {
   heartbeatAgeSeconds: number;
   progressAgeSeconds: number;
   estimatedRemainingSeconds: number | null;
+  queuePosition: number | null;
+  queueDepth: number;
+  jobsAhead: number | null;
+  queueWaitSeconds: number;
+  estimatedQueueWaitSeconds: number | null;
+  averageQueueWaitSeconds: number | null;
+  averageScanDurationSeconds: number | null;
+  queueWaitSamples: number;
+  scanDurationSamples: number;
   liveness: ScanLiveness;
   overlay: ScanDebugOverlay | null;
 }

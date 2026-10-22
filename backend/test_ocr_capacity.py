@@ -28,6 +28,7 @@ def test_ready_singleton_reports_one_effective_scan_slot() -> None:
         "configured": 1,
         "created": 1,
         "inference_ready": 1,
+        "concurrent_scans_per_bundle": 1,
         "device": "gpu:0",
         "components": {
             "paddleocr_pipeline": True,

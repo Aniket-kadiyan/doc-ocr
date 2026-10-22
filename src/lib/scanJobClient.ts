@@ -78,6 +78,15 @@ interface ApiScanJobSnapshot {
   heartbeat_age_seconds?: number;
   progress_age_seconds?: number;
   estimated_remaining_seconds?: number | null;
+  queue_position?: number | null;
+  queue_depth?: number;
+  jobs_ahead?: number | null;
+  queue_wait_seconds?: number;
+  estimated_queue_wait_seconds?: number | null;
+  average_queue_wait_seconds?: number | null;
+  average_scan_duration_seconds?: number | null;
+  queue_wait_samples?: number;
+  scan_duration_samples?: number;
   liveness?: ScanLiveness;
   overlay?: ApiScanOverlay | null;
   error?: string | null;
@@ -214,6 +223,18 @@ function toProgress(
     progressAgeSeconds: snapshot.progress_age_seconds ?? 0,
     estimatedRemainingSeconds:
       snapshot.estimated_remaining_seconds ?? null,
+    queuePosition: snapshot.queue_position ?? null,
+    queueDepth: snapshot.queue_depth ?? 0,
+    jobsAhead: snapshot.jobs_ahead ?? null,
+    queueWaitSeconds: snapshot.queue_wait_seconds ?? 0,
+    estimatedQueueWaitSeconds:
+      snapshot.estimated_queue_wait_seconds ?? null,
+    averageQueueWaitSeconds:
+      snapshot.average_queue_wait_seconds ?? null,
+    averageScanDurationSeconds:
+      snapshot.average_scan_duration_seconds ?? null,
+    queueWaitSamples: snapshot.queue_wait_samples ?? 0,
+    scanDurationSamples: snapshot.scan_duration_samples ?? 0,
     liveness:
       snapshot.liveness ??
       (snapshot.status === "queued" ? "queued" : "working"),
@@ -270,9 +291,9 @@ export async function cancelScanJob(jobId: string): Promise<ScanProgress> {
  *
  * A closed tab leaves its scan running: the backend has one scan worker and
  * a whole page can occupy it for twenty minutes, so the abandoned job holds
- * the queue shut against whatever is started next. The server also drops a
- * superseded scan when a new one arrives, which covers a reload; this covers
- * simply walking away.
+ * the queue shut against other users. The server also drops superseded work
+ * for the same authenticated owner, which covers a reload; this covers simply
+ * walking away.
  *
  * A keepalive fetch is used because the document is being torn down. Unlike
  * sendBeacon, it can carry the session cookie and required CSRF header.

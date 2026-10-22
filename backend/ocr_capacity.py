@@ -11,6 +11,16 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+# These constants describe model objects the process really creates today.
+# Increase them only together with a corresponding OcrPipeline instance pool;
+# executor threads alone are not additional inference capacity.
+OCR_MODEL_BUNDLE_COUNT = 1
+OCR_CONCURRENT_SCANS_PER_BUNDLE = 1
+AUTO_BALLOON_SCAN_CAPACITY = (
+    OCR_MODEL_BUNDLE_COUNT * OCR_CONCURRENT_SCANS_PER_BUNDLE
+)
+
+
 def build_ocr_capacity_status(
     pipeline_status: Mapping[str, Any],
     scan_executor_status: Mapping[str, Any],
@@ -34,15 +44,21 @@ def build_ocr_capacity_status(
     # There is currently one OcrPipeline singleton per backend process.  The
     # detector/recognizer entries above are components inside that bundle, not
     # additional independently schedulable Paddle instances.
-    model_bundle_slots = 1 if inference_ready else 0
-    effective_slots = min(model_bundle_slots, worker_threads)
+    model_bundle_slots = OCR_MODEL_BUNDLE_COUNT if inference_ready else 0
+    inference_slots = (
+        model_bundle_slots * OCR_CONCURRENT_SCANS_PER_BUNDLE
+    )
+    effective_slots = min(inference_slots, worker_threads)
 
     return {
         "architecture": "single_process_singleton",
         "model_bundles": {
-            "configured": 1,
-            "created": 1,
+            "configured": OCR_MODEL_BUNDLE_COUNT,
+            "created": OCR_MODEL_BUNDLE_COUNT,
             "inference_ready": model_bundle_slots,
+            "concurrent_scans_per_bundle": (
+                OCR_CONCURRENT_SCANS_PER_BUNDLE
+            ),
             "device": str(
                 pipeline_status.get("ocr_device_effective") or "unknown"
             ),

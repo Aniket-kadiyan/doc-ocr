@@ -488,8 +488,8 @@ export function DrawingViewer() {
   }, []);
 
   // A closed tab leaves its scan running on the backend, and the backend has
-  // one scan worker, so the next scan queues behind a job nobody is watching
-  // for as long as a whole page takes. Tell it on the way out.
+  // one scan worker, so other LAN users would queue behind a job nobody is
+  // watching for as long as a whole page takes. Tell it on the way out.
   useEffect(() => {
     const jobId = scanProgress?.jobId;
     if (!jobId) return;
@@ -1063,6 +1063,15 @@ export function DrawingViewer() {
         heartbeatAgeSeconds: 0,
         progressAgeSeconds: 0,
         estimatedRemainingSeconds: null,
+        queuePosition: null,
+        queueDepth: 0,
+        jobsAhead: null,
+        queueWaitSeconds: 0,
+        estimatedQueueWaitSeconds: null,
+        averageQueueWaitSeconds: null,
+        averageScanDurationSeconds: null,
+        queueWaitSamples: 0,
+        scanDurationSamples: 0,
         liveness: "queued",
         overlay: null,
       });

@@ -25,6 +25,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from auth_routes import require_protected_request, router as auth_router
+from auth_service import AuthenticatedSession
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -48,7 +49,10 @@ from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
-from ocr_capacity import build_ocr_capacity_status
+from ocr_capacity import (
+    AUTO_BALLOON_SCAN_CAPACITY,
+    build_ocr_capacity_status,
+)
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -135,10 +139,10 @@ async def request_diagnostics(request: Request, call_next):
         )
         return response
 
-# PaddleOCR is expensive and the local service normally serves one operator.
-# A single worker prevents concurrent scans from competing for the same model
-# while still returning the HTTP request immediately.
-scan_job_manager = ScanJobManager(max_workers=1)
+# Executor capacity comes from model bundles the process really creates, not
+# from HTTP thread count. The current singleton pipeline therefore provides
+# one auto-balloon scan slot for all LAN users.
+scan_job_manager = ScanJobManager(max_workers=AUTO_BALLOON_SCAN_CAPACITY)
 page_layout_cache = PageLayoutCache(max_entries=8)
 MAX_EXISTING_VALUE_BOXES = 5000
 
@@ -714,7 +718,6 @@ def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
 @app.post(
     "/ocr/scan-jobs",
     status_code=202,
-    dependencies=protected_request,
 )
 async def create_scan_job(
     file: UploadFile = File(...),
@@ -735,6 +738,7 @@ async def create_scan_job(
     ),
     x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
     x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
 ) -> dict[str, Any]:
     """Queue an atomic section or whole-page scan and return its job id."""
     if scope_kind not in {"section", "page"}:
@@ -880,6 +884,7 @@ async def create_scan_job(
 
     return scan_job_manager.submit(
         run_scan,
+        owner_id=authenticated.user.id,
         metadata={
             "scope_kind": scope_kind,
             "page": page,
@@ -895,10 +900,13 @@ async def create_scan_job(
     )
 
 
-@app.get("/ocr/scan-jobs/{job_id}", dependencies=protected_request)
-def get_scan_job(job_id: str) -> dict[str, Any]:
+@app.get("/ocr/scan-jobs/{job_id}")
+def get_scan_job(
+    job_id: str,
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
+) -> dict[str, Any]:
     """Poll genuine scan progress; candidates appear only after success."""
-    job = scan_job_manager.get(job_id)
+    job = scan_job_manager.get(job_id, owner_id=authenticated.user.id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
@@ -906,12 +914,14 @@ def get_scan_job(job_id: str) -> dict[str, Any]:
 
 @app.post(
     "/ocr/scan-jobs/{job_id}/cancel",
-    dependencies=protected_request,
 )
-def cancel_scan_job(job_id: str) -> dict[str, Any]:
+def cancel_scan_job(
+    job_id: str,
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
+) -> dict[str, Any]:
     """Stop a scan cooperatively without publishing partial results."""
 
-    job = scan_job_manager.cancel(job_id)
+    job = scan_job_manager.cancel(job_id, owner_id=authenticated.user.id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
