@@ -8,10 +8,12 @@ complete scan result.  Nothing exposes partial candidates.
 
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
-from math import sqrt
+from math import ceil, sqrt
+from statistics import fmean
 from threading import Event, Lock, Thread
 from time import time
 from typing import Any, Callable, Literal
@@ -65,6 +67,7 @@ class _ScanJobCancelled(Exception):
 @dataclass
 class _ScanJob:
     job_id: str
+    owner_id: str | None = None
     status: ScanJobStatus = "queued"
     stage: str = "queued"
     message: str = "Scan queued"
@@ -109,9 +112,11 @@ class ScanJobManager:
         heartbeat_stale_seconds: float = 6.0,
         long_step_base_seconds: float = 12.0,
         stalled_step_multiplier: float = 4.0,
+        history_size: int = 20,
     ) -> None:
         self._jobs: dict[str, _ScanJob] = {}
         self._lock = Lock()
+        self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="auto-balloon-scan",
@@ -124,6 +129,12 @@ class ScanJobManager:
         )
         self._long_step_base_seconds = max(0.01, long_step_base_seconds)
         self._stalled_step_multiplier = max(2.0, stalled_step_multiplier)
+        self._queue_wait_history: deque[float] = deque(
+            maxlen=max(1, history_size)
+        )
+        self._scan_duration_history: deque[float] = deque(
+            maxlen=max(1, history_size)
+        )
 
     def submit(
         self,
@@ -131,30 +142,32 @@ class ScanJobManager:
         *,
         metadata: dict[str, Any] | None = None,
         supersede: bool = True,
+        owner_id: str | None = None,
     ) -> dict[str, Any]:
         """Queue one scan and return its initial public snapshot.
 
-        A new scan cancels whatever was still running, because there is only
-        one worker and only one scan the operator can be looking at. Without
-        this, a scan nobody is watching any more — the browser was reloaded,
-        the tab was closed, a second scan was started on top of the first —
-        keeps the worker for the twenty minutes a whole page can take, and
-        every later scan sits at "queued, 0%" behind it with no way out but
-        restarting the service. That is the one failure that looks exactly
-        like the application being broken.
+        A new scan can supersede unfinished work belonging to the same owner.
+        Work belonging to another authenticated user remains in FIFO order.
+        This preserves the single-user reload/retry behaviour without allowing
+        one LAN user to interrupt somebody else's scan.
 
         Cancellation is cooperative, so a superseded scan releases the worker
         at its next progress checkpoint rather than instantly; the new job
         says so instead of claiming to be merely queued.
         """
 
-        job = _ScanJob(job_id=str(uuid4()), metadata=dict(metadata or {}))
+        job = _ScanJob(
+            job_id=str(uuid4()),
+            owner_id=owner_id,
+            metadata=dict(metadata or {}),
+        )
         with self._lock:
             self._discard_expired_locked()
             displaced = [
                 existing.job_id
                 for existing in self._jobs.values()
                 if existing.status in {"queued", "running", "cancelling"}
+                and existing.owner_id == owner_id
             ]
             was_running = supersede and any(
                 self._jobs[job_id].status in {"running", "cancelling"}
@@ -186,13 +199,63 @@ class ScanJobManager:
         self._executor.submit(self._run, job.job_id, work, inherited_context)
         return self.get(job.job_id) or {}
 
-    def get(self, job_id: str) -> dict[str, Any] | None:
+    def get(
+        self,
+        job_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Return a detached public snapshot, or ``None`` for an unknown job."""
         with self._lock:
             job = self._jobs.get(job_id)
+            if (
+                job is not None
+                and owner_id is not None
+                and job.owner_id != owner_id
+            ):
+                return None
             return self._snapshot(job) if job else None
 
-    def cancel(self, job_id: str) -> dict[str, Any] | None:
+    def capacity_status(self) -> dict[str, Any]:
+        """Return executor capacity and live workload without job contents."""
+
+        with self._lock:
+            self._discard_expired_locked()
+            queued_jobs = sum(
+                job.status == "queued" for job in self._jobs.values()
+            )
+            running_jobs = sum(
+                job.status in {"running", "cancelling"}
+                for job in self._jobs.values()
+            )
+            active_jobs = queued_jobs + running_jobs
+            average_queue_wait = self._average(self._queue_wait_history)
+            average_scan_duration = self._average(
+                self._scan_duration_history
+            )
+            return {
+                "executor": "thread_pool",
+                "worker_threads": self._max_workers,
+                "maximum_concurrent_jobs": self._max_workers,
+                "running_jobs": running_jobs,
+                "queued_jobs": queued_jobs,
+                "active_jobs": active_jobs,
+                "available_worker_slots": max(
+                    0,
+                    self._max_workers - running_jobs,
+                ),
+                "average_queue_wait_seconds": average_queue_wait,
+                "average_scan_duration_seconds": average_scan_duration,
+                "queue_wait_samples": len(self._queue_wait_history),
+                "scan_duration_samples": len(self._scan_duration_history),
+            }
+
+    def cancel(
+        self,
+        job_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Request atomic cancellation and return the updated snapshot.
 
         A queued job can stop immediately. A running job enters ``cancelling``
@@ -203,6 +266,8 @@ class ScanJobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
+                return None
+            if owner_id is not None and job.owner_id != owner_id:
                 return None
             if job.status in {"cancelled", "succeeded", "failed"}:
                 snapshot = self._snapshot(job)
@@ -292,6 +357,7 @@ class ScanJobManager:
             started_at=started_at,
             heartbeat_at=started_at,
         )
+        self._record_queue_wait(job_id, started_at)
         logger.info("OCR scan job started", extra={"event": "scan_job_started"})
         if self._cancel_was_requested(job_id):
             self._finish_cancelled(job_id)
@@ -404,6 +470,7 @@ class ScanJobManager:
                 error=None,
                 finished_at=time(),
             )
+            self._record_scan_duration(job_id)
             candidate_count = 0
             if isinstance(result, dict):
                 candidate_count = int(
@@ -422,6 +489,33 @@ class ScanJobManager:
             heartbeat_thread.join(
                 timeout=self._heartbeat_interval_seconds * 2,
             )
+
+    @staticmethod
+    def _average(values: deque[float]) -> int | None:
+        if not values:
+            return None
+        return max(0, int(round(fmean(values))))
+
+    def _record_queue_wait(self, job_id: str, started_at: float) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                self._queue_wait_history.append(
+                    max(0.0, started_at - job.created_at)
+                )
+
+    def _record_scan_duration(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if (
+                job is not None
+                and job.status == "succeeded"
+                and job.started_at is not None
+                and job.finished_at is not None
+            ):
+                self._scan_duration_history.append(
+                    max(0.0, job.finished_at - job.started_at)
+                )
 
     def _heartbeat_loop(self, job_id: str, stop: Event) -> None:
         """Keep liveness current even while one OCR call blocks its worker."""
@@ -547,6 +641,95 @@ class ScanJobManager:
         )
         return long_running_after, stalled_after
 
+    def _queue_metrics(
+        self,
+        job: _ScanJob,
+        now: float,
+    ) -> dict[str, int | None]:
+        # Dict insertion order is the executor submission order, including
+        # the rare case where two jobs receive the same wall-clock timestamp.
+        queued = [
+            queued_job
+            for queued_job in self._jobs.values()
+            if queued_job.status == "queued"
+        ]
+        running = [
+            active_job
+            for active_job in self._jobs.values()
+            if active_job.status in {"running", "cancelling"}
+        ]
+        average_queue_wait = self._average(self._queue_wait_history)
+        average_scan_duration = self._average(self._scan_duration_history)
+        queue_wait_seconds = int(
+            max(0.0, (job.started_at or now) - job.created_at)
+        )
+
+        queue_position: int | None = None
+        jobs_ahead: int | None = None
+        estimated_wait: int | None = None
+        if job.status == "queued":
+            queue_index = next(
+                (
+                    index
+                    for index, queued_job in enumerate(queued)
+                    if queued_job.job_id == job.job_id
+                ),
+                None,
+            )
+            if queue_index is not None:
+                queue_position = queue_index + 1
+                jobs_ahead = len(running) + queue_index
+                if average_scan_duration is not None:
+                    # Simulate FIFO assignment to the first available verified
+                    # worker slot. This remains valid when the model pool later
+                    # grows beyond one slot.
+                    slot_ready = [
+                        max(
+                            0.0,
+                            float(average_scan_duration)
+                            - max(
+                                0.0,
+                                now
+                                - (
+                                    active_job.started_at
+                                    or active_job.created_at
+                                ),
+                            ),
+                        )
+                        for active_job in running
+                    ]
+                    slot_ready.extend(
+                        0.0
+                        for _ in range(
+                            max(0, self._max_workers - len(slot_ready))
+                        )
+                    )
+                    if slot_ready:
+                        for queued_job in queued:
+                            next_slot = min(
+                                range(len(slot_ready)),
+                                key=slot_ready.__getitem__,
+                            )
+                            if queued_job.job_id == job.job_id:
+                                estimated_wait = max(
+                                    0,
+                                    int(ceil(slot_ready[next_slot])),
+                                )
+                                break
+                            slot_ready[next_slot] += average_scan_duration
+
+        return {
+            "queue_position": queue_position,
+            "queue_depth": len(queued),
+            "jobs_ahead": jobs_ahead,
+            "queue_wait_seconds": queue_wait_seconds,
+            "estimated_queue_wait_seconds": estimated_wait,
+            "average_queue_wait_seconds": average_queue_wait,
+            "average_scan_duration_seconds": average_scan_duration,
+            "queue_wait_samples": len(self._queue_wait_history),
+            "scan_duration_samples": len(self._scan_duration_history),
+        }
+
     def _snapshot(self, job: _ScanJob) -> dict[str, Any]:
         now = time()
         elapsed = (
@@ -638,6 +821,7 @@ class ScanJobManager:
             "progress_age_seconds": int(progress_age),
             "estimated_remaining_seconds": eta_seconds,
             "liveness": liveness,
+            **self._queue_metrics(job, now),
         }
         # Results are published only after the complete scan succeeds.
         snapshot["result"] = (

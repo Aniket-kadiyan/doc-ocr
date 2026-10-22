@@ -14,6 +14,8 @@ import math
 import os
 import re
 from enum import Enum
+from functools import partial
+from threading import Lock
 from time import perf_counter
 from typing import Any
 
@@ -25,6 +27,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from auth_routes import require_protected_request, router as auth_router
+from auth_service import AuthenticatedSession
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -48,6 +51,8 @@ from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
+from inference_gate import inference_priority
+from ocr_capacity import build_ocr_capacity_status
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -134,12 +139,28 @@ async def request_diagnostics(request: Request, call_next):
         )
         return response
 
-# PaddleOCR is expensive and the local service normally serves one operator.
-# A single worker prevents concurrent scans from competing for the same model
-# while still returning the HTTP request immediately.
-scan_job_manager = ScanJobManager(max_workers=1)
+# The executor is created only after Paddle has loaded, because requested
+# instances and successfully loaded model bundles are not the same thing.
+# This prevents the job queue from advertising workers that cannot run OCR.
+scan_job_manager: ScanJobManager | None = None
+_scan_job_manager_lock = Lock()
 page_layout_cache = PageLayoutCache(max_entries=8)
 MAX_EXISTING_VALUE_BOXES = 5000
+
+
+def _get_scan_job_manager() -> ScanJobManager:
+    global scan_job_manager
+    if scan_job_manager is not None:
+        return scan_job_manager
+    with _scan_job_manager_lock:
+        if scan_job_manager is None:
+            loaded_capacity = get_pipeline().inference_capacity
+            # Keep one worker when Paddle is unavailable so a submitted job
+            # can fail honestly instead of remaining queued forever.
+            scan_job_manager = ScanJobManager(
+                max_workers=max(1, loaded_capacity)
+            )
+    return scan_job_manager
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -268,7 +289,17 @@ def startup() -> None:
         },
     )
     initialize_checksheet_storage()
-    get_pipeline()
+    pipeline = get_pipeline()
+    manager = _get_scan_job_manager()
+    capacity = build_ocr_capacity_status(
+        pipeline.status,
+        manager.capacity_status(),
+        pipeline.inference_gate.status(),
+    )
+    logger.info(
+        "OCR capacity detected",
+        extra={"event": "ocr_capacity_detected", "details": capacity},
+    )
     st = dump_status()
     if st["enabled"]:
         logger.warning(
@@ -283,7 +314,8 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown() -> None:
     logger.info("QTracX backend stopping", extra={"event": "backend_stopping"})
-    scan_job_manager.shutdown(wait=False)
+    if scan_job_manager is not None:
+        scan_job_manager.shutdown(wait=False)
     if auth_database_manager is not None:
         auth_database_manager.dispose()
     logger.info("QTracX backend stopped", extra={"event": "backend_stopped"})
@@ -293,9 +325,16 @@ def shutdown() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
+    manager = _get_scan_job_manager()
+    capacity = build_ocr_capacity_status(
+        pipeline.status,
+        manager.capacity_status(),
+        pipeline.inference_gate.status(),
+    )
     return {
         "status": "ok",
         **pipeline.status,
+        "ocr_capacity": capacity,
         "authentication": {
             "configured": auth_database_manager is not None,
         },
@@ -394,11 +433,14 @@ async def recognize_region(
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = debug_dump_force or (x_debug_dump_force or "").strip().lower() in truthy
-    result = pipeline.recognize(
-        image,
-        image_bytes=raw,
-        debug_dump=req_dump,
-        debug_dump_force=req_force,
+    result = await run_in_threadpool(
+        partial(
+            pipeline.recognize,
+            image,
+            image_bytes=raw,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+        )
     )
     dim_type = result.get("type") or classify_dimension(result["text"]).value
 
@@ -464,11 +506,14 @@ async def segment_region(
 
     title_keywords = [k.strip() for k in keywords.split(",") if k.strip()]
 
-    seg = pipeline.segment(
-        image,
-        debug_dump=req_dump,
-        debug_dump_force=req_force,
-        title_keywords=title_keywords,
+    seg = await run_in_threadpool(
+        partial(
+            pipeline.segment,
+            image,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+            title_keywords=title_keywords,
+        )
     )
 
     return _serialize_segment_result(seg)
@@ -700,7 +745,6 @@ def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
 @app.post(
     "/ocr/scan-jobs",
     status_code=202,
-    dependencies=protected_request,
 )
 async def create_scan_job(
     file: UploadFile = File(...),
@@ -721,6 +765,7 @@ async def create_scan_job(
     ),
     x_debug_dump: str | None = Header(None, alias="X-Debug-Dump"),
     x_debug_dump_force: str | None = Header(None, alias="X-Debug-Dump-Force"),
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
 ) -> dict[str, Any]:
     """Queue an atomic section or whole-page scan and return its job id."""
     if scope_kind not in {"section", "page"}:
@@ -864,8 +909,15 @@ async def create_scan_job(
             )
         return _serialize_segment_result(seg)
 
-    return scan_job_manager.submit(
-        run_scan,
+    def run_background_scan(
+        report_progress: ProgressReporter,
+    ) -> dict[str, Any]:
+        with inference_priority("background"):
+            return run_scan(report_progress)
+
+    return _get_scan_job_manager().submit(
+        run_background_scan,
+        owner_id=authenticated.user.id,
         metadata={
             "scope_kind": scope_kind,
             "page": page,
@@ -881,10 +933,16 @@ async def create_scan_job(
     )
 
 
-@app.get("/ocr/scan-jobs/{job_id}", dependencies=protected_request)
-def get_scan_job(job_id: str) -> dict[str, Any]:
+@app.get("/ocr/scan-jobs/{job_id}")
+def get_scan_job(
+    job_id: str,
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
+) -> dict[str, Any]:
     """Poll genuine scan progress; candidates appear only after success."""
-    job = scan_job_manager.get(job_id)
+    job = _get_scan_job_manager().get(
+        job_id,
+        owner_id=authenticated.user.id,
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
@@ -892,12 +950,17 @@ def get_scan_job(job_id: str) -> dict[str, Any]:
 
 @app.post(
     "/ocr/scan-jobs/{job_id}/cancel",
-    dependencies=protected_request,
 )
-def cancel_scan_job(job_id: str) -> dict[str, Any]:
+def cancel_scan_job(
+    job_id: str,
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
+) -> dict[str, Any]:
     """Stop a scan cooperatively without publishing partial results."""
 
-    job = scan_job_manager.cancel(job_id)
+    job = _get_scan_job_manager().cancel(
+        job_id,
+        owner_id=authenticated.user.id,
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
@@ -1028,7 +1091,14 @@ async def read_pdf_text_layer(
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
 
     try:
-        result = text_layer_regions(data, page - 1, dpi=72.0 * render_scale)
+        result = await run_in_threadpool(
+            partial(
+                text_layer_regions,
+                data,
+                page - 1,
+                dpi=72.0 * render_scale,
+            )
+        )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")
     except Exception as error:  # a damaged or non-PDF upload
@@ -1077,7 +1147,11 @@ async def read_title_fields(
 
     raw = await file.read()
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    fields = get_pipeline().title_fields(image, wanted)
+    fields = await run_in_threadpool(
+        get_pipeline().title_fields,
+        image,
+        wanted,
+    )
 
     return {
         "fields": [

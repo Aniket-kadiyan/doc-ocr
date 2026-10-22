@@ -186,6 +186,55 @@ def test_queued_job_can_be_cancelled_before_its_worker_starts() -> None:
         manager.shutdown()
 
 
+def test_capacity_status_reports_workers_and_live_job_counts() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release_first = Event()
+
+    def blocking_work(_report):
+        first_started.set()
+        assert release_first.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        manager.submit(blocking_work, supersede=False)
+        assert first_started.wait(1.0)
+        manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            supersede=False,
+        )
+
+        status = manager.capacity_status()
+        assert {
+            key: status[key]
+            for key in (
+                "executor",
+                "worker_threads",
+                "maximum_concurrent_jobs",
+                "running_jobs",
+                "queued_jobs",
+                "active_jobs",
+                "available_worker_slots",
+                "scan_duration_samples",
+            )
+        } == {
+            "executor": "thread_pool",
+            "worker_threads": 1,
+            "maximum_concurrent_jobs": 1,
+            "running_jobs": 1,
+            "queued_jobs": 1,
+            "active_jobs": 2,
+            "available_worker_slots": 0,
+            "scan_duration_samples": 0,
+        }
+        assert status["average_queue_wait_seconds"] is not None
+        assert status["average_scan_duration_seconds"] is None
+        assert status["queue_wait_samples"] == 1
+    finally:
+        release_first.set()
+        manager.shutdown()
+
+
 def test_a_new_scan_supersedes_the_one_still_running() -> None:
     # One worker, and a whole-page scan runs for minutes. A scan nobody is
     # watching any more must not hold the queue shut against the next one.
@@ -215,6 +264,212 @@ def test_a_new_scan_supersedes_the_one_still_running() -> None:
         assert _wait_for_terminal(manager, second["job_id"])["status"] == "succeeded"
         assert second_ran.is_set()
     finally:
+        manager.shutdown()
+
+
+def test_a_different_owners_scan_does_not_supersede_running_work() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release_first = Event()
+    second_started = Event()
+
+    def first_work(_report):
+        first_started.set()
+        assert release_first.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    def second_work(_report):
+        second_started.set()
+        return {"count": 0, "regions": []}
+
+    try:
+        first = manager.submit(first_work, owner_id="user-a")
+        assert first_started.wait(1.0)
+        second = manager.submit(second_work, owner_id="user-b")
+
+        assert manager.get(first["job_id"])["status"] == "running"
+        queued = manager.get(second["job_id"])
+        assert queued is not None
+        assert queued["status"] == "queued"
+        assert queued["queue_position"] == 1
+        assert queued["queue_depth"] == 1
+        assert queued["jobs_ahead"] == 1
+        assert not second_started.is_set()
+
+        release_first.set()
+        assert _wait_for_terminal(manager, first["job_id"])["status"] == "succeeded"
+        assert _wait_for_terminal(manager, second["job_id"])["status"] == "succeeded"
+    finally:
+        release_first.set()
+        manager.shutdown()
+
+
+def test_same_owner_still_supersedes_abandoned_work() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+
+    def first_work(report):
+        first_started.set()
+        for step in range(100):
+            report(stage="working", message="step", percent=step)
+            sleep(0.01)
+        return {"count": 0, "regions": []}
+
+    try:
+        first = manager.submit(first_work, owner_id="user-a")
+        assert first_started.wait(1.0)
+        second = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-a",
+        )
+
+        assert _wait_for_terminal(manager, first["job_id"])["status"] == "cancelled"
+        assert _wait_for_terminal(manager, second["job_id"])["status"] == "succeeded"
+    finally:
+        manager.shutdown()
+
+
+def test_job_snapshots_and_cancellation_are_owner_scoped() -> None:
+    manager = ScanJobManager(max_workers=1)
+    started = Event()
+    release = Event()
+
+    def work(_report):
+        started.set()
+        assert release.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        job = manager.submit(work, owner_id="user-a")
+        assert started.wait(1.0)
+
+        assert manager.get(job["job_id"], owner_id="user-b") is None
+        assert manager.cancel(job["job_id"], owner_id="user-b") is None
+        assert manager.get(job["job_id"], owner_id="user-a")["status"] == "running"
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_queue_positions_follow_fifo_order_across_users() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release = Event()
+
+    def first_work(_report):
+        first_started.set()
+        assert release.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        manager.submit(first_work, owner_id="user-a")
+        assert first_started.wait(1.0)
+        second = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-b",
+        )
+        third = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-c",
+        )
+
+        second_status = manager.get(second["job_id"])
+        third_status = manager.get(third["job_id"])
+        assert second_status is not None
+        assert third_status is not None
+        assert second_status["queue_position"] == 1
+        assert second_status["jobs_ahead"] == 1
+        assert third_status["queue_position"] == 2
+        assert third_status["jobs_ahead"] == 2
+        assert third_status["queue_depth"] == 2
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_queue_wait_estimate_uses_recent_scan_duration_and_capacity() -> None:
+    manager = ScanJobManager(max_workers=1)
+    first_started = Event()
+    release = Event()
+
+    def first_work(_report):
+        first_started.set()
+        assert release.wait(1.0)
+        return {"count": 0, "regions": []}
+
+    try:
+        manager.submit(first_work, owner_id="user-a")
+        assert first_started.wait(1.0)
+        with manager._lock:
+            manager._scan_duration_history.extend((20.0, 40.0))
+            manager._queue_wait_history.clear()
+            manager._queue_wait_history.extend((8.0, 12.0))
+
+        queued = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-b",
+        )
+        status = manager.get(queued["job_id"])
+
+        assert status is not None
+        assert status["average_scan_duration_seconds"] == 30
+        assert status["average_queue_wait_seconds"] == 10
+        assert status["scan_duration_samples"] == 2
+        assert status["queue_wait_samples"] == 2
+        assert 29 <= status["estimated_queue_wait_seconds"] <= 30
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_queue_wait_estimate_assigns_jobs_across_multiple_model_slots() -> None:
+    manager = ScanJobManager(max_workers=2)
+    started = [Event(), Event()]
+    release = Event()
+
+    def blocking_work(index: int):
+        def work(_report):
+            started[index].set()
+            assert release.wait(2.0)
+            return {"count": 0, "regions": []}
+
+        return work
+
+    try:
+        manager.submit(blocking_work(0), owner_id="user-a")
+        manager.submit(blocking_work(1), owner_id="user-b")
+        assert started[0].wait(1.0)
+        assert started[1].wait(1.0)
+        with manager._lock:
+            manager._scan_duration_history.extend((30.0, 30.0))
+
+        third = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-c",
+        )
+        fourth = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-d",
+        )
+        fifth = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-e",
+        )
+
+        third_status = manager.get(third["job_id"])
+        fourth_status = manager.get(fourth["job_id"])
+        fifth_status = manager.get(fifth["job_id"])
+        assert third_status is not None
+        assert fourth_status is not None
+        assert fifth_status is not None
+        assert third_status["queue_position"] == 1
+        assert fourth_status["queue_position"] == 2
+        assert fifth_status["queue_position"] == 3
+        assert 29 <= third_status["estimated_queue_wait_seconds"] <= 30
+        assert 29 <= fourth_status["estimated_queue_wait_seconds"] <= 30
+        assert 59 <= fifth_status["estimated_queue_wait_seconds"] <= 60
+    finally:
+        release.set()
         manager.shutdown()
 
 

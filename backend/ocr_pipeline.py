@@ -3,8 +3,10 @@ PaddleOCR pipeline: best digit read + balanced symbol compose.
 """
 
 from __future__ import annotations
+from collections.abc import Iterator
+from contextlib import contextmanager
 from time import perf_counter
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator as TypingIterator, Mapping, Sequence
 import logging
 import re
 
@@ -12,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from debug_dump import StepDumper, dump_force, dump_status, should_dump
+from config_env import load_runtime_config
 from dimension_compose import compose_engineering_dimension
 from feature_classifier import classify_feature
 from dimension_digits import normalize_cad_number_string
@@ -26,6 +29,8 @@ from image_preprocess import (
     upscale_min_edge,
     clahe_rgb,
 )
+from inference_gate import InferenceCapacityGate, get_inference_gate
+from ocr_model_pool import OcrModelBundlePool
 from ocr_runtime import (
     PaddleRuntimeInfo,
     configured_device_label,
@@ -244,7 +249,11 @@ def _covers_digits(whole: str, part: str) -> bool:
 
 
 class OcrPipeline:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        inference_gate: InferenceCapacityGate | None = None,
+    ) -> None:
+        self._inference_gate = inference_gate or get_inference_gate()
         self._configured_device = configured_ocr_device()
         self._paddle_runtime = PaddleRuntimeInfo()
         self._paddle = None
@@ -259,9 +268,100 @@ class OcrPipeline:
         self._page_batch_recognition_available = False
         self._paddle_version = "unknown"
         self._init_errors: list[str] = []
+        self._model_pool: OcrModelBundlePool | None = None
+        self._requested_model_bundle_count = 1
+        self._loaded_model_bundle_count = 0
+        self._model_bundle_load_errors: list[str] = []
+        self._loaded = False
 
-    def load(self) -> None:
+    def load(self, model_bundle_count: int = 1) -> None:
+        """Load and validate the requested number of independent bundles."""
+
+        if self._loaded:
+            return
+        if not 1 <= model_bundle_count <= 8:
+            raise ValueError("model_bundle_count must be between 1 and 8")
+        self._requested_model_bundle_count = model_bundle_count
         self._load_paddle()
+        bundles: list[OcrPipeline] = []
+        if self._paddle_available:
+            bundles.append(self)
+            expected_signature = self._bundle_signature()
+            for bundle_number in range(2, model_bundle_count + 1):
+                candidate = OcrPipeline(
+                    inference_gate=InferenceCapacityGate(1)
+                )
+                candidate._load_paddle()
+                if (
+                    candidate._paddle_available
+                    and candidate._bundle_signature() == expected_signature
+                ):
+                    bundles.append(candidate)
+                    continue
+
+                details = "; ".join(candidate._init_errors) or (
+                    "loaded components do not match bundle 1"
+                )
+                self._model_bundle_load_errors.append(
+                    f"Bundle {bundle_number} was not added: {details}"
+                )
+                # A load failure is commonly exhausted GPU/CPU memory. Do not
+                # make the condition worse by attempting further instances.
+                break
+        else:
+            details = "; ".join(self._init_errors) or "PaddleOCR unavailable"
+            self._model_bundle_load_errors.append(
+                f"Bundle 1 was not added: {details}"
+            )
+
+        self._loaded_model_bundle_count = len(bundles)
+        if bundles:
+            self._model_pool = OcrModelBundlePool(bundles)
+            self._inference_gate = self._model_pool.inference_gate
+        else:
+            self._inference_gate = InferenceCapacityGate(0)
+        self._loaded = True
+
+    def _bundle_signature(self) -> tuple[Any, ...]:
+        """Capabilities that must match before a bundle joins the pool."""
+
+        return (
+            self._paddle_api,
+            self._paddle_version,
+            effective_device(self._configured_device, self._paddle_runtime),
+            self._text_detector_available,
+            self._text_recognizer_available,
+            self._text_orientation_available,
+            self._page_batch_recognition_available,
+        )
+
+    @property
+    def inference_capacity(self) -> int:
+        return self._loaded_model_bundle_count
+
+    @property
+    def inference_gate(self) -> InferenceCapacityGate:
+        return self._inference_gate
+
+    @contextmanager
+    def _lease_model_bundle(
+        self,
+        operation: str,
+    ) -> TypingIterator[OcrPipeline]:
+        model_pool = getattr(self, "_model_pool", None)
+        if model_pool is not None:
+            with model_pool.lease(operation) as bundle:
+                yield bundle
+            return
+        inference_gate = getattr(self, "_inference_gate", None)
+        if inference_gate is None:
+            # Several pure algorithm tests intentionally construct a pipeline
+            # with ``object.__new__`` and attach fake model modules. Production
+            # instances always run __init__ and therefore always have a gate.
+            yield self
+            return
+        with inference_gate.slot(operation):
+            yield self
 
     def _device_kwargs(self) -> dict[str, str]:
         """Pass a device only when the operator explicitly selected one."""
@@ -457,11 +557,46 @@ class OcrPipeline:
             "trocr": False,
             "symbol_vision": True,
             "errors": self._init_errors,
+            "model_pool": {
+                "requested": self._requested_model_bundle_count,
+                "loaded": self._loaded_model_bundle_count,
+                "failed": max(
+                    0,
+                    self._requested_model_bundle_count
+                    - self._loaded_model_bundle_count,
+                ),
+                "load_errors": list(self._model_bundle_load_errors),
+                **(
+                    self._model_pool.status()
+                    if self._model_pool is not None
+                    else {
+                        "loaded_bundles": 0,
+                        "leased_bundles": 0,
+                        "available_bundles": 0,
+                    }
+                ),
+            },
         }
 
     def _predict_3x(self, arr: np.ndarray) -> Any:
         """Run PaddleOCR 3.x; paddle_parse normalizes its Result objects."""
-        return self._paddle.predict(arr)
+        with self._lease_model_bundle("paddleocr_pipeline") as bundle:
+            result = bundle._paddle.predict(arr)
+            return list(result) if isinstance(result, Iterator) else result
+
+    def _predict_2x(self, arr: np.ndarray, *, det: bool) -> Any:
+        """Run PaddleOCR 2.x while preserving its keyword fallback."""
+
+        with self._lease_model_bundle("paddleocr_pipeline") as bundle:
+            try:
+                return (
+                    bundle._paddle.ocr(arr, cls=True)
+                    if det
+                    else bundle._paddle.ocr(arr, det=False, cls=True)
+                )
+            except TypeError:
+                # Older 2.x builds do not accept every optional keyword.
+                return bundle._paddle.ocr(arr)
 
     def _predict_text_detector(self, arr: np.ndarray) -> Any:
         """Run the standalone PaddleOCR detector without recognition."""
@@ -469,12 +604,14 @@ class OcrPipeline:
         # The image has already been deliberately bounded/upscaled by the
         # adaptive caller. Override the model's generic document limit so it
         # does not silently downscale a 2400px engineering drawing again.
-        return self._text_detector.predict(
-            arr,
-            batch_size=1,
-            limit_side_len=max(arr.shape[:2]),
-            limit_type="max",
-        )
+        with self._lease_model_bundle("text_detector") as bundle:
+            result = bundle._text_detector.predict(
+                arr,
+                batch_size=1,
+                limit_side_len=max(arr.shape[:2]),
+                limit_type="max",
+            )
+            return list(result) if isinstance(result, Iterator) else result
 
     def _run_text_detector(
         self,
@@ -527,12 +664,14 @@ class OcrPipeline:
                 "text-line orientation model"
             )
         try:
-            output = list(
-                self._text_orientation.predict(
-                    input=self._module_inputs(images),
-                    batch_size=batch_size,
+            inputs = self._module_inputs(images)
+            with self._lease_model_bundle("text_line_orientation") as bundle:
+                output = list(
+                    bundle._text_orientation.predict(
+                        input=inputs,
+                        batch_size=batch_size,
+                    )
                 )
-            )
         except Exception as exc:
             raise RuntimeError(
                 "PaddleOCR standalone text-line orientation inference failed: "
@@ -560,12 +699,14 @@ class OcrPipeline:
                 "text recognition model"
             )
         try:
-            output = list(
-                self._text_recognizer.predict(
-                    input=self._module_inputs(images),
-                    batch_size=batch_size,
+            inputs = self._module_inputs(images)
+            with self._lease_model_bundle("text_recognizer") as bundle:
+                output = list(
+                    bundle._text_recognizer.predict(
+                        input=inputs,
+                        batch_size=batch_size,
+                    )
                 )
-            )
         except Exception as exc:
             raise RuntimeError(
                 "PaddleOCR standalone text recognition inference failed: "
@@ -777,20 +918,7 @@ class OcrPipeline:
                     ) from exc
             else:
                 try:
-                    result = (
-                        self._paddle.ocr(arr, cls=True)
-                        if det
-                        else self._paddle.ocr(arr, det=False, cls=True)
-                    )
-                except TypeError:
-                    try:
-                        # Older 2.x builds do not accept every optional keyword.
-                        result = self._paddle.ocr(arr)
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"PaddleOCR {self._paddle_version} inference failed "
-                            f"(API {self._paddle_api}, det={det}): {exc}"
-                        ) from exc
+                    result = self._predict_2x(arr, det=det)
                 except Exception as exc:
                     raise RuntimeError(
                         f"PaddleOCR {self._paddle_version} inference failed "
@@ -6446,6 +6574,6 @@ def get_pipeline() -> OcrPipeline:
     global _pipeline
     if _pipeline is None:
         _pipeline = OcrPipeline()
-        _pipeline.load()
+        _pipeline.load(load_runtime_config().ocr_model_instances)
     return _pipeline
 

@@ -18,6 +18,7 @@ export function ScanProgressBanner({
   const percent = Math.max(0, Math.min(100, progress.percent));
   const counter = scanWorkCounter(progress);
   const isStopping = progress.status === "cancelling";
+  const isQueued = progress.status === "queued";
   const isActive =
     progress.status === "queued" ||
     progress.status === "running" ||
@@ -29,6 +30,7 @@ export function ScanProgressBanner({
     isStopping;
   const stageTitle: Record<string, string> = {
     queued: "Queued",
+    waiting: "Waiting for OCR",
     layout: "Analysing page layout",
     preparing: "Preparing scan",
     proposing: "Finding candidate regions",
@@ -72,6 +74,30 @@ export function ScanProgressBanner({
               Candidates {progress.candidateCount}
             </span>
           )}
+          {isQueued && progress.queuePosition !== null && (
+            <span className="tabular-nums">
+              Queue {progress.queuePosition}/{progress.queueDepth}
+            </span>
+          )}
+          {isQueued && (
+            <span className="tabular-nums">
+              Waiting {formatScanDuration(progress.queueWaitSeconds)}
+            </span>
+          )}
+          {isQueued && progress.estimatedQueueWaitSeconds !== null && (
+            <span className="tabular-nums">
+              Estimated wait{" "}
+              {formatScanDuration(progress.estimatedQueueWaitSeconds)}
+            </span>
+          )}
+          {isQueued &&
+            progress.averageQueueWaitSeconds !== null &&
+            progress.queueWaitSamples >= 2 && (
+              <span className="tabular-nums">
+                Recent average wait{" "}
+                {formatScanDuration(progress.averageQueueWaitSeconds)}
+              </span>
+            )}
           <span className="tabular-nums">
             Elapsed {formatScanDuration(progress.elapsedSeconds)}
           </span>
