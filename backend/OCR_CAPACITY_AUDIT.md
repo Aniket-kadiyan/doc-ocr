@@ -1,7 +1,7 @@
 # OCR capacity audit
 
 This note records the backend capacity that QTracX can actually schedule at
-this milestone. It does not describe the planned multi-user scheduler.
+this milestone.
 
 ## Current architecture
 
@@ -15,9 +15,11 @@ this milestone. It does not describe the planned multi-user scheduler.
   when PaddleOCR loaded successfully, and zero when it did not.
 - Paddle/Paddle Inference may use internal compute threads. Those threads can
   accelerate one inference call but do not create additional QTracX job slots.
-- Direct OCR endpoints share the same singleton but do not currently pass
-  through the auto-balloon scan executor. A later scheduler must coordinate
-  all model-using routes rather than only whole-page scans.
+- Every Paddle inference call now passes through one process-wide inference
+  gate. The gate has one slot because the process creates one model bundle.
+- Direct region OCR, title-field reads, reference detection and OCR-assisted
+  PDF text recovery use interactive priority. Auto-balloon jobs use background
+  priority. Image preparation and result parsing remain outside the gate.
 
 ## Runtime evidence
 
@@ -28,7 +30,9 @@ this milestone. It does not describe the planned multi-user scheduler.
 - the scan executor's worker count;
 - running, queued and active scan counts;
 - currently available scan-worker slots; and
-- the resulting effective concurrent auto-balloon slots.
+- the resulting effective concurrent auto-balloon slots; and
+- live inference-gate counts for active calls, available slots and waiting
+  interactive/background work.
 
 The same capacity snapshot is written to the backend log during startup under
 the `ocr_capacity_detected` event. This is diagnostic-only: it does not change
@@ -36,7 +40,7 @@ model loading, OCR results, job ordering, cancellation, or scan concurrency.
 
 ## Scheduler implication
 
-The multi-user scheduler should use model-bundle slots as its limiting
-resource. Adding HTTP workers or executor threads alone must not increase OCR
-concurrency. A future configurable pool must first create and validate the
-requested number of model bundles, then expose that verified count as capacity.
+The scheduler uses model-bundle slots as its limiting resource. Adding HTTP
+workers or executor threads alone does not increase OCR concurrency. A future
+configurable pool must first create and validate the requested number of model
+bundles, then expose that verified count as capacity.

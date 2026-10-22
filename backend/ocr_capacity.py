@@ -24,6 +24,7 @@ AUTO_BALLOON_SCAN_CAPACITY = (
 def build_ocr_capacity_status(
     pipeline_status: Mapping[str, Any],
     scan_executor_status: Mapping[str, Any],
+    inference_gate_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Combine model and executor facts into one stable health payload."""
 
@@ -49,6 +50,19 @@ def build_ocr_capacity_status(
         model_bundle_slots * OCR_CONCURRENT_SCANS_PER_BUNDLE
     )
     effective_slots = min(inference_slots, worker_threads)
+    gate_status = dict(
+        inference_gate_status
+        or {
+            "configured_slots": AUTO_BALLOON_SCAN_CAPACITY,
+            "active_calls": 0,
+            "available_slots": AUTO_BALLOON_SCAN_CAPACITY,
+            "waiting_interactive": 0,
+            "waiting_background": 0,
+            "peak_active_calls": 0,
+            "total_acquisitions": 0,
+            "active_operations": {},
+        }
+    )
 
     return {
         "architecture": "single_process_singleton",
@@ -68,12 +82,15 @@ def build_ocr_capacity_status(
             **dict(scan_executor_status),
             "effective_concurrent_slots": effective_slots,
         },
+        "inference_gate": gate_status,
         "direct_ocr_requests": {
             "share_model_bundle": True,
             "controlled_by_scan_executor": False,
+            "controlled_by_inference_gate": True,
         },
         "capacity_basis": (
-            "one concurrent auto-balloon scan per scan worker and ready "
-            "singleton model bundle"
+            "one concurrent Paddle inference call per ready singleton model "
+            "bundle; interactive calls are preferred between background "
+            "scan calls"
         ),
     }

@@ -14,6 +14,7 @@ import math
 import os
 import re
 from enum import Enum
+from functools import partial
 from time import perf_counter
 from typing import Any
 
@@ -49,6 +50,7 @@ from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
+from inference_gate import get_inference_gate, inference_priority
 from ocr_capacity import (
     AUTO_BALLOON_SCAN_CAPACITY,
     build_ocr_capacity_status,
@@ -143,6 +145,7 @@ async def request_diagnostics(request: Request, call_next):
 # from HTTP thread count. The current singleton pipeline therefore provides
 # one auto-balloon scan slot for all LAN users.
 scan_job_manager = ScanJobManager(max_workers=AUTO_BALLOON_SCAN_CAPACITY)
+inference_gate = get_inference_gate()
 page_layout_cache = PageLayoutCache(max_entries=8)
 MAX_EXISTING_VALUE_BOXES = 5000
 
@@ -277,6 +280,7 @@ def startup() -> None:
     capacity = build_ocr_capacity_status(
         pipeline.status,
         scan_job_manager.capacity_status(),
+        inference_gate.status(),
     )
     logger.info(
         "OCR capacity detected",
@@ -309,6 +313,7 @@ def health() -> dict[str, Any]:
     capacity = build_ocr_capacity_status(
         pipeline.status,
         scan_job_manager.capacity_status(),
+        inference_gate.status(),
     )
     return {
         "status": "ok",
@@ -412,11 +417,14 @@ async def recognize_region(
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = debug_dump_force or (x_debug_dump_force or "").strip().lower() in truthy
-    result = pipeline.recognize(
-        image,
-        image_bytes=raw,
-        debug_dump=req_dump,
-        debug_dump_force=req_force,
+    result = await run_in_threadpool(
+        partial(
+            pipeline.recognize,
+            image,
+            image_bytes=raw,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+        )
     )
     dim_type = result.get("type") or classify_dimension(result["text"]).value
 
@@ -482,11 +490,14 @@ async def segment_region(
 
     title_keywords = [k.strip() for k in keywords.split(",") if k.strip()]
 
-    seg = pipeline.segment(
-        image,
-        debug_dump=req_dump,
-        debug_dump_force=req_force,
-        title_keywords=title_keywords,
+    seg = await run_in_threadpool(
+        partial(
+            pipeline.segment,
+            image,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+            title_keywords=title_keywords,
+        )
     )
 
     return _serialize_segment_result(seg)
@@ -882,8 +893,14 @@ async def create_scan_job(
             )
         return _serialize_segment_result(seg)
 
+    def run_background_scan(
+        report_progress: ProgressReporter,
+    ) -> dict[str, Any]:
+        with inference_priority("background"):
+            return run_scan(report_progress)
+
     return scan_job_manager.submit(
-        run_scan,
+        run_background_scan,
         owner_id=authenticated.user.id,
         metadata={
             "scope_kind": scope_kind,
@@ -1052,7 +1069,14 @@ async def read_pdf_text_layer(
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
 
     try:
-        result = text_layer_regions(data, page - 1, dpi=72.0 * render_scale)
+        result = await run_in_threadpool(
+            partial(
+                text_layer_regions,
+                data,
+                page - 1,
+                dpi=72.0 * render_scale,
+            )
+        )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")
     except Exception as error:  # a damaged or non-PDF upload
@@ -1101,7 +1125,11 @@ async def read_title_fields(
 
     raw = await file.read()
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    fields = get_pipeline().title_fields(image, wanted)
+    fields = await run_in_threadpool(
+        get_pipeline().title_fields,
+        image,
+        wanted,
+    )
 
     return {
         "fields": [

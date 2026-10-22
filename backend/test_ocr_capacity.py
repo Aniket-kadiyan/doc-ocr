@@ -41,7 +41,30 @@ def test_ready_singleton_reports_one_effective_scan_slot() -> None:
     assert status["direct_ocr_requests"] == {
         "share_model_bundle": True,
         "controlled_by_scan_executor": False,
+        "controlled_by_inference_gate": True,
     }
+    assert status["inference_gate"]["configured_slots"] == 1
+    assert status["inference_gate"]["available_slots"] == 1
+
+
+def test_health_uses_live_inference_gate_counts() -> None:
+    gate = {
+        "configured_slots": 1,
+        "active_calls": 1,
+        "available_slots": 0,
+        "waiting_interactive": 2,
+        "waiting_background": 1,
+        "peak_active_calls": 1,
+        "total_acquisitions": 9,
+        "active_operations": {"text_recognizer": 1},
+    }
+    status = build_ocr_capacity_status(
+        {"paddleocr": True, "ocr_device_effective": "gpu:0"},
+        {"worker_threads": 1},
+        gate,
+    )
+
+    assert status["inference_gate"] == gate
 
 
 def test_unavailable_pipeline_reports_zero_effective_slots() -> None:

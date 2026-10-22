@@ -37,6 +37,9 @@ reset when the backend restarts, which is appropriate while QTracX runs as one
 backend process. A later deployment milestone must prevent multiple independent
 web-server processes from each creating an uncoordinated model and queue.
 
-Manual region OCR, title-field reads and reference detection still share the
-same model bundle without entering this auto-balloon queue. They should be put
-behind the common model-capacity gate in the next scheduler sub-milestone.
+Manual region OCR, title-field reads, reference detection and OCR-assisted PDF
+text recovery do not enter the auto-balloon job queue, but their Paddle calls
+now share its process-wide model-capacity gate. Interactive calls are admitted
+before a waiting background call whenever the single model slot is released.
+This keeps the existing FIFO auto-balloon queue intact while preventing direct
+requests from running the same Paddle bundle concurrently.
