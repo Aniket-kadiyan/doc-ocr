@@ -251,8 +251,13 @@ def test_short_exact_values_are_callouts_not_fragments():
         for region in text_layer_regions(SYMBOLS_AS_GEOMETRY)["regions"]
     }
 
-    for value in ("7.3", "3MIN", "(25)", "(0.2)", "0.2", "Ø0.5A B C"):
+    for value in ("7.3", "3MIN", "(25)", "(0.2)"):
         assert value in values, value
+    # The values of this sheet's feature control frames are published inside
+    # their frames, with the symbols and modifiers the text layer cannot hold,
+    # rather than as bare numbers.
+    assert "⌓ 0.2 Ⓤ" in values and "⌖ Ø0.5 A B C" in values
+    assert "0.2" not in values and "Ø0.5A B C" not in values
     # A numbered note leaves lone digits behind; they are not callouts.
     assert "1" not in values and "2" not in values and "3" not in values
 
@@ -396,3 +401,207 @@ def test_no_value_on_a_crowded_sheet_is_lost_to_its_neighbours():
     assert not [
         text for text in by_text if any(0x7F <= ord(c) <= 0x9F for c in text)
     ]
+
+
+# ── Notes, page geometry and edges ────────────────────────────────────────
+# Hand-built PDFs (standard Helvetica, no fonts embedded) so the CropBox,
+# MediaBox and /Rotate are exactly what the test says. Every box is checked
+# against where the text actually renders, which is the ground truth the
+# client draws balloons on.
+
+
+def _tiny_pdf(texts, media=(0, 0, 600, 400), crop=None, rotate=0):
+    """One page; ``texts`` is a list of (x, y, size, text) in PDF user space."""
+    crop = crop or media
+    stream = "".join(
+        f"BT /F1 {size} Tf {x} {y} Td ({text}) Tj ET\n" for x, y, size, text in texts
+    ).encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [{' '.join(map(str, media))}] "
+            f"/CropBox [{' '.join(map(str, crop))}] /Rotate {rotate} "
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ).encode(),
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out, offsets = bytearray(b"%PDF-1.7\n"), []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
+def _ink_box(pdf, dpi):
+    import numpy as np
+    import pypdfium2 as pdfium
+
+    image = pdfium.PdfDocument(pdf)[0].render(scale=dpi / 72).to_pil().convert("L")
+    ys, xs = np.nonzero(np.asarray(image) < 128)
+    return xs.min(), ys.min(), xs.max(), ys.max()
+
+
+@pytest.mark.parametrize(
+    "media, crop, rotate",
+    [
+        ((0, 0, 600, 400), None, 0),
+        # A CropBox that does not start at the origin.
+        ((0, 0, 800, 600), (100, 150, 700, 550), 0),
+        # A MediaBox below zero, as 129E01-13300-ID.pdf has: every box landed
+        # 1197pt too low, the lower ones off the page entirely.
+        ((0, -400, 600, 0), None, 0),
+        ((0, 0, 600, 400), None, 90),
+        ((0, 0, 600, 400), None, 180),
+        ((0, 0, 800, 600), (100, 150, 700, 550), 270),
+    ],
+)
+def test_text_boxes_sit_on_their_ink_whatever_the_page_geometry(media, crop, rotate):
+    origin = crop or media
+    pdf = _tiny_pdf([(origin[0] + 10, origin[1] + 10, 12, "CORNER NOTE")], media, crop, rotate)
+    (run_,) = page_text_runs(pdf, 0, dpi=144)[0]
+    x0, y0, x1, y1 = _ink_box(pdf, 144)
+    assert abs(run_.x - x0) <= 2 and abs(run_.y - y0) <= 2
+    assert abs(run_.x + run_.width - x1) <= 2 and abs(run_.y + run_.height - y1) <= 2
+    # The reading direction on the rendered page, clockwise like pdfium.
+    assert run_.angle == rotate
+
+
+@pytest.mark.parametrize("corner", ["bottom-left", "bottom-right", "top-left", "top-right"])
+def test_a_note_in_any_corner_is_published_with_its_box_on_the_page(corner):
+    width, height = 842, 595
+    note = ["REMOVE ALL BURRS AND SHARP EDGES.", "BREAK ALL EDGES 0.2 MAX.", "UNLESS OTHERWISE SPECIFIED."]
+    left = 6 if "left" in corner else width - 230
+    top = height - 8 if "top" in corner else 8 + 2 * 11
+    texts = [(left, top - 11 * i - 8, 9, line) for i, line in enumerate(note)]
+    pdf = _tiny_pdf(texts, media=(0, 0, width, height))
+
+    result = text_layer_regions(pdf, dpi=108, recover_symbols=False)
+    notes = [r for r in result["regions"] if r["category"] == "General Note"]
+    assert [n["text"] for n in notes] == ["\n".join(note)]
+    box = notes[0]["bbox"]
+    page_w, page_h = result["page_size"]
+    assert box["x"] >= 0 and box["y"] >= 0
+    assert box["x"] + box["width"] <= page_w and box["y"] + box["height"] <= page_h
+    # The box is the note's, not the page's.
+    assert box["width"] * box["height"] < 0.05 * page_w * page_h
+    # Nothing inside the note is ballooned as a dimension on its own.
+    assert not any("0.2" in r["text"] for r in result["regions"] if r is not notes[0])
+
+
+def test_note_lines_keep_their_line_boxes_for_audit():
+    pdf = _tiny_pdf([(40, 60, 9, "1. PART TO BE LEAK TESTED."), (40, 49, 9, "2. PART TO BE DRY.")])
+    (note,) = [r for r in text_layer_regions(pdf, dpi=108, recover_symbols=False)["regions"] if r["category"] == "General Note"]
+    assert [line["text"] for line in note["lines"]] == ["1. PART TO BE LEAK TESTED.", "2. PART TO BE DRY."]
+    assert note["raw_text"] == note["text"]
+    assert note["provenance"][0]["engine"] == "pdf-text-layer"
+
+
+def test_labels_are_accounted_for_but_not_ballooned():
+    pdf = _tiny_pdf([(40, 300, 10, "SECTION VIEW A-A"), (300, 200, 10, "25.4")])
+    result = text_layer_regions(pdf, dpi=108, recover_symbols=False)
+    assert [r["text"] for r in result["regions"]] == ["25.4"]
+    assert [b["text"] for b in result["text_blocks"]] == ["SECTION VIEW A-A"]
+
+
+@pytest.mark.skipif(not SYMBOLS_AS_GEOMETRY.exists(), reason="sample drawing not present")
+def test_every_note_on_a_real_vector_drawing_is_read_whole():
+    # 3015-100-2232F carries three notes: a numbered block in the bottom-left
+    # corner, a five-line paragraph on the right and a sentence across the
+    # top. None reached the client before: prose was excluded, and only the
+    # OCR route, which never runs on a vector PDF, looked for notes at all.
+    result = text_layer_regions(SYMBOLS_AS_GEOMETRY, dpi=108, recover_symbols=False)
+    notes = {r["text"]: r for r in result["regions"] if r["category"] == "General Note"}
+    assert set(notes) == {
+        "DIMENSIONS IN ( ) ARE FOR REFERENCE ONLY AND DO NOT NEED TO BE MEASURED",
+        "ALL DRAWINGS OF CAST /\nMACHINED COMPONENTS TO BE\nSUPPLIED WITH 3D MODEL\n"
+        "FOR IDENTIFICATION OF ALL\nPROFILE DIMENSIONS.",
+        "1. CLEANLINESS REQUIREMENT TO BE FREE FROM DIRT AND\nOILS.\n"
+        "2. PART TO BE LEAK TESTED @3Bar FOR 30Secs\n2. PART TO BE DRY\n"
+        "3. MATERIAL STAINLESS STEEL 304L THICKNESS 3mm MIN",
+    }
+    corner = next(r for t, r in notes.items() if t.startswith("1."))
+    # The drawing itself writes "2 PART" and "3 MATERIAL" with no dot.
+    assert "\n2 PART TO BE DRY\n3 MATERIAL" in corner["raw_text"]
+    page_w, page_h = result["page_size"]
+    assert corner["bbox"]["x"] < 0.1 * page_w and corner["bbox"]["y"] > 0.85 * page_h
+
+
+def _pdf_with_image(texts, image_rect, size=(600, 400)):
+    """A vector page with text, plus one embedded grey picture at ``image_rect`` (x, y, w, h in pt)."""
+    width, height = 40, 20
+    pixels = bytes([90] * (width * height))
+    x, y, w, h = image_rect
+    content = (
+        f"q {w} 0 0 {h} {x} {y} cm /Im1 Do Q\n"
+        + "".join(f"BT /F1 {s} Tf {tx} {ty} Td ({t}) Tj ET\n" for tx, ty, s, t in texts)
+    ).encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size[0]} {size[1]}] "
+            "/Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>"
+        ).encode(),
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        (
+            f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+            f"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length {len(pixels)} >>\nstream\n"
+        ).encode()
+        + pixels
+        + b"\nendstream",
+    ]
+    out, offsets = bytearray(b"%PDF-1.7\n"), []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+def test_a_picture_on_a_vector_page_is_read_for_the_notes_inside_it(monkeypatch):
+    # A mixed page: vector dimensions, and a pasted picture of a notes block
+    # that the text layer cannot see into. Only the picture is OCR'd, and
+    # what it finds comes back at its place on the page.
+    import ocr_pipeline
+    from pdf_text_layer import _image_area_notes, page_image_boxes
+
+    pdf = _pdf_with_image([(400, 300, 10, "25.4")], image_rect=(50, 40, 200, 100))
+    (box,) = page_image_boxes(pdf, 0, dpi=144)
+    # 50pt from the left, 40pt above the bottom of a 400pt page, at 2px/pt.
+    assert box == pytest.approx({"x": 100, "y": 520, "width": 400, "height": 200}, abs=1)
+
+    seen = []
+
+    class FakePipeline:
+        def _notes_regions(self, crop):
+            seen.append(crop.size)
+            return [{"text": "1. PICTURED NOTE", "bbox": {"x": 10, "y": 20, "width": 100, "height": 30},
+                     "lines": [{"text": "1. PICTURED NOTE", "bbox": {"x": 10, "y": 20, "width": 100, "height": 30}}],
+                     "category": "General Note", "type": "General Note", "confidence": 0.97}]
+
+    monkeypatch.setattr(ocr_pipeline, "get_pipeline", lambda: FakePipeline())
+    runs = page_text_runs(pdf, 0, dpi=144)[0]
+    (note,) = _image_area_notes(pdf, 0, runs, dpi=144)
+    assert seen == [(400, 200)]
+    assert note["bbox"]["x"] == 110 and note["bbox"]["y"] == 540
+    assert note["lines"][0]["bbox"]["x"] == 110
+    assert note["provenance"][0]["engine"] == "paddleocr"
+
+    # A picture the native text already sits on is not read again.
+    covered = _pdf_with_image([(60, 80, 10, "NATIVE LABEL")], image_rect=(50, 40, 200, 100))
+    seen.clear()
+    assert _image_area_notes(covered, 0, page_text_runs(covered, 0, dpi=144)[0], dpi=144) == []
+    assert seen == []

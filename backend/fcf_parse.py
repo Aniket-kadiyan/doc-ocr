@@ -503,13 +503,24 @@ def _frame_segments(
             aspect = ((x1 - x0) / max(y1 - y0, 1)) * segment_count
             if not (cfg.frame_min_aspect <= aspect <= cfg.frame_max_aspect):
                 continue
-            coverage = (crop > 0).mean(axis=0)
-            end = max(1, min(tol, coverage.size // 4))
-            box = (x0, y0, x1 - x0, y1 - y0)
-            if coverage[:end].max() >= SIDE_SPAN and coverage[-end:].max() >= SIDE_SPAN:
-                strong.append(box)
+            # The side rules are looked for a little past the horizontal
+            # rules' ends as well as inside them. A rule's last pixel merges
+            # into the corner, so its measured extent can stop a pixel short
+            # of the side rule it meets: a hairline frame from a vector PDF
+            # had its left side one pixel outside and was rejected. The box
+            # is snapped to the side found.
+            wx0 = max(0, x0 - tol)
+            wx1 = min(binary.shape[1], x1 + tol)
+            coverage = (binary[y0:y1, wx0:wx1] > 0).mean(axis=0)
+            end = max(1, min(tol, (x1 - x0) // 4))
+            left = coverage[: (x0 - wx0) + end]
+            right = coverage[(x1 - wx0) - end :]
+            if left.size and right.size and left.max() >= SIDE_SPAN and right.max() >= SIDE_SPAN:
+                sx0 = wx0 + int(np.flatnonzero(left >= SIDE_SPAN)[0])
+                sx1 = (x1 - end) + int(np.flatnonzero(right >= SIDE_SPAN)[-1]) + 1
+                strong.append((sx0, y0, sx1 - sx0, y1 - y0))
             else:
-                weak.append(box)
+                weak.append((x0, y0, x1 - x0, y1 - y0))
 
     # A segment of a composite stack whose own side rule broke in the scan is
     # still bounded by the sides of the segments above and below it.
@@ -617,7 +628,11 @@ def erase_rules(frame_image: Image.Image) -> Image.Image:
     if cv2 is None:
         return frame_image
     gray = to_gray(frame_image)
-    binary = binarize(gray)
+    # Read for structure (``clean=False``), like the frame finder: a vector
+    # frame's rules are hairlines, the glyph-reading binarization's median
+    # erases them, and an unerased top rule left in the symbol crop made a
+    # profile symbol unreadable whenever the frame box included that row.
+    binary = binarize(gray, clean=False)
     h, w = binary.shape[:2]
     if h < 6 or w < 6:
         return frame_image
@@ -657,7 +672,8 @@ def split_segments(frame_image: Image.Image) -> list[tuple[int, int, int, int]]:
     if cv2 is None:
         return []
     gray = to_gray(frame_image)
-    binary = binarize(gray)
+    # Structure, so read without the glyph median (see erase_rules).
+    binary = binarize(gray, clean=False)
     h, w = binary.shape[:2]
     if h < 8 or w < 8:
         return [(0, 0, w, h)]
@@ -688,7 +704,9 @@ def split_compartments(
     """
     if cv2 is None:
         return []
-    return _compartment_cells(binarize(to_gray(frame_image)))
+    # Structure: a divider drawn as a one-pixel hairline is erased by the glyph
+    # binarization's median, and the frame comes back as one compartment.
+    return _compartment_cells(binarize(to_gray(frame_image), clean=False))
 
 
 #: Narrowest a compartment can be, as a fraction of the frame's height. ASME
@@ -959,6 +977,19 @@ def _for_ocr(cell: Image.Image) -> Image.Image:
     )
 
 
+#: A modifier's ring is about as wide as it is tall; narrower than this (width
+#: over height, either way up) is a digit or a letter, not a ring.
+MODIFIER_MIN_ROUNDNESS = 0.8
+
+#: A frame whose symbol was not identified is kept, unresolved, when its first
+#: cell's best template score reaches this. Below it the cell holds nothing
+#: like a characteristic and the box is not a frame.
+UNRESOLVED_SYMBOL_MIN_SCORE = 0.4
+
+#: The recogniser's confidence a letter read inside a ring needs before it is
+#: offered to the classifier as evidence.
+RING_LETTER_MIN_CONFIDENCE = 0.8
+
 #: A modifier follows the value, so an unidentified ring counts as a possible
 #: modifier only in this trailing fraction of the tolerance compartment.
 MODIFIER_TRAILING_FRAC = 0.4
@@ -1056,10 +1087,56 @@ class ModifierFind:
     #: Best guesses for an unresolved mark, for the operator to arbitrate.
     candidates: list[str] = field(default_factory=list)
     note: str | None = None
+    #: Where the modifier (or unresolved mark) sits in the compartment, as
+    #: (x, y, w, h) in the compartment crop's pixels.
+    bbox: tuple[int, int, int, int] | None = None
+    #: The letter read inside the ring, when one was read.
+    letter: str | None = None
+
+
+def ring_interior(crop: Image.Image) -> Image.Image | None:
+    """
+    What a ring encloses, with the ring itself blanked out.
+
+    The ring is the ink touching the glyph box's edge; everything else is
+    inside it. Taken by structure rather than by a fixed inset, because the
+    ring's stroke and the gap to the letter vary with the drawing and the
+    render: a fixed inset read a circled U as "U" at 18% and "11" at 26%.
+    Returns None when nothing sits inside, or the mark is not a closed ring
+    around something.
+    """
+    if cv2 is None:
+        return None
+    gray = to_gray(crop)  # ink white on black
+    _, ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    h, w = ink.shape
+    ring = np.zeros_like(ink, dtype=bool)
+    inner: list[int] = []
+    for index in range(1, count):
+        x, y, bw, bh, area = (int(v) for v in stats[index])
+        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
+            ring |= labels == index
+        elif area >= 4:
+            inner.append(index)
+    if not inner or not ring.any():
+        return None
+    xs = [int(stats[i][0]) for i in inner] + [int(stats[i][0] + stats[i][2]) for i in inner]
+    ys = [int(stats[i][1]) for i in inner] + [int(stats[i][1] + stats[i][3]) for i in inner]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    blank = np.array(crop.convert("RGB"))
+    blank[ring] = 255
+    pad = max(2, (y1 - y0) // 4)
+    left, top = max(0, x0 - pad), max(0, y0 - pad)
+    right, bottom = min(w, x1 + pad), min(h, y1 + pad)
+    return Image.fromarray(blank[top:bottom, left:right])
 
 
 def _find_modifier_visually(
-    cell: Image.Image, *, config: GdtConfig | None = None
+    cell: Image.Image,
+    *,
+    config: GdtConfig | None = None,
+    ocr_fn: OcrFn | None = None,
 ) -> ModifierFind:
     """Look for a circled modifier in a compartment by shape, not by text.
 
@@ -1086,16 +1163,40 @@ def _find_modifier_visually(
     # step is told to measure its size cap against a notional page rather than
     # against this small crop.
     page_edge = max(cell.height * 12, 256)
+    unrivalled_box: tuple[int, int, int, int] | None = None
+    unrivalled_letter: str | None = None
     for x, y, w, h in find_glyph_boxes(cell, config=cfg, page_edge=page_edge):
         crop = cell.crop((x, y, x + w, y + h))
+        # A modifier is drawn as a circle; a digit 0 is a tall oval. Without
+        # this the trailing zero of "Ø0.02" (16×26px) was reported as a
+        # modifier that could not be read, and the frame went to review.
+        round_mark = MODIFIER_MIN_ROUNDNESS <= w / max(h, 1) <= 1 / MODIFIER_MIN_ROUNDNESS
+        if not round_mark:
+            continue
+        # A circled modifier is identified by the letter in its ring, which
+        # is the registry's circled-letter strategy. Template matching alone
+        # cannot do it on a hairline drawing: the templates are bold, the
+        # letter sits at a different size inside the ring, and a vector
+        # PDF's Ⓤ scored 0.07 against its own template, under every bar.
+        # The letter is read with the frame's own recogniser and handed to
+        # the classifier as "(U)" — what was seen, a letter in an enclosure —
+        # so the registry still decides, and still says how sure it is.
+        letter = _read_ring_letter(crop, ocr_fn) if ocr_fn is not None else None
         try:
-            det = classify_crop(crop, allowed=_COMPARTMENT_MODIFIERS, config=cfg)
+            det = classify_crop(
+                crop,
+                allowed=_COMPARTMENT_MODIFIERS,
+                config=cfg,
+                ocr_text=f"({letter})" if letter else None,
+            )
         except Exception:  # noqa: BLE001
             continue
         if det.symbol_id is not None and det.status == STATUS_CONFIRMED:
             if det.confidence > found.confidence:
                 found.symbol_id = det.symbol_id
                 found.confidence = det.confidence
+                found.bbox = (x, y, w, h)
+                found.letter = letter
             continue
         # Nothing confident. Was it at least ring-shaped — i.e. is there
         # something here that a modifier would explain? Only where a
@@ -1127,6 +1228,8 @@ def _find_modifier_visually(
             and det.confidence > (unrivalled[1] if unrivalled else 0.0)
         ):
             unrivalled = (det.symbol_id, det.confidence)
+            unrivalled_box = (x, y, w, h)
+            unrivalled_letter = letter
             continue
         if family.startswith("ring") and trailing and not found.unresolved:
             ranked = [det.symbol_id, *(a.symbol_id for a in det.alternatives)]
@@ -1134,17 +1237,39 @@ def _find_modifier_visually(
             found.candidates = [
                 s for s in ranked if s in _COMPARTMENT_MODIFIERS
             ][:4]
+            found.bbox = (x, y, w, h)
+            found.letter = letter
             found.note = (
                 f"a ring-shaped mark {w}×{h}px sits in the tolerance "
-                "compartment but is too small to identify; it may be a "
-                "material-condition modifier"
+                "compartment but could not be identified"
+                + (f" (the letter inside read as {letter!r})" if letter else "")
+                + "; it may be a modifier"
             )
     if found.symbol_id is None and unrivalled is not None:
         found.symbol_id, found.confidence = unrivalled
         found.unresolved = False
         found.candidates = []
         found.note = None
+        found.bbox = unrivalled_box
+        found.letter = unrivalled_letter
     return found
+
+
+def _read_ring_letter(crop: Image.Image, ocr_fn: OcrFn) -> str | None:
+    """The single letter inside a ring, or None when it does not read as one."""
+    from gdt_detect import CIRCLED_LETTERS
+
+    interior = ring_interior(crop)
+    if interior is None or min(interior.size) < 4:
+        return None
+    try:
+        text, confidence = ocr_fn(_for_ocr(interior))
+    except Exception:  # noqa: BLE001 - an unreadable letter is just unread
+        return None
+    letter = re.sub(r"[^A-Za-z]", "", text or "").upper()
+    if letter in CIRCLED_LETTERS and confidence >= RING_LETTER_MIN_CONFIDENCE:
+        return letter
+    return None
 
 
 def parse_datum_compartment(
@@ -1321,13 +1446,39 @@ def parse_frame(
     )
     first.detection = frame.symbol
 
+    # A ruled frame whose first cell holds a mark that resembles a
+    # characteristic without reaching the accept bar is kept, unresolved,
+    # with its closest readings. Dropping it lost the whole callout: a runout
+    # frame "↗ | 0.15 | A" whose thin shaft scored 0.46 against its template
+    # disappeared, tolerance and datum with it. An empty or unlike cell is
+    # still turned away, which is what keeps table cells out.
+    if frame.symbol is not None and frame.symbol.symbol_id is None:
+        from gdt_detect import score_candidates
+
+        try:
+            closest = score_candidates(
+                to_gray(symbol_crop), [s.id for s in reg.FRAME_CHARACTERISTICS], config=cfg
+            )[:3]
+        except Exception:  # noqa: BLE001
+            closest = []
+        if closest and closest[0].score >= UNRESOLVED_SYMBOL_MIN_SCORE:
+            frame.symbol.alternatives = closest
+            frame.symbol.warnings.append(
+                "symbol not identified; closest readings: "
+                + ", ".join(f"{c.symbol_id} {c.score:.2f}" for c in closest)
+            )
+
     if frame.symbol is None or frame.symbol.status == STATUS_UNKNOWN:
         frame.warnings.append(
             "no geometric characteristic symbol could be read from the first "
             "compartment — this may not be a feature control frame"
         )
-        frame.tolerance = Field.unreadable()
-        return frame
+        # Nothing like a characteristic: not a frame, and not worth the OCR
+        # of its other cells. A mark left unresolved with real candidates is
+        # read on, so its tolerance and datums reach the reviewer.
+        if frame.symbol is None or not frame.symbol.alternatives:
+            frame.tolerance = Field.unreadable()
+            return frame
 
     for index in range(1, len(cells)):
         read_cell(index)
@@ -1363,7 +1514,34 @@ def parse_frame(
                 )
 
         if parsed["material_condition"] is None:
-            visual = _find_modifier_visually(modifier_crop, config=cfg)
+            visual = _find_modifier_visually(modifier_crop, config=cfg, ocr_fn=ocr_fn)
+            # A modifier the text read swallowed: OCR read "0.2Ⓤ" as "0.20",
+            # taking the ring for a trailing zero. Right here only by luck —
+            # "1Ⓤ" would come back as 10. Once the glyph is located, the value
+            # is read again from the part of the compartment before it, and
+            # that reading is preferred when it parses; the first stays as raw.
+            if (
+                visual.bbox is not None
+                and ocr_fn is not None
+                and (visual.symbol_id is not None or visual.unresolved)
+            ):
+                offset = tol_crop.width - modifier_crop.width
+                cut = offset + visual.bbox[0]
+                if cut >= 0.3 * tol_crop.width:
+                    try:
+                        text, conf = ocr_fn(_for_ocr(tol_crop.crop((0, 0, cut, tol_crop.height))))
+                    except Exception:  # noqa: BLE001
+                        text, conf = "", 0.0
+                    reread = parse_tolerance_compartment(text, conf)
+                    if reread["value"] is not None:
+                        if reread["value"] != parsed["value"]:
+                            frame.warnings.append(
+                                f"tolerance re-read without the modifier glyph as "
+                                f"{text!r} (whole compartment read {tol_cell.text!r})"
+                            )
+                        parsed["value"] = reread["value"]
+                        parsed["confidence"] = reread["confidence"]
+                        parsed["diameter_zone"] = parsed["diameter_zone"] or reread["diameter_zone"]
             if visual.symbol_id is not None:
                 if visual.symbol_id in {"mmc", "lmc", "rfs"}:
                     parsed["material_condition"] = visual.symbol_id
@@ -1545,7 +1723,7 @@ def parse_frames(
             # band of a merged box is not the segment the finder judged.
             if bh < min_height or bw < cfg.frame_min_width_px:
                 continue
-            band = binarize(to_gray(crop.crop((bx, by, bx + bw, by + bh))))
+            band = binarize(to_gray(crop.crop((bx, by, bx + bw, by + bh))), clean=False)
             cells = _compartment_cells(band)
             if not (FRAME_CELL_COUNT[0] <= len(cells) <= FRAME_CELL_COUNT[1]):
                 continue
@@ -1584,7 +1762,11 @@ def parse_frames(
                     )
                 )
                 continue
-            if frame.symbol is None or frame.symbol.symbol_id is None:
+            # Kept when its symbol was identified, or when it was left
+            # unresolved with real candidates (see parse_frame).
+            if frame.symbol is None or (
+                frame.symbol.symbol_id is None and not frame.symbol.alternatives
+            ):
                 continue
             frames.append(frame)
 

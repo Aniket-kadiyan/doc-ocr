@@ -149,6 +149,25 @@ describe("scan result coordinate mapping", () => {
     expect(mapped.valueBox).toEqual({ x: 0, y: 0, width: 1000, height: 700 });
   });
 
+  it("cuts a box overhanging the page edge back to the page", () => {
+    // A note in the bottom-left corner: its padded box reaches a few pixels
+    // past the left and bottom edges. It used to be replaced by the whole
+    // page, which put the balloon in the middle of the sheet.
+    const [mapped] = mapPageSegmentRegions(
+      [
+        {
+          bbox: { x: -4, y: 640, width: 300, height: 64 },
+          text: "1. MATERIAL MUST BE FREE FROM CRACK.",
+          confidence: 1,
+          type: "General Note",
+        },
+      ],
+      { x: 0, y: 0, width: 1000, height: 700 }
+    );
+
+    expect(mapped.valueBox).toEqual({ x: 0, y: 640, width: 296, height: 60 });
+  });
+
   it("preserves post-scan review identity and reason", () => {
     const [mapped] = mapPageSegmentRegions(
       [

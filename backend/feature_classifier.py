@@ -425,3 +425,24 @@ def classify_feature(
     feat.category = fd.CAT_NOTE
     feat.label = _label_for(feat)
     return feat
+
+
+def apply_rule_labels(region: dict[str, Any]) -> bool:
+    """
+    Give a published region the rule engine's category, subtype and label.
+
+    Only where it has none: a region that already carries a label (a feature
+    control frame's "GD&T Position", a notes block's "General Notes") keeps
+    it. Returns True when the labels were filled here. An empty text gets
+    no label, which is what the rules say for it.
+    """
+    text = str(region.get("text") or "").strip()
+    if not text or str(region.get("label") or "").strip():
+        return False
+    symbols = region.get("symbols_detected")
+    feature = classify_feature(text, symbols=symbols if isinstance(symbols, dict) else None)
+    if not region.get("category"):
+        region["category"] = feature.category
+        region["subtype"] = feature.subtype
+    region["label"] = feature.label
+    return bool(feature.label)

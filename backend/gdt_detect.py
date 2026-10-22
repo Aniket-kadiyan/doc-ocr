@@ -261,6 +261,122 @@ def despeckle(binary: np.ndarray, *, max_floor: float | None = None) -> np.ndarr
     return out
 
 
+#: On a clean crop, ink is anything at least this share of the darkest ink
+#: (and at least this absolute level, out of 255).
+HAIRLINE_INK_FRACTION = 0.25
+HAIRLINE_MIN_INK = 32
+
+#: A piece of ink the median kept at least this share of is left as it is.
+HAIRLINE_KEPT_WHOLE = 0.9
+
+#: A piece of ink the median erased is given back to a glyph read unless it
+#: spans this share of the crop's width or height: then it is a leader or a
+#: border running through the crop, not part of the glyph.
+HAIRLINE_SPAN_FRACTION = 0.9
+
+
+def _restore_hairline_marks(filtered: np.ndarray, raw: np.ndarray) -> np.ndarray:
+    """
+    Give a glyph read back the hairline marks the median erased.
+
+    Per piece of ink, not per crop: a vector frame's tolerance cell holds
+    bold digits beside a hairline Ⓤ, and judged as a whole the median kept
+    "most" of the ink while erasing the ring entirely. A piece the median did
+    not keep whole comes back — unless it runs across the crop, which is what
+    a leader or border does, and what the median removing kept a real drawn
+    ◎ boxed to its own ink (given back, it was boxed to the whole crop and
+    scored 0.006 against its own template).
+    """
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (raw > 0).astype(np.uint8), connectivity=8
+    )
+    h, w = raw.shape[:2]
+    out = filtered.copy()
+    for index in range(1, count):
+        x, y, bw, bh, area = (int(v) for v in stats[index])
+        if area < 4:
+            continue
+        if bw >= HAIRLINE_SPAN_FRACTION * w or bh >= HAIRLINE_SPAN_FRACTION * h:
+            continue
+        member = labels == index
+        # Restored unless the median kept it nearly whole: a ring the median
+        # cut into arcs is still a ring cut into arcs if it kept 60% of it.
+        if (filtered[member] > 0).mean() >= HAIRLINE_KEPT_WHOLE:
+            continue
+        out[member] = 255
+    return out
+
+#: Share of ink pixels with no inked neighbour at all above which an image is
+#: treated as grainy. A clean render or a decent scan has almost none — every
+#: pixel of a stroke, however thin, touches the next one — while sensor noise
+#: is mostly lone pixels.
+GRAIN_ISOLATED_FRACTION = 0.02
+
+
+#: A clean render: of the pixels that are not ink, at least this share are
+#: blank paper (within a couple of grey levels of it). A scan, a blurred copy
+#: or a noisy one has grey everywhere and does not qualify.
+CLEAN_BACKGROUND_FRACTION = 0.95
+#: The median must have removed at least this share of the ink for the image
+#: to be one drawn in hairlines.
+HAIRLINE_REMOVED_FRACTION = 0.05
+
+
+def has_hairlines(gray: np.ndarray, filtered: np.ndarray, raw: np.ndarray) -> bool:
+    """
+    Whether this is a clean render whose strokes the median filter erased.
+
+    Both conditions are needed. Only a clean render (a vector PDF, a digital
+    image) can be trusted for every grey pixel being ink; on a scan, a blurred
+    or a noisy copy, giving the median's removals back restored noise and
+    halos and broke frames on the synthetic benchmark. And only where the
+    median actually removed a share of the ink is there anything to give back
+    — a blurred render's strokes are thick and come through it whole.
+    """
+    if cv2 is None or gray.size == 0:
+        return False
+    ink = raw > 0
+    total = int(ink.sum())
+    if total == 0:
+        return False
+    # Paper is what lies away from every mark, however faint: a hairline's
+    # antialiased grey is below Otsu's threshold, and counted as background it
+    # made a clean render look dirty.
+    marks = (gray >= HAIRLINE_MIN_INK).astype(np.uint8)
+    near = cv2.dilate(marks, np.ones((5, 5), np.uint8)) > 0
+    background = gray[~near]
+    if background.size and float((background <= 2).mean()) < CLEAN_BACKGROUND_FRACTION:
+        return False
+    removed = ink & (filtered == 0)
+    if int(removed.sum()) >= HAIRLINE_REMOVED_FRACTION * total:
+        return True
+    # Or one mark lost most of itself, however little of the whole ink that
+    # is: a hairline Ⓤ beside bold digits is a small share of the cell.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    h, w = ink.shape[:2]
+    for index in range(1, count):
+        x, y, bw, bh, area = (int(v) for v in stats[index])
+        if area < 8 or bw >= HAIRLINE_SPAN_FRACTION * w or bh >= HAIRLINE_SPAN_FRACTION * h:
+            continue
+        member = labels[y : y + bh, x : x + bw] == index
+        if float(removed[y : y + bh, x : x + bw][member].mean()) >= 0.5:
+            return True
+    return False
+
+
+def is_grainy(gray: np.ndarray) -> bool:
+    """Whether a white-on-black crop carries salt-and-pepper grain."""
+    if cv2 is None or gray.size == 0:
+        return False
+    _, ink = cv2.threshold(gray, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    total = int(ink.sum())
+    if total == 0:
+        return False
+    neighbours = cv2.filter2D(ink.astype(np.uint8), -1, np.ones((3, 3), np.uint8)) - ink
+    isolated = int(((ink == 1) & (neighbours == 0)).sum())
+    return isolated > GRAIN_ISOLATED_FRACTION * total
+
+
 def binarize(gray: np.ndarray, *, clean: bool = True) -> np.ndarray:
     """Ink as white-on-black, which is what the contour functions expect.
 
@@ -288,13 +404,42 @@ def binarize(gray: np.ndarray, *, clean: bool = True) -> np.ndarray:
     # Median preserves edges and thin strokes where a Gaussian would smear
     # them, and it is what actually removes salt-and-pepper scanner grain.
     work = cv2.medianBlur(gray, 3) if min(h, w) >= 8 else gray
-    if min(h, w) >= ADAPTIVE_MIN_PX:
-        block = max(11, (min(h, w) // ADAPTIVE_BLOCK_DIV) | 1)
-        out = cv2.adaptiveThreshold(
-            work, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, -8
-        )
-    else:
-        _, out = cv2.threshold(work, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    def threshold(image: np.ndarray) -> np.ndarray:
+        if min(h, w) >= ADAPTIVE_MIN_PX:
+            block = max(11, (min(h, w) // ADAPTIVE_BLOCK_DIV) | 1)
+            return cv2.adaptiveThreshold(
+                image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, -8
+            )
+        _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binary
+
+    out = threshold(work)
+    # But the median also erases any stroke one pixel wide: a pixel on a
+    # hairline has three bright pixels in its 3x3 neighbourhood, so its median
+    # is background. A vector PDF renders frame rules and symbol outlines as
+    # exactly such hairlines; a frame lost its top rule and was never proposed
+    # (the profile frame "⌓ | 0.2 Ⓤ" on 3015-100-2232F). So a caller reading
+    # STRUCTURE (``clean=False``: rules, frames) gets back the ink the median
+    # took, where there is no grain to remove. A caller classifying a glyph
+    # does not: there the hairlines are the drawing's leaders and borders
+    # crossing the crop, and the median removing them is what keeps the
+    # glyph's own box — given back, a real drawn ◎ was boxed to the whole
+    # crop and scored 0.006 against its own template.
+    if work is not gray and has_hairlines(gray, out, threshold(gray)):
+        raw = threshold(gray)
+        if min(h, w) < ADAPTIVE_MIN_PX:
+            # A clean crop has a truly blank background, so any grey is ink:
+            # an antialiased hairline is half intensity, and Otsu's threshold,
+            # set by whatever bold ink shares the crop, cut a hairline Ⓤ into
+            # fragments beside a heavy "1". A fixed share of the darkest ink
+            # keeps it whole.
+            floor = max(HAIRLINE_MIN_INK, int(HAIRLINE_INK_FRACTION * int(gray.max())))
+            raw = cv2.bitwise_or(raw, ((gray >= floor) * 255).astype(np.uint8))
+        if not clean:
+            out = cv2.bitwise_or(out, raw)
+        else:
+            out = _restore_hairline_marks(out, raw)
     # The despeckle floor is relative to the largest component, which is right
     # for a glyph crop and wrong for a whole page: there the largest component
     # is the part outline, and 2% of *that* is bigger than a frame's border or

@@ -38,7 +38,7 @@ def _pipeline(fused_text: str, boxes: list[dict]) -> tuple[OcrPipeline, list[int
     pipeline.recognize = lambda _image, **_k: _result(fused_text)
     pipeline._complete_angle_regions = lambda _image, regions: regions
     pipeline._detect_angled_regions = lambda *_a, **_k: []
-    pipeline._notes_region = lambda *_a, **_k: None
+    pipeline._notes_regions = lambda *_a, **_k: []
     seen: list[int] = []
 
     def split(_image, coords, *, min_values=2, **_k):

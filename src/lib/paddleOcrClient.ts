@@ -102,6 +102,10 @@ interface ApiRecognizeResponse {
   needs_review?: boolean;
   text_bbox?: { x: number; y: number; width: number; height: number };
   type?: string;
+  /** The backend rule engine's result for the recognised text. */
+  category?: string;
+  subtype?: string | null;
+  label?: string;
   debug_dump_dir?: string;
   debug_dump?: {
     active?: boolean;
@@ -169,9 +173,10 @@ export interface ApiSegmentRegion {
   raw_text?: string;
   confidence: number;
   type?: string;
-  /** Feature category / subtype / suggested label from the GD&T rule engine. */
+  /** Feature category / subtype / suggested label from the GD&T rule engine.
+   * The backend sends `subtype: null` when a category has none. */
   category?: string;
-  subtype?: string;
+  subtype?: string | null;
   label?: string;
   orientation?: "horizontal" | "vertical" | "rotated";
   rotation?: number;
@@ -251,7 +256,7 @@ function mappedSegmentRegion(
     confidence: r.confidence ?? 0,
     type: r.type,
     category: r.category,
-    subtype: r.subtype,
+    subtype: r.subtype ?? undefined,
     label: r.label,
     orientation: r.orientation ?? "horizontal",
     rotation: r.rotation ?? 0,
@@ -331,23 +336,25 @@ export function mapPageSegmentRegions(
 ): SegmentRegion[] {
   const toBounds = (value: number) => value / scale;
   return regions.map((r) => {
-    const direct: BBox = {
+    const raw: BBox = {
       x: toBounds(r.bbox.x),
       y: toBounds(r.bbox.y),
       width: toBounds(r.bbox.width),
       height: toBounds(r.bbox.height),
     };
-    const invalid =
-      !Number.isFinite(direct.x) ||
-      !Number.isFinite(direct.y) ||
-      !Number.isFinite(direct.width) ||
-      !Number.isFinite(direct.height) ||
-      direct.width <= 0 ||
-      direct.height <= 0 ||
-      direct.x < pageBounds.x ||
-      direct.y < pageBounds.y ||
-      direct.x + direct.width > pageBounds.x + pageBounds.width ||
-      direct.y + direct.height > pageBounds.y + pageBounds.height;
+    const finite =
+      Number.isFinite(raw.x) &&
+      Number.isFinite(raw.y) &&
+      Number.isFinite(raw.width) &&
+      Number.isFinite(raw.height) &&
+      raw.width > 0 &&
+      raw.height > 0;
+    // A box that pokes past the page edge — a note in the corner whose
+    // padded box overhangs the border by a few pixels — is cut back to the
+    // page. Replacing it with the whole page, as this used to, put the
+    // balloon for an edge note in the middle of the sheet.
+    const direct = finite ? clampToBounds(raw, pageBounds) : null;
+    const invalid = direct === null;
 
     const orientedBox =
       r.oriented_box && !invalid
@@ -360,8 +367,18 @@ export function mapPageSegmentRegions(
           }
         : undefined;
 
-    return mappedSegmentRegion(r, invalid ? pageBounds : direct, orientedBox);
+    return mappedSegmentRegion(r, direct ?? pageBounds, orientedBox);
   });
+}
+
+/** `box` cut back to `bounds`, or null when nothing of it lies inside. */
+function clampToBounds(box: BBox, bounds: BBox): BBox | null {
+  const x0 = Math.max(box.x, bounds.x);
+  const y0 = Math.max(box.y, bounds.y);
+  const x1 = Math.min(box.x + box.width, bounds.x + bounds.width);
+  const y1 = Math.min(box.y + box.height, bounds.y + bounds.height);
+  if (x1 - x0 <= 0 || y1 - y0 <= 0) return null;
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
 /** Map the detector outcome ledger through the same geometry path as rows. */
@@ -475,6 +492,41 @@ export async function runSegmentOcr(
   const data = (await res.json()) as ApiSegmentResponse;
 
   return mapSegmentRegions(data.regions ?? [], bbox, displayScale);
+}
+
+/** The labelling rules' verdict on one piece of text. */
+export interface RuleClassification {
+  text: string;
+  category: string;
+  subtype?: string | null;
+  label: string;
+}
+
+/**
+ * Apply the backend labelling rules to text that was typed or corrected.
+ *
+ * The rule engine lives in one place, the backend; this asks it rather than
+ * keeping a second copy of the rules here. Throws when the backend cannot be
+ * reached, so a caller can decide what an unclassified value means.
+ */
+export async function classifyValues(
+  texts: string[]
+): Promise<RuleClassification[]> {
+  if (texts.length === 0) return [];
+  const res = await fetchWithRequestId(
+    `${getOcrApiUrl()}/ocr/classify`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts }),
+    },
+    { operation: "ocr.classify" }
+  );
+  if (!res.ok) {
+    throw apiRequestError(res, `Classify API error: ${res.status}`, "ocr.classify");
+  }
+  const data = (await res.json()) as { results?: RuleClassification[] };
+  return data.results ?? [];
 }
 
 /** One title-block field read off the sheet for a configured keyword. */
@@ -669,6 +721,11 @@ export async function runPaddleOcr(
     engine,
     agreement: data.agreement,
     needsReview: data.needs_review,
+    // Kept so a balloon saved from this read carries the rule engine's
+    // label; dropping them here is why manual balloons had none.
+    rule: data.label || data.category
+      ? { text: base, category: data.category ?? "", label: data.label ?? "" }
+      : undefined,
     valueBox,
     debugDumpDir: data.debug_dump_dir ?? data.debug_dump?.dir ?? undefined,
     debugDumpSkipped: data.debug_dump?.skipped_reason ?? undefined,

@@ -457,6 +457,37 @@ async def recognize_region(
     return response
 
 
+class ClassifyRequest(BaseModel):
+    texts: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.post("/ocr/classify", dependencies=protected_request)
+async def classify_values(request: ClassifyRequest) -> dict[str, Any]:
+    """
+    The rule engine's category, subtype and balloon label for typed text.
+
+    A value the user types or corrects never went through recognition, so
+    nothing had applied the labelling rules to it: manual balloons and
+    accepted review items were saved with no label at all. This is the same
+    ``classify_feature`` every scan route uses, so a value is labelled the
+    same way however it was entered. One result per text, in order.
+    """
+    from feature_classifier import classify_feature
+
+    results = []
+    for text in request.texts:
+        feature = classify_feature(text or "")
+        results.append(
+            {
+                "text": text,
+                "category": feature.category,
+                "subtype": feature.subtype,
+                "label": feature.label,
+            }
+        )
+    return {"results": results}
+
+
 @app.post("/ocr/segment", dependencies=protected_request)
 async def segment_region(
     file: UploadFile = File(...),
@@ -498,6 +529,45 @@ async def segment_region(
     return _serialize_segment_result(seg)
 
 
+def _check_rule_labels(
+    regions: list[dict[str, Any]],
+    review_candidates: list[dict[str, Any]],
+    candidate_outcomes: list[dict[str, Any]],
+    *,
+    stage: str,
+) -> dict[str, int]:
+    """
+    Every value leaving the API carries the labelling rules' label.
+
+    The rules label every value with text, so a region that arrives here
+    without one came through a path that skipped them — the whole-page route
+    did, for every value it read. It is labelled here from the same rules
+    rather than published blank, and counted and logged, so a path that
+    skips the rules shows up instead of passing silently. Logs counts and
+    the route only, never document text.
+    """
+    from feature_classifier import apply_rule_labels
+
+    counts = {"values": 0, "labelled": 0, "filled_by_check": 0}
+    for items in (regions, review_candidates, candidate_outcomes):
+        for item in items:
+            if not str(item.get("text") or "").strip():
+                continue
+            counts["values"] += 1
+            if apply_rule_labels(item):
+                counts["filled_by_check"] += 1
+            if str(item.get("label") or "").strip():
+                counts["labelled"] += 1
+    if counts["filled_by_check"]:
+        logger.warning(
+            "label completeness: %d of %d values reached the API without a rule label (route=%s)",
+            counts["filled_by_check"],
+            counts["values"],
+            stage,
+        )
+    return counts
+
+
 def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     """Apply the API's dimension classification to one complete scan result."""
 
@@ -520,6 +590,11 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     regions = serialize_regions(list(seg.get("regions", [])))
     review_candidates = serialize_regions(
         list(seg.get("review_candidates", []))
+    )
+    candidate_outcomes = [dict(o) for o in seg.get("candidate_outcomes", [])]
+    label_completeness = _check_rule_labels(
+        regions, review_candidates, candidate_outcomes,
+        stage=str(seg.get("coordinate_space", "scope")),
     )
 
     recognized_count = int(
@@ -558,7 +633,8 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "coordinate_space": str(seg.get("coordinate_space", "scope")),
         "regions": regions,
         "review_candidates": review_candidates,
-        "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
+        "candidate_outcomes": candidate_outcomes,
+        "label_completeness": label_completeness,
     }
 
 
@@ -1078,6 +1154,9 @@ async def read_pdf_text_layer(
         "page_width": width,
         "page_height": height,
         "fonts": result["fonts"],
+        # Prose the page carries that is not a note (view labels, table and
+        # title-block text), with the reason, so nothing read is unaccounted.
+        "text_blocks": result.get("text_blocks", []),
     }
 
 
