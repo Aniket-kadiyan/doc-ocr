@@ -138,3 +138,12 @@ def test_deviation_pair_is_not_read_as_a_date():
 
     assert has_dimension_value("Ø33-0.05-0.1")
     assert has_dimension_value("33-0.1-0.05")
+
+
+def test_characteristic_tags_are_worthy_but_grid_labels_are_not():
+    # Significant-characteristic tags set in ovals beside a value.
+    for tag in ("SC-1", "SC-3", "KC-12", "CTQ-3"):
+        assert is_segment_worthy(tag), tag
+    # Still rejected: a bare zone letter, a one-digit fragment, a lone word.
+    for text in ("A", "B-", "3", "SC", "A1"):
+        assert not is_segment_worthy(text), text

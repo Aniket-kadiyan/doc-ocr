@@ -157,7 +157,10 @@ _LINEAR_VALUE = _compile(
     rf"|\s*[+-]\s*{_NUMBER}"
     rf"|\s*(?:/|:|\bTO\b)\s*{_NUMBER})?"
     r"(?:\s*(?:MM|CM|IN|INCH|INCHES|\"))?"
-    rf"(?:\s*(?:MAX|MIN|TYP|REF|BASIC|{_THRU})\.?)?$"
+    # PCD -- pitch circle diameter -- is how a bolt-circle size is written
+    # on a drawing ("60.8 PCD"). Without it the value only passed when OCR
+    # happened to glue the suffix on, through the identifier pattern.
+    rf"(?:\s*(?:MAX|MIN|TYP|REF|BASIC|PCD|{_THRU})\.?)?$"
 )
 # A chamfer: the leg length and the angle it cuts, written "1 × 45°" and
 # often prefixed CHF or C. Neither grammar above covers it. The linear one

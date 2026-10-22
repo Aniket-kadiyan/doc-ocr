@@ -270,6 +270,28 @@ PaddleOCR reads a ⌖ as "0", "4", "2" or "中", and a bare "0" corroborates the
 ring-shaped symbols: two position frames came back as circularity,
 *confirmed*, on the strength of that one character.
 
+### An unrivalled reading is not an ambiguity
+
+A Ⓜ drawn at frame height scores about 0.60 against an accept bar of 0.62,
+with an empty alternatives list — `decide` calls that `ambiguous` purely
+because of the confidence band, not because anything else contends. Only a
+modifier stands after the tolerance value, so a mark in the trailing part of
+that compartment whose best and only reading is a modifier is resolved to it.
+That is the context rule applied exactly as stated: position settles an
+ambiguity the detector left open, and it is not allowed to overrule a reading
+the detector made. The confidence is reported as measured rather than raised,
+so a reviewer sees how firm the reading was.
+
+Measured on the synthetic frames scene, per-frame material-condition accuracy:
+
+| Condition | Before | After |
+|---|---|---|
+| clean | 4/6 | 6/6 |
+| scan | 4/6 | 5/6 |
+
+Symbol, tolerance and datum-sequence accuracy, and the macro precision and
+recall over every class, are unchanged by it.
+
 ### Missing means three different things
 
 | State | Meaning |

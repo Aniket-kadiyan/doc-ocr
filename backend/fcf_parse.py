@@ -1078,6 +1078,10 @@ def _find_modifier_visually(
 
     cfg = config or get_config()
     found = ModifierFind()
+    # An ambiguous reading that no rival contends is not an ambiguity; it is a
+    # confident shape that fell short of the accept bar. Held back for the
+    # trailing zone, where position can settle it (see below).
+    unrivalled: tuple[str, float] | None = None
     # A modifier legitimately fills most of a compartment, so the proposal
     # step is told to measure its size cap against a notional page rather than
     # against this small crop.
@@ -1102,6 +1106,28 @@ def _find_modifier_visually(
         topology = det.evidence.get("topology") or {}
         family = topology.get("family", "")
         trailing = (x + w / 2) >= cell.width * (1.0 - MODIFIER_TRAILING_FRAC)
+        # Position resolves what the confidence band left open. Only a
+        # modifier stands after the tolerance value, so a mark there whose
+        # best reading IS a modifier and which nothing else contends is that
+        # modifier. This is the registry's own rule -- context may settle an
+        # ambiguity the detector left open, never overrule it -- and without
+        # it a Ⓜ drawn at frame height scored 0.60 against an accept bar of
+        # 0.62, with an empty rival list, and every frame carrying one came
+        # back "unreadable". The confidence is reported as measured, not
+        # raised, so a reviewer sees how firm the reading actually was.
+        if (
+            trailing
+            and det.symbol_id in _COMPARTMENT_MODIFIERS
+            and det.status == STATUS_AMBIGUOUS
+            and not [
+                a
+                for a in det.alternatives
+                if a.score >= det.confidence - cfg.rival_margin
+            ]
+            and det.confidence > (unrivalled[1] if unrivalled else 0.0)
+        ):
+            unrivalled = (det.symbol_id, det.confidence)
+            continue
         if family.startswith("ring") and trailing and not found.unresolved:
             ranked = [det.symbol_id, *(a.symbol_id for a in det.alternatives)]
             found.unresolved = True
@@ -1113,6 +1139,11 @@ def _find_modifier_visually(
                 "compartment but is too small to identify; it may be a "
                 "material-condition modifier"
             )
+    if found.symbol_id is None and unrivalled is not None:
+        found.symbol_id, found.confidence = unrivalled
+        found.unresolved = False
+        found.candidates = []
+        found.note = None
     return found
 
 

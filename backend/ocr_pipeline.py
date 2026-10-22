@@ -60,7 +60,10 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-review-candidate-persistence"
+OCR_CHANGESET_ID = "mvp2-dedupe-order-fused-split-confusables"
+#: A section-scan value read below this confidence is excluded rather than
+#: ballooned. See the gate in ``segment`` for the measurement behind it.
+SECTION_MIN_CONFIDENCE = 0.6
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -1705,9 +1708,35 @@ class OcrPipeline:
         filter drop the phantom (cropping its wrong location reads nothing) while
         keeping the real box. Only boxes at the *same* location are deduped, so a
         value detected twice in the same place isn't proposed twice.
+
+        Overlap is measured against the SMALLER of the two boxes, so a fragment
+        sitting inside a line counts as a duplicate of that line. Which of the
+        two survives is therefore decided by the visiting order, and that order
+        has to put the box that covers the location first. It did not: the
+        morphology proposals were visited before the detector's, and the
+        detector's own boxes in whatever order the model emitted them, so a
+        55x38 morphology fragment over the "48" of ``Ø0.148 [3.76] REF.``
+        displaced the 402x62 detector line around the whole callout, and a
+        12x12 speck displaced the line over ``0.20 [5.08]``. Measured on a real
+        sheet that cost every small-text callout on it: six of nineteen values
+        reached recognition as a bare "4.99", "33", "08" or "48".
+
+        So the order is: the ink-fill the quick path scores, then learned
+        detector boxes before morphology blobs (the detector was handed the
+        page to find text lines; morphology is the backstop for what it
+        missed), then larger before smaller. A fragment inside a kept line is
+        then the one dropped, and nothing that only the smaller box covered is
+        lost, because the kept box covers it too.
         """
-        ordered = sorted(boxes, key=lambda b: b.get(
-            "_fill", 1.0), reverse=True)
+        ordered = sorted(
+            boxes,
+            key=lambda b: (
+                b.get("_fill", 1.0),
+                1 if float(b.get("conf", 0.0) or 0.0) > 0.0 else 0,
+                b["w"] * b["h"],
+            ),
+            reverse=True,
+        )
         kept: list[dict[str, Any]] = []
         for b in ordered:
             barea = max(b["w"] * b["h"], 1.0)
@@ -2641,6 +2670,10 @@ class OcrPipeline:
         return {
             "bbox": bbox,
             "text": text,
+            # What the recogniser actually returned, before any repair,
+            # symbol injection or normalisation. ``text`` is the normalised
+            # value; this is the audit trail for it.
+            "raw_text": str(res.get("raw_ocr") or ""),
             "confidence": res.get("confidence", 0.0),
             "type": res.get("type"),
             "category": res.get("category"),
@@ -2685,6 +2718,10 @@ class OcrPipeline:
         return {
             "bbox": bbox,
             "text": text,
+            # What the recogniser actually returned, before any repair,
+            # symbol injection or normalisation. ``text`` is the normalised
+            # value; this is the audit trail for it.
+            "raw_text": str(res.get("raw_ocr") or ""),
             "confidence": res.get("confidence", 0.0),
             "type": res.get("type"),
             "category": res.get("category"),
@@ -2762,6 +2799,7 @@ class OcrPipeline:
         *,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
+        min_values: int = 2,
     ) -> list[dict[str, Any]] | None:
         """
         Re-segment one cluster that read back as multiple stacked values.
@@ -2770,7 +2808,11 @@ class OcrPipeline:
         the stacked callouts separate, then runs the full `recognize` pipeline
         per row (so each gets its own dual-unit repair and balloon box). Returns
         the per-row regions, or ``None`` when the crop doesn't actually split
-        into 2+ worthy values (leaving the original single region untouched).
+        into at least ``min_values`` worthy values (leaving the original single
+        region untouched). The default of two is for a cluster whose fused read
+        was itself a value; a caller that already knows the fused read is NOT
+        one value passes one, because peeling a single callout out of the
+        label it was glued to is the whole point of splitting it.
         """
         from region_cluster import (
             cluster_boxes,
@@ -2836,7 +2878,7 @@ class OcrPipeline:
             }
             out.append(self._region_from_result(res, bbox, t))
 
-        return out if len(out) >= 2 else None
+        return out if len(out) >= max(1, min_values) else None
 
     @staticmethod
     def _oriented_box_from_rot(
@@ -3911,6 +3953,7 @@ class OcrPipeline:
         from page_scan import overlaps_existing_value
         from page_value_filters import (
             PageValueCandidate,
+            PageValueFilterDecision,
             is_complete_engineering_value,
             evaluate_scan_value,
             normalize_page_value_text,
@@ -4286,6 +4329,40 @@ class OcrPipeline:
             if not text:
                 continue
 
+            # Content-aware split: close-proximity callouts that fused into one
+            # cluster. Trigger when the fused read still shows 2+ complete values
+            # OR the cluster's boxes span 2+ horizontal rows (the fused single
+            # read often collapses to one value, hiding the multiplicity). The
+            # split only replaces this region when it actually yields 2+ worthy
+            # values, so a false trigger falls back to the single region.
+            #
+            # A third trigger, and the reason this runs BEFORE the gates below:
+            # a cluster of several boxes whose read is not one complete value
+            # is a fusion by definition -- "R10.0" glued to the "8.0 TO INT"
+            # beside it, "Ø0.210 [Ø5.33]" over its "CHAMFER BOTH SIDES" note,
+            # "R1.4" above an "SC-2" tag and two note lines. Gated as a whole
+            # those reads failed the grammar or the prose test and the callout
+            # inside them was lost; split, every part is judged on its own,
+            # and ONE surviving value is enough, since the alternative is
+            # publishing nothing for a callout the detector plainly found.
+            multivalue = count_dimension_values(text) >= 2
+            multirow = (
+                self._cluster_row_count(cluster) >= 2
+                and ub["width"] >= ub["height"]
+            )
+            fused_invalid = len(cluster) >= 2 and not is_complete_engineering_value(
+                normalize_page_value_text(text)
+            )
+            if multivalue or multirow or fused_invalid:
+                split_regions = self._split_stacked_cluster(
+                    image, (cx0, cy0, cx1, cy1),
+                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
+                    min_values=1 if fused_invalid else 2,
+                )
+                if split_regions:
+                    regions.extend(split_regions)
+                    continue
+
             # A balloon is for something a person measures. These three gates
             # drop what merely looks numeric: zone letters and balloon numbers
             # ("4", "33"), revision dates ("DATE3/17/2011..."), and leader or
@@ -4296,26 +4373,6 @@ class OcrPipeline:
                 continue
             if is_stray_line(sub, text):
                 continue
-
-            # Content-aware split: close-proximity callouts that fused into one
-            # cluster. Trigger when the fused read still shows 2+ complete values
-            # OR the cluster's boxes span 2+ horizontal rows (the fused single
-            # read often collapses to one value, hiding the multiplicity). The
-            # split only replaces this region when it actually yields 2+ worthy
-            # values, so a false trigger falls back to the single region.
-            multivalue = count_dimension_values(text) >= 2
-            multirow = (
-                self._cluster_row_count(cluster) >= 2
-                and ub["width"] >= ub["height"]
-            )
-            if multivalue or multirow:
-                split_regions = self._split_stacked_cluster(
-                    image, (cx0, cy0, cx1, cy1),
-                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
-                )
-                if split_regions:
-                    regions.extend(split_regions)
-                    continue
 
             # Snap balloon to the full detected cluster, not a tight OCR sliver.
             bbox = {
@@ -4329,6 +4386,7 @@ class OcrPipeline:
                 {
                     "bbox": bbox,
                     "text": text,
+                    "raw_text": str(res.get("raw_ocr") or ""),
                     "confidence": res.get("confidence", 0.0),
                     "type": res.get("type"),
                     # Rule-engine output, so the balloon can show the feature
@@ -4393,6 +4451,24 @@ class OcrPipeline:
                 table_masks=(),
                 page_size=image.size,
             )
+            # The syntax gate judges the string, not the read. A recogniser
+            # that is unsure produces strings that happen to parse: "8/5.5"
+            # at 0.54 out of a 5/8" fraction in a title, "X577" at 0.59 out
+            # of a part-list cell. Measured over three benchmark sheets every
+            # genuine callout read at 0.87 or better, so a read this uncertain
+            # is not a value a balloon should be put on.
+            if (
+                decision.accepted
+                and float(region.get("confidence") or 0.0) < SECTION_MIN_CONFIDENCE
+            ):
+                decision = PageValueFilterDecision(
+                    accepted=False,
+                    rule_name="section_low_confidence",
+                    reason=(
+                        "Recogniser confidence below "
+                        f"{SECTION_MIN_CONFIDENCE:.2f} for a section value"
+                    ),
+                )
             filter_rule_counts[decision.rule_name] = (
                 filter_rule_counts.get(decision.rule_name, 0) + 1
             )

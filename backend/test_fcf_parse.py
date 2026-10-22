@@ -541,3 +541,89 @@ def test_a_box_with_no_characteristic_costs_one_ocr_call():
     )
     assert frame.symbol is None or frame.symbol.symbol_id is None
     assert len(ocr.calls) == 1
+
+
+def test_an_unrivalled_modifier_in_the_trailing_zone_is_resolved_by_position() -> None:
+    """A Ⓜ drawn at frame height scores just under the accept bar.
+
+    ``decide`` calls that ambiguous, but the alternatives list is empty — no
+    other symbol contends. Only a modifier stands after the tolerance value,
+    so position settles it, exactly as the registry's context rule allows.
+    Before this, every frame carrying a material-condition modifier came back
+    ``unreadable``.
+    """
+    from unittest.mock import patch
+
+    from gdt_detect import Candidate, Detection, STATUS_AMBIGUOUS
+
+    cell = Image.new("RGB", (120, 40), "white")
+
+    detection = Detection(
+        symbol_id="mmc",
+        name="Maximum Material Condition",
+        status=STATUS_AMBIGUOUS,
+        confidence=0.60,
+        bbox=(0.0, 0.0, 24.0, 27.0),
+        alternatives=[],
+        evidence={"topology": {"family": "ring_crossed"}},
+    )
+
+    with patch(
+        "gdt_detect.find_glyph_boxes", return_value=[(90, 6, 24, 27)]
+    ), patch("fcf_parse.classify_crop", return_value=detection):
+        found = fcf._find_modifier_visually(cell)
+
+    assert found.symbol_id == "mmc"
+    assert found.confidence == 0.60
+    assert not found.unresolved
+
+
+def test_an_unrivalled_reading_outside_the_trailing_zone_is_not_resolved() -> None:
+    """The same reading over the value itself is the digit 0, not a modifier."""
+    from unittest.mock import patch
+
+    from gdt_detect import Detection, STATUS_AMBIGUOUS
+
+    cell = Image.new("RGB", (120, 40), "white")
+    detection = Detection(
+        symbol_id="mmc",
+        name="Maximum Material Condition",
+        status=STATUS_AMBIGUOUS,
+        confidence=0.60,
+        bbox=(0.0, 0.0, 24.0, 27.0),
+        alternatives=[],
+        evidence={"topology": {"family": "ring_crossed"}},
+    )
+
+    with patch("gdt_detect.find_glyph_boxes", return_value=[(4, 6, 24, 27)]), patch(
+        "fcf_parse.classify_crop", return_value=detection
+    ):
+        found = fcf._find_modifier_visually(cell)
+
+    assert found.symbol_id is None
+
+
+def test_a_contended_reading_stays_unresolved() -> None:
+    """Two modifiers within the rival margin is a real ambiguity; say so."""
+    from unittest.mock import patch
+
+    from gdt_detect import Candidate, Detection, STATUS_AMBIGUOUS
+
+    cell = Image.new("RGB", (120, 40), "white")
+    detection = Detection(
+        symbol_id="mmc",
+        name="Maximum Material Condition",
+        status=STATUS_AMBIGUOUS,
+        confidence=0.60,
+        bbox=(0.0, 0.0, 24.0, 27.0),
+        alternatives=[Candidate(symbol_id="lmc", score=0.58, method="template_match")],
+        evidence={"topology": {"family": "ring_crossed"}},
+    )
+
+    with patch("gdt_detect.find_glyph_boxes", return_value=[(90, 6, 24, 27)]), patch(
+        "fcf_parse.classify_crop", return_value=detection
+    ):
+        found = fcf._find_modifier_visually(cell)
+
+    assert found.symbol_id is None
+    assert found.unresolved

@@ -126,6 +126,11 @@ export interface SegmentRegion {
   /** Stable backend identity for a deduplicated whole-page detector object. */
   candidateId?: string;
   text: string;
+  /**
+   * What the recogniser returned before any repair or normalisation. `text`
+   * is the normalised value; this is kept beside it for auditing a read.
+   */
+  rawText?: string;
   confidence: number;
   type?: string;
   /** Feature category from the backend GD&T rule engine (e.g. "Hole"). */
@@ -160,6 +165,8 @@ export interface ApiSegmentRegion {
   candidate_id?: string;
   bbox: { x: number; y: number; width: number; height: number };
   text: string;
+  /** Unmodified recogniser output; `text` is the normalised value. */
+  raw_text?: string;
   confidence: number;
   type?: string;
   /** Feature category / subtype / suggested label from the GD&T rule engine. */
@@ -240,6 +247,7 @@ function mappedSegmentRegion(
       isNoteRegion(r) || isGdtRegion(r)
         ? (r.text ?? "")
         : fixEngineeringSymbols(r.text ?? ""),
+    rawText: r.raw_text,
     confidence: r.confidence ?? 0,
     type: r.type,
     category: r.category,

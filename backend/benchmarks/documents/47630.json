@@ -5,10 +5,10 @@
   "match_threshold": 0.9,
   "partial_threshold": 0.6,
   "requires": {
-    "matched": 16,
-    "mean_percent": 90.0,
-    "type_correct": 12,
-    "max_unexpected": 5
+    "matched": 18,
+    "mean_percent": 97.0,
+    "type_correct": 15,
+    "max_unexpected": 3
   },
   "notes": [
     "Expected values are the ones recorded from the app's unmapped list. Where that reading is imperfect, the drawing's true value is listed as a second accepted form, so the benchmark keeps passing when the read improves rather than locking the error in.",
@@ -16,7 +16,9 @@
     "Items 16 and 17 are the two halves of one callout, 9.00 [228.60], which the app currently reports as two regions. Joining them will satisfy one item and not the other; update this fixture when that happens.",
     "The source list skips number 3, so there are 19 items.",
     "Baseline 2026-09-20: matched 16/19, mean 92.5%, type 12/19. Known gaps: item 12 (20 deg) is not detected at all; item 18 comes back as Ø0.148 without its [3.76]REF. tail; a spurious leading Ø is injected on four plain linear values, which is what most of the type mismatches are.",
-    "2026-09-21: items 19 and 20 retyped from reference to linear. Spec section 25 is marked out of scope, so the rule engine no longer assigns the Reference category."
+    "2026-09-21: items 19 and 20 retyped from reference to linear. Spec section 25 is marked out of scope, so the rule engine no longer assigns the Reference category.",
+    "2026-10-21: items 16 and 17 merged into item 16 (9.00[228.60]) as the 2026-09-20 note anticipated, so there are now 18 items. Measured on branch MVP2 before the detection-dedupe fix: matched 11/19, mean 71.6%, type 12/19.",
+    "2026-10-21 after the detection-dedupe, fused-split and confusable work: matched 18/18, mean 99.3%, type 16/18, 1 unexpected, ~121 s. Was 11/19, 71.6%, 12/19 before. The one unexpected is [15.75/15.54], the bracketed mm half of the stacked limit pair in item 13, now read as its own region."
   ],
   "expected": [
     {
@@ -132,17 +134,11 @@
     {
       "id": 16,
       "accept": [
+        "9.00[228.60]",
         "9.00"
       ],
-      "type": "linear"
-    },
-    {
-      "id": 17,
-      "accept": [
-        "[228.60]"
-      ],
-      "type": "basic",
-      "note": "the bracketed half of 9.00 [228.60]"
+      "type": "linear",
+      "note": "9.00 [228.60] is one callout. Until 2026-10-21 the app reported its two halves as separate regions and this list carried them as items 16 and 17; the detection-dedupe fix joined them, so the item now accepts the whole callout (and the bare 9.00 the old read produced)."
     },
     {
       "id": 18,
