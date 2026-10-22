@@ -1,8 +1,8 @@
 # Shared inference-capacity gate
 
-QTracX currently creates one Paddle model bundle per backend process. This
-milestone adds one process-wide gate with one inference slot, shared by every
-route and the auto-balloon worker.
+QTracX uses one process-wide gate shared by every route and the auto-balloon
+workers. Its capacity is the number of independent Paddle model bundles that
+loaded and passed validation during startup.
 
 ## What is gated
 
@@ -42,6 +42,6 @@ cancellation and result publication remain the responsibility of
 - `active_operations`, containing only fixed component names and no drawing
   content.
 
-The slot count comes from the model-bundle capacity constants. Increasing it
-without also creating and validating additional independent model bundles is
-not supported.
+Each admitted call leases one concrete bundle until the Paddle output has been
+fully consumed. The slot and bundle are released together, preventing two
+threads from using the same Paddle predictors concurrently.

@@ -1,9 +1,9 @@
-"""Process-wide capacity gate for Paddle model inference.
+"""Priority-aware capacity gate for Paddle model inference.
 
-The backend currently owns one reusable Paddle model bundle.  HTTP request
-threads and the auto-balloon worker may prepare images concurrently, but only
-the configured number of calls may enter Paddle at once.  Interactive work is
-admitted before waiting background scans whenever a slot becomes available.
+HTTP request threads and auto-balloon workers may prepare images concurrently,
+but only the verified number of calls may enter the model pool at once.
+Interactive work is admitted before waiting background scans whenever a slot
+becomes available.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ class InferenceCapacityGate:
     """Limit and observe concurrent model calls within one backend process."""
 
     def __init__(self, slots: int) -> None:
-        if slots < 1:
-            raise ValueError("Inference capacity must be at least one slot")
+        if slots < 0:
+            raise ValueError("Inference capacity cannot be negative")
         self._slots = slots
         self._condition = Condition()
         self._active_calls = 0
@@ -75,6 +75,8 @@ class InferenceCapacityGate:
         selected = priority or current_inference_priority()
         if selected not in _VALID_PRIORITIES:
             raise ValueError(f"Unknown inference priority: {selected}")
+        if self._slots == 0:
+            raise RuntimeError("No OCR model bundle is available for inference")
 
         with self._condition:
             self._waiting[selected] += 1
@@ -138,6 +140,6 @@ _inference_gate = InferenceCapacityGate(AUTO_BALLOON_SCAN_CAPACITY)
 
 
 def get_inference_gate() -> InferenceCapacityGate:
-    """Return the singleton gate shared by every route and OCR component."""
+    """Return the one-slot default used before a model pool is loaded."""
 
     return _inference_gate

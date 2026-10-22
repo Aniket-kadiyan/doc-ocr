@@ -422,6 +422,57 @@ def test_queue_wait_estimate_uses_recent_scan_duration_and_capacity() -> None:
         manager.shutdown()
 
 
+def test_queue_wait_estimate_assigns_jobs_across_multiple_model_slots() -> None:
+    manager = ScanJobManager(max_workers=2)
+    started = [Event(), Event()]
+    release = Event()
+
+    def blocking_work(index: int):
+        def work(_report):
+            started[index].set()
+            assert release.wait(2.0)
+            return {"count": 0, "regions": []}
+
+        return work
+
+    try:
+        manager.submit(blocking_work(0), owner_id="user-a")
+        manager.submit(blocking_work(1), owner_id="user-b")
+        assert started[0].wait(1.0)
+        assert started[1].wait(1.0)
+        with manager._lock:
+            manager._scan_duration_history.extend((30.0, 30.0))
+
+        third = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-c",
+        )
+        fourth = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-d",
+        )
+        fifth = manager.submit(
+            lambda _report: {"count": 0, "regions": []},
+            owner_id="user-e",
+        )
+
+        third_status = manager.get(third["job_id"])
+        fourth_status = manager.get(fourth["job_id"])
+        fifth_status = manager.get(fifth["job_id"])
+        assert third_status is not None
+        assert fourth_status is not None
+        assert fifth_status is not None
+        assert third_status["queue_position"] == 1
+        assert fourth_status["queue_position"] == 2
+        assert fifth_status["queue_position"] == 3
+        assert 29 <= third_status["estimated_queue_wait_seconds"] <= 30
+        assert 29 <= fourth_status["estimated_queue_wait_seconds"] <= 30
+        assert 59 <= fifth_status["estimated_queue_wait_seconds"] <= 60
+    finally:
+        release.set()
+        manager.shutdown()
+
+
 def test_superseding_says_it_is_waiting_rather_than_merely_queued() -> None:
     manager = ScanJobManager(max_workers=1)
     started = Event()

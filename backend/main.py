@@ -15,6 +15,7 @@ import os
 import re
 from enum import Enum
 from functools import partial
+from threading import Lock
 from time import perf_counter
 from typing import Any
 
@@ -50,11 +51,8 @@ from config_env import load_env_files, load_runtime_config
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
-from inference_gate import get_inference_gate, inference_priority
-from ocr_capacity import (
-    AUTO_BALLOON_SCAN_CAPACITY,
-    build_ocr_capacity_status,
-)
+from inference_gate import inference_priority
+from ocr_capacity import build_ocr_capacity_status
 from ocr_pipeline import get_pipeline
 from page_layout import (
     analyze_page_layout,
@@ -141,13 +139,28 @@ async def request_diagnostics(request: Request, call_next):
         )
         return response
 
-# Executor capacity comes from model bundles the process really creates, not
-# from HTTP thread count. The current singleton pipeline therefore provides
-# one auto-balloon scan slot for all LAN users.
-scan_job_manager = ScanJobManager(max_workers=AUTO_BALLOON_SCAN_CAPACITY)
-inference_gate = get_inference_gate()
+# The executor is created only after Paddle has loaded, because requested
+# instances and successfully loaded model bundles are not the same thing.
+# This prevents the job queue from advertising workers that cannot run OCR.
+scan_job_manager: ScanJobManager | None = None
+_scan_job_manager_lock = Lock()
 page_layout_cache = PageLayoutCache(max_entries=8)
 MAX_EXISTING_VALUE_BOXES = 5000
+
+
+def _get_scan_job_manager() -> ScanJobManager:
+    global scan_job_manager
+    if scan_job_manager is not None:
+        return scan_job_manager
+    with _scan_job_manager_lock:
+        if scan_job_manager is None:
+            loaded_capacity = get_pipeline().inference_capacity
+            # Keep one worker when Paddle is unavailable so a submitted job
+            # can fail honestly instead of remaining queued forever.
+            scan_job_manager = ScanJobManager(
+                max_workers=max(1, loaded_capacity)
+            )
+    return scan_job_manager
 
 # CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
 # set; otherwise a dev-friendly fallback that accepts any localhost port — so a
@@ -277,10 +290,11 @@ def startup() -> None:
     )
     initialize_checksheet_storage()
     pipeline = get_pipeline()
+    manager = _get_scan_job_manager()
     capacity = build_ocr_capacity_status(
         pipeline.status,
-        scan_job_manager.capacity_status(),
-        inference_gate.status(),
+        manager.capacity_status(),
+        pipeline.inference_gate.status(),
     )
     logger.info(
         "OCR capacity detected",
@@ -300,7 +314,8 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown() -> None:
     logger.info("QTracX backend stopping", extra={"event": "backend_stopping"})
-    scan_job_manager.shutdown(wait=False)
+    if scan_job_manager is not None:
+        scan_job_manager.shutdown(wait=False)
     if auth_database_manager is not None:
         auth_database_manager.dispose()
     logger.info("QTracX backend stopped", extra={"event": "backend_stopped"})
@@ -310,10 +325,11 @@ def shutdown() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline = get_pipeline()
+    manager = _get_scan_job_manager()
     capacity = build_ocr_capacity_status(
         pipeline.status,
-        scan_job_manager.capacity_status(),
-        inference_gate.status(),
+        manager.capacity_status(),
+        pipeline.inference_gate.status(),
     )
     return {
         "status": "ok",
@@ -899,7 +915,7 @@ async def create_scan_job(
         with inference_priority("background"):
             return run_scan(report_progress)
 
-    return scan_job_manager.submit(
+    return _get_scan_job_manager().submit(
         run_background_scan,
         owner_id=authenticated.user.id,
         metadata={
@@ -923,7 +939,10 @@ def get_scan_job(
     authenticated: AuthenticatedSession = Depends(require_protected_request),
 ) -> dict[str, Any]:
     """Poll genuine scan progress; candidates appear only after success."""
-    job = scan_job_manager.get(job_id, owner_id=authenticated.user.id)
+    job = _get_scan_job_manager().get(
+        job_id,
+        owner_id=authenticated.user.id,
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job
@@ -938,7 +957,10 @@ def cancel_scan_job(
 ) -> dict[str, Any]:
     """Stop a scan cooperatively without publishing partial results."""
 
-    job = scan_job_manager.cancel(job_id, owner_id=authenticated.user.id)
+    job = _get_scan_job_manager().cancel(
+        job_id,
+        owner_id=authenticated.user.id,
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return job

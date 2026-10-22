@@ -117,3 +117,15 @@ def test_inference_priority_is_scoped_and_restored() -> None:
     with inference_priority("background"):
         assert current_inference_priority() == "background"
     assert current_inference_priority() == "interactive"
+
+
+def test_zero_capacity_reports_unavailable_instead_of_waiting_forever() -> None:
+    gate = InferenceCapacityGate(0)
+    assert gate.status()["configured_slots"] == 0
+    try:
+        with gate.slot("test"):
+            raise AssertionError("unreachable")
+    except RuntimeError as exc:
+        assert "No OCR model bundle" in str(exc)
+    else:
+        raise AssertionError("A zero-capacity gate accepted work")

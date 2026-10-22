@@ -1,19 +1,13 @@
-"""Read-only OCR capacity diagnostics.
-
-The values in this module describe the architecture that exists today.  They
-are deliberately not environment settings: advertising a configurable model
-pool before the backend can actually create and coordinate that pool would
-make deployment diagnostics misleading.
-"""
+"""Read-only OCR model-pool and scheduler capacity diagnostics."""
 
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 
-# These constants describe model objects the process really creates today.
-# Increase them only together with a corresponding OcrPipeline instance pool;
-# executor threads alone are not additional inference capacity.
+# Backward-compatible defaults used by isolated tests and callers that do not
+# load runtime configuration. Production capacity comes from the model pool's
+# successfully loaded bundle count, never from these constants alone.
 OCR_MODEL_BUNDLE_COUNT = 1
 OCR_CONCURRENT_SCANS_PER_BUNDLE = 1
 AUTO_BALLOON_SCAN_CAPACITY = (
@@ -29,6 +23,22 @@ def build_ocr_capacity_status(
     """Combine model and executor facts into one stable health payload."""
 
     inference_ready = bool(pipeline_status.get("paddleocr"))
+    raw_pool = pipeline_status.get("model_pool")
+    pool_status = raw_pool if isinstance(raw_pool, Mapping) else {}
+    configured_bundles = max(
+        0,
+        int(pool_status.get("requested", OCR_MODEL_BUNDLE_COUNT) or 0),
+    )
+    created_bundles = max(
+        0,
+        int(
+            pool_status.get(
+                "loaded",
+                OCR_MODEL_BUNDLE_COUNT if inference_ready else 0,
+            )
+            or 0
+        ),
+    )
     components = {
         "paddleocr_pipeline": inference_ready,
         "text_detector": bool(pipeline_status.get("text_detector")),
@@ -42,10 +52,9 @@ def build_ocr_capacity_status(
         int(scan_executor_status.get("worker_threads", 0) or 0),
     )
 
-    # There is currently one OcrPipeline singleton per backend process.  The
-    # detector/recognizer entries above are components inside that bundle, not
-    # additional independently schedulable Paddle instances.
-    model_bundle_slots = OCR_MODEL_BUNDLE_COUNT if inference_ready else 0
+    # Detector/recognizer entries are components inside every validated
+    # bundle, not additional independently schedulable Paddle instances.
+    model_bundle_slots = created_bundles if inference_ready else 0
     inference_slots = (
         model_bundle_slots * OCR_CONCURRENT_SCANS_PER_BUNDLE
     )
@@ -53,9 +62,9 @@ def build_ocr_capacity_status(
     gate_status = dict(
         inference_gate_status
         or {
-            "configured_slots": AUTO_BALLOON_SCAN_CAPACITY,
+            "configured_slots": model_bundle_slots,
             "active_calls": 0,
-            "available_slots": AUTO_BALLOON_SCAN_CAPACITY,
+            "available_slots": model_bundle_slots,
             "waiting_interactive": 0,
             "waiting_background": 0,
             "peak_active_calls": 0,
@@ -65,11 +74,13 @@ def build_ocr_capacity_status(
     )
 
     return {
-        "architecture": "single_process_singleton",
+        "architecture": "single_process_model_pool",
         "model_bundles": {
-            "configured": OCR_MODEL_BUNDLE_COUNT,
-            "created": OCR_MODEL_BUNDLE_COUNT,
+            "configured": configured_bundles,
+            "created": created_bundles,
             "inference_ready": model_bundle_slots,
+            "failed": max(0, configured_bundles - created_bundles),
+            "load_errors": list(pool_status.get("load_errors", [])),
             "concurrent_scans_per_bundle": (
                 OCR_CONCURRENT_SCANS_PER_BUNDLE
             ),
@@ -84,13 +95,13 @@ def build_ocr_capacity_status(
         },
         "inference_gate": gate_status,
         "direct_ocr_requests": {
-            "share_model_bundle": True,
+            "share_model_pool": True,
             "controlled_by_scan_executor": False,
             "controlled_by_inference_gate": True,
         },
         "capacity_basis": (
-            "one concurrent Paddle inference call per ready singleton model "
-            "bundle; interactive calls are preferred between background "
-            "scan calls"
+            "one concurrent Paddle inference call per successfully loaded "
+            "model bundle; interactive calls are preferred between "
+            "background scan calls"
         ),
     }

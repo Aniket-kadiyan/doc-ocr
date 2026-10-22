@@ -82,6 +82,7 @@ class RuntimeConfig:
     backend_host: str
     backend_port: int
     backend_reload: bool
+    ocr_model_instances: int
     cors_origins: tuple[str, ...] | None
     checksheet_data_dir: Path
     checksheet_max_document_mb: int
@@ -103,6 +104,7 @@ class RuntimeConfig:
             "backend_host": self.backend_host,
             "backend_port": self.backend_port,
             "backend_reload": self.backend_reload,
+            "ocr_model_instances": self.ocr_model_instances,
             "cors_origins": list(self.cors_origins or ()),
             "checksheet_data_dir": str(self.checksheet_data_dir),
             "checksheet_max_document_mb": self.checksheet_max_document_mb,
@@ -186,6 +188,9 @@ def load_runtime_config() -> RuntimeConfig:
         backend_host=get_str("OCR_HOST", "127.0.0.1"),
         backend_port=_strict_int("OCR_PORT", 8000, minimum=1, maximum=65535),
         backend_reload=_strict_bool("OCR_RELOAD", True),
+        ocr_model_instances=_strict_int(
+            "OCR_MODEL_INSTANCES", 1, minimum=1, maximum=8
+        ),
         cors_origins=(
             tuple(origins) if (origins := get_cors_origins()) is not None else None
         ),

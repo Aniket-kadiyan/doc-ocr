@@ -5,18 +5,23 @@ this milestone.
 
 ## Current architecture
 
-- Each backend process creates one shared `OcrPipeline` singleton.
-- That bundle can contain the main PaddleOCR pipeline, a standalone text
+- Each backend process creates one shared `OcrPipeline` coordinator and a
+  configurable pool of independently loaded model bundles.
+- Each bundle can contain the main PaddleOCR pipeline, a standalone text
   detector, a text recognizer and a text-line orientation model. These are
   cooperating components inside one bundle; they are not four independent job
   slots.
-- Auto-balloon scans run through a `ThreadPoolExecutor` with one worker.
-- Therefore the current effective auto-balloon capacity is one scan at a time
-  when PaddleOCR loaded successfully, and zero when it did not.
+- `OCR_MODEL_INSTANCES` requests 1-8 complete bundles and defaults to one.
+- Additional bundles join the pool only when they load successfully with the
+  same component capabilities, API version and device as the first bundle.
+- The auto-balloon executor is created with one worker per successfully loaded
+  bundle. A failed additional load reduces real scheduler capacity instead of
+  advertising an unusable worker.
 - Paddle/Paddle Inference may use internal compute threads. Those threads can
   accelerate one inference call but do not create additional QTracX job slots.
-- Every Paddle inference call now passes through one process-wide inference
-  gate. The gate has one slot because the process creates one model bundle.
+- Every Paddle inference call passes through one process-wide inference gate.
+  Its slots equal the number of successfully loaded bundles, and every slot
+  leases one concrete bundle exclusively for the call.
 - Direct region OCR, title-field reads, reference detection and OCR-assisted
   PDF text recovery use interactive priority. Auto-balloon jobs use background
   priority. Image preparation and result parsing remain outside the gate.
@@ -35,12 +40,11 @@ this milestone.
   interactive/background work.
 
 The same capacity snapshot is written to the backend log during startup under
-the `ocr_capacity_detected` event. This is diagnostic-only: it does not change
-model loading, OCR results, job ordering, cancellation, or scan concurrency.
+the `ocr_capacity_detected` event.
 
 ## Scheduler implication
 
-The scheduler uses model-bundle slots as its limiting resource. Adding HTTP
-workers or executor threads alone does not increase OCR concurrency. A future
-configurable pool must first create and validate the requested number of model
-bundles, then expose that verified count as capacity.
+The scheduler uses loaded model-bundle slots as its limiting resource. Adding
+HTTP workers or executor threads alone does not increase OCR concurrency.
+Changing `OCR_MODEL_INSTANCES` requires a backend restart because model loading
+and scan-executor sizing happen together during startup.

@@ -16,6 +16,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_host, "127.0.0.1")
         self.assertEqual(config.backend_port, 8000)
         self.assertTrue(config.backend_reload)
+        self.assertEqual(config.ocr_model_instances, 1)
         self.assertIsNone(config.cors_origins)
         self.assertEqual(config.auth_session_hours, 8)
         self.assertFalse(config.auth_cookie_secure)
@@ -24,6 +25,7 @@ class RuntimeConfigTests(unittest.TestCase):
         values = {
             "QTRACX_ENV": "PRODUCTION", "UI_HOST": "0.0.0.0", "PORT": "3102",
             "OCR_HOST": "0.0.0.0", "OCR_PORT": "8100", "OCR_RELOAD": "false",
+            "OCR_MODEL_INSTANCES": "3",
             "OCR_CORS_ORIGINS": "http://qtracx:3102/,http://192.168.1.20:3102",
             "DATABASE_URL": "postgresql://user:secret@db/qtracx",
             "QTRACX_LOG_LEVEL": "warning", "QTRACX_LOG_MAX_MB": "50",
@@ -36,6 +38,8 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.ui_host, "0.0.0.0")
         self.assertEqual(config.backend_port, 8100)
         self.assertFalse(config.backend_reload)
+        self.assertEqual(config.ocr_model_instances, 3)
+        self.assertEqual(config.public_summary()["ocr_model_instances"], 3)
         self.assertEqual(config.log_level, "WARNING")
         self.assertEqual(config.auth_session_hours, 12)
         self.assertTrue(config.auth_cookie_secure)
@@ -51,6 +55,12 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeConfigurationError, "must be one of"):
                 load_runtime_config()
         with patch.dict(os.environ, {"AUTH_SESSION_HOURS": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "9"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
 

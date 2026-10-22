@@ -11,8 +11,9 @@ backend.
   the existing reload/retry behaviour.
 - A user cannot poll or cancel another user's job. An unknown job and a job
   owned by somebody else both return HTTP 404.
-- The verified capacity remains one concurrent auto-balloon scan because the
-  backend currently owns one `OcrPipeline` model bundle and one scan worker.
+- The default remains one concurrent auto-balloon scan. When additional model
+  bundles are explicitly requested and successfully loaded, the executor gains
+  one worker for each verified bundle.
 - Adding web-server threads does not increase the reported OCR capacity.
 
 ## Queue information returned with each job
