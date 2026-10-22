@@ -95,6 +95,10 @@ interface ApiScanJobSnapshot {
 
 export interface RunScanJobOptions {
   sourceCanvas: HTMLCanvasElement;
+  /** Original PDF for the queued native-text primary pass. */
+  sourcePdf?: Blob;
+  /** PDF points-to-pixels scale used by sourceCanvas. */
+  pdfRenderScale?: number;
   bbox: BBox;
   page: number;
   scopeKind: ScanScopeKind;
@@ -314,6 +318,8 @@ export function abandonScanJob(jobId: string): void {
  */
 export async function runScanJob({
   sourceCanvas,
+  sourcePdf,
+  pdfRenderScale = 1.5,
   bbox,
   page,
   scopeKind,
@@ -330,6 +336,10 @@ export async function runScanJob({
 
   const form = new FormData();
   form.append("file", blob, "scan-page.png");
+  if (sourcePdf) {
+    form.append("source_pdf", sourcePdf, "drawing.pdf");
+    form.append("pdf_render_scale", String(pdfRenderScale));
+  }
   form.append("scope_kind", scopeKind);
   form.append("page", String(page));
   // The uploaded image is the crop taken at displayScale, so everything

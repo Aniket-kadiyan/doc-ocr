@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { classifyDimension } from "@/lib/dimensionClassifier";
+import { relabelForEdit } from "@/lib/labelRules";
 import { SPECIAL_SYMBOLS, deriveRange } from "@/lib/valueFields";
 import { TOOL_OPTIONS, type Annotation } from "@/types/annotation";
 
@@ -24,6 +25,7 @@ export function ValueEditor({
   const [label, setLabel] = useState(annotation.label ?? "");
   const [method, setMethod] = useState(annotation.method ?? "");
   const [tool, setTool] = useState(annotation.tool ?? "");
+  const [saving, setSaving] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -55,13 +57,22 @@ export function ValueEditor({
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (saving) return;
     const cleanValue = value.trim();
+    // Saving used to re-type every value with the client's text-only
+    // classifier, even unchanged ones, overwriting the rule engine's
+    // category. Only an edited value is classified again, by the rules.
+    setSaving(true);
+    const relabelled = await relabelForEdit(annotation, cleanValue, label.trim());
+    setSaving(false);
     onUpdate(annotation.id, {
       value: cleanValue,
-      type: classifyDimension(cleanValue),
+      type: relabelled.type ?? (cleanValue === annotation.value.trim()
+        ? annotation.type
+        : classifyDimension(cleanValue)),
       range: range.trim() || undefined,
-      label: label.trim(),
+      label: relabelled.label,
       method: method.trim() || undefined,
       tool: tool || undefined,
     });
@@ -198,8 +209,8 @@ export function ValueEditor({
           </button>
           <button
             type="button"
-            onClick={handleSave}
-            disabled={!value.trim()}
+            onClick={() => void handleSave()}
+            disabled={!value.trim() || saving}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Save

@@ -62,6 +62,7 @@ from page_layout_cache import PageLayoutCache
 from page_value_filters import normalize_page_value_text
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
+from text_layer_scan import scan_result_from_text_layer
 
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
@@ -475,6 +476,37 @@ async def recognize_region(
     return response
 
 
+class ClassifyRequest(BaseModel):
+    texts: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.post("/ocr/classify", dependencies=protected_request)
+async def classify_values(request: ClassifyRequest) -> dict[str, Any]:
+    """
+    The rule engine's category, subtype and balloon label for typed text.
+
+    A value the user types or corrects never went through recognition, so
+    nothing had applied the labelling rules to it: manual balloons and
+    accepted review items were saved with no label at all. This is the same
+    ``classify_feature`` every scan route uses, so a value is labelled the
+    same way however it was entered. One result per text, in order.
+    """
+    from feature_classifier import classify_feature
+
+    results = []
+    for text in request.texts:
+        feature = classify_feature(text or "")
+        results.append(
+            {
+                "text": text,
+                "category": feature.category,
+                "subtype": feature.subtype,
+                "label": feature.label,
+            }
+        )
+    return {"results": results}
+
+
 @app.post("/ocr/segment", dependencies=protected_request)
 async def segment_region(
     file: UploadFile = File(...),
@@ -519,6 +551,45 @@ async def segment_region(
     return _serialize_segment_result(seg)
 
 
+def _check_rule_labels(
+    regions: list[dict[str, Any]],
+    review_candidates: list[dict[str, Any]],
+    candidate_outcomes: list[dict[str, Any]],
+    *,
+    stage: str,
+) -> dict[str, int]:
+    """
+    Every value leaving the API carries the labelling rules' label.
+
+    The rules label every value with text, so a region that arrives here
+    without one came through a path that skipped them — the whole-page route
+    did, for every value it read. It is labelled here from the same rules
+    rather than published blank, and counted and logged, so a path that
+    skips the rules shows up instead of passing silently. Logs counts and
+    the route only, never document text.
+    """
+    from feature_classifier import apply_rule_labels
+
+    counts = {"values": 0, "labelled": 0, "filled_by_check": 0}
+    for items in (regions, review_candidates, candidate_outcomes):
+        for item in items:
+            if not str(item.get("text") or "").strip():
+                continue
+            counts["values"] += 1
+            if apply_rule_labels(item):
+                counts["filled_by_check"] += 1
+            if str(item.get("label") or "").strip():
+                counts["labelled"] += 1
+    if counts["filled_by_check"]:
+        logger.warning(
+            "label completeness: %d of %d values reached the API without a rule label (route=%s)",
+            counts["filled_by_check"],
+            counts["values"],
+            stage,
+        )
+    return counts
+
+
 def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     """Apply the API's dimension classification to one complete scan result."""
 
@@ -541,6 +612,11 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     regions = serialize_regions(list(seg.get("regions", [])))
     review_candidates = serialize_regions(
         list(seg.get("review_candidates", []))
+    )
+    candidate_outcomes = [dict(o) for o in seg.get("candidate_outcomes", [])]
+    label_completeness = _check_rule_labels(
+        regions, review_candidates, candidate_outcomes,
+        stage=str(seg.get("coordinate_space", "scope")),
     )
 
     recognized_count = int(
@@ -579,7 +655,8 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "coordinate_space": str(seg.get("coordinate_space", "scope")),
         "regions": regions,
         "review_candidates": review_candidates,
-        "candidate_outcomes": list(seg.get("candidate_outcomes", [])),
+        "candidate_outcomes": candidate_outcomes,
+        "label_completeness": label_completeness,
     }
 
 
@@ -748,6 +825,17 @@ def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
 )
 async def create_scan_job(
     file: UploadFile = File(...),
+    source_pdf: UploadFile | None = File(
+        None,
+        description=(
+            "Optional original PDF. Its native text is the primary pass before "
+            "the uploaded page image is sent through OCR."
+        ),
+    ),
+    pdf_render_scale: float = Form(
+        1.5,
+        description="Pixel scale used by the uploaded PDF page image",
+    ),
     scope_kind: str = Form("section"),
     page: int = Form(1),
     scope_x: float = Form(0),
@@ -776,6 +864,11 @@ async def create_scan_job(
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=422, detail="The scan image is empty")
+    source_pdf_data = await source_pdf.read() if source_pdf is not None else None
+    if source_pdf_data is not None and not source_pdf_data:
+        source_pdf_data = None
+    if source_pdf_data is not None and not 0.1 <= pdf_render_scale <= 20:
+        raise HTTPException(status_code=422, detail="pdf_render_scale is out of range")
     saved_value_boxes = _parse_existing_value_boxes(existing_value_boxes)
 
     truthy = {"1", "true", "yes", "on"}
@@ -801,6 +894,67 @@ async def create_scan_job(
             or scope_y + scope_height <= 0
         ):
             raise ValueError("The scan scope does not intersect the uploaded page")
+
+        # A vector PDF's native text is exact and remains the primary pass.
+        # It lives inside this authenticated job rather than in a separate
+        # synchronous request because Chitra's enhanced pass may use Paddle
+        # for drawn GD&T glyphs and text embedded in page images. Any such
+        # work now inherits background priority, model-pool capacity, queue
+        # position, cancellation, and per-user ownership from this job.
+        if source_pdf_data is not None:
+            report_progress(
+                stage="text-layer",
+                message="Reading the drawing PDF's native text",
+                percent=2,
+                completed=0,
+                total=1,
+                operation_label="PDF text-layer primary pass",
+            )
+            try:
+                from pdf_text_layer import text_layer_regions
+
+                text_result = text_layer_regions(
+                    source_pdf_data,
+                    page - 1,
+                    dpi=72.0 * pdf_render_scale,
+                )
+            except Exception as error:  # damaged PDF falls back to page OCR
+                logger.warning(
+                    "PDF text-layer primary pass failed; falling back to OCR",
+                    extra={
+                        "event": "pdf_text_layer_fallback",
+                        **safe_exception_details(error),
+                    },
+                )
+            else:
+                if text_result.get("usable"):
+                    seg = scan_result_from_text_layer(
+                        text_result,
+                        scope_kind=scope_kind,
+                        scope=scope_bbox,
+                    )
+                    report_progress(
+                        stage="finalizing",
+                        message=(
+                            f"Prepared {seg['eligible_count']} native PDF values; "
+                            f"kept {seg['review_count']} for review and "
+                            f"{seg['excluded_count']} as Other"
+                        ),
+                        percent=99,
+                        completed=int(seg["detected_count"]),
+                        total=int(seg["detected_count"]),
+                        candidate_count=int(seg["eligible_count"]),
+                        operation_label="PDF text-layer scan complete",
+                    )
+                    return _serialize_segment_result(seg)
+                report_progress(
+                    stage="text-layer",
+                    message="No usable native PDF text; continuing with OCR",
+                    percent=4,
+                    completed=1,
+                    total=1,
+                    operation_label="PDF text-layer fallback",
+                )
 
         report_progress(
             stage="layout",
@@ -929,6 +1083,7 @@ async def create_scan_job(
             # stop/resume design a stable identity for the complete page.
             "page_fingerprint": fingerprint,
             "existing_value_box_count": len(saved_value_boxes),
+            "pdf_text_layer_requested": source_pdf_data is not None,
         },
     )
 
@@ -1108,15 +1263,11 @@ async def read_pdf_text_layer(
 
     width, height = result["page_size"]
     serialized = _serialize_segment_result(
-        {
-            "regions": result["regions"],
-            "review_candidates": [],
-            "coordinate_space": "page",
-            "detected_count": len(result["regions"]) + len(result["excluded"]),
-            "eligible_count": len(result["regions"]),
-            "excluded_count": len(result["excluded"]),
-            "review_count": 0,
-        }
+        scan_result_from_text_layer(
+            result,
+            scope_kind="page",
+            scope={"x": 0, "y": 0, "width": width, "height": height},
+        )
     )
     return {
         **serialized,
@@ -1124,6 +1275,9 @@ async def read_pdf_text_layer(
         "page_width": width,
         "page_height": height,
         "fonts": result["fonts"],
+        # Prose the page carries that is not a note (view labels, table and
+        # title-block text), with the reason, so nothing read is unaccounted.
+        "text_blocks": result.get("text_blocks", []),
     }
 
 

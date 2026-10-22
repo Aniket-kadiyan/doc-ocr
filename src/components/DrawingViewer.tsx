@@ -53,7 +53,7 @@ import {
 } from "@/lib/referenceScanQueue";
 import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import { annotationsFromRegions } from "@/lib/scanAnnotations";
-import { readPdfTextLayer, regionsWithin } from "@/lib/pdfTextLayer";
+import { titleFieldAnnotations } from "@/lib/labelRules";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
   loadPdfDocument,
@@ -109,7 +109,7 @@ import type { GdtPageResult, GdtRegistry } from "@/types/gdt";
 import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
 import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
-import type { Annotation, BBox, DimensionType } from "@/types/annotation";
+import type { Annotation, BBox } from "@/types/annotation";
 import {
   DOCUMENT_METADATA_FIELDS,
   normalizeDocumentMetadata,
@@ -180,6 +180,35 @@ const legacyMigrationWarning = (orphanLabelCount: number) =>
         orphanLabelCount === 1 ? "was" : "were"
       } not imported.`
     : null;
+
+/**
+ * Title-block fields for the configured keywords, as annotations.
+ *
+ * Read from the WHOLE page, not the scan's scope: the title block sits at a
+ * fixed spot on the sheet, so which fields turn up must not depend on the
+ * section scanned. Shared by the scan and the vector text-layer routes.
+ */
+async function readTitleFieldAnnotations(
+  pageCanvas: HTMLCanvasElement,
+  page: number,
+  createdAt: number
+): Promise<Annotation[]> {
+  try {
+    const fields = await runPageTitleFields(pageCanvas);
+    return titleFieldAnnotations(
+      fields,
+      useAnnotationStore.getState().annotations,
+      page,
+      createdAt,
+      uuidv4
+    );
+  } catch {
+    // The balloons are the point of the scan; a failed title-block read must
+    // not throw them away. The export still lists every configured keyword,
+    // with an empty value to fill in by hand, and the export warns about it.
+    return [];
+  }
+}
 
 export function DrawingViewer() {
   const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
@@ -1076,69 +1105,24 @@ export function DrawingViewer() {
         overlay: null,
       });
       try {
-        // A vector PDF already carries every callout as text, with exact
-        // digits and exact glyph boxes, so there is nothing to recognise:
-        // the values come back perfect in milliseconds instead of the tens
-        // of seconds a scan takes. Most drawings are scans with no text at
-        // all, and those report back unusable so the scan runs as before.
+        // Send the original PDF with the rendered page. The backend performs
+        // its exact native-text pass first inside the same scan job and falls
+        // back to raster OCR only when that layer is unusable. Keeping both
+        // passes in one job preserves queue/ETA/cancellation semantics when
+        // the enhanced PDF pass needs OCR for drawn GD&T or embedded images.
         const sourceFile = sourceFileRef.current;
-        if (sourceFile?.fileType === "pdf" && source) {
-          const pageBounds = {
-            x: 0,
-            y: 0,
-            width: source.width,
-            height: source.height,
-          };
-          const textLayer = await readPdfTextLayer(
-            await (await fetch(sourceFile.dataUrl)).blob(),
-            scanPage,
-            pageBounds
-          );
-          if (textLayer.usable) {
-            const scoped =
-              scopeKind === "page"
-                ? textLayer.regions
-                : regionsWithin(textLayer.regions, bbox);
-            const live = useAnnotationStore.getState().annotations;
-            const kept = filterNewScanRegions(
-              scoped,
-              live,
-              scanPage,
-              undefined,
-              scopeKind
-            );
-            const fromText = annotationsFromRegions(kept.accepted, scanPage);
-            if (fromText.length > 0) addAnnotations(fromText);
-            const textSummary: ScanCompletionSummary = {
-              scopeKind,
-              added: fromText.length,
-              detected: scoped.length,
-              recognized: scoped.length,
-              eligible: scoped.length,
-              excluded: 0,
-              // A value the text layer read exactly but could not say what
-              // it measures — a lone deviation, a number whose symbol the
-              // drawing drew rather than wrote — is ballooned and flagged.
-              reviewRequired: fromText.filter(
-                (annotation) => annotation.needsReview
-              ).length,
-              unread: 0,
-              skippedExisting: kept.skippedExisting,
-              skippedDuplicates: kept.skippedDuplicates,
-            };
-            setScanSummary(textSummary);
-            if (fromText.length === 0) {
-              setSelectionError(
-                scopeKind === "page"
-                  ? "The drawing's text carries no values that are not already ballooned."
-                  : "No values were found in the selected section."
-              );
-            }
-            return { status: "succeeded", summary: textSummary };
+        let sourcePdf: Blob | undefined;
+        if (sourceFile?.fileType === "pdf") {
+          try {
+            sourcePdf = await (await fetch(sourceFile.dataUrl)).blob();
+          } catch {
+            // The rendered page still provides a complete OCR fallback.
           }
         }
         const scanResult = await runAutoBalloonScan({
           sourceCanvas: scanCanvas,
+          sourcePdf,
+          pdfRenderScale: PDF_RENDER_SCALE * scanScale,
           bbox,
           page: scanPage,
           scopeKind,
@@ -1267,36 +1251,9 @@ export function DrawingViewer() {
         // scanned. Fields already present are skipped, so running more than one
         // section — or re-scanning — never duplicates them.
         if (scopeKind === "page") {
-          const existingFields = new Set(
-            useAnnotationStore
-              .getState()
-              .annotations.filter((a) => a.type === "Title Block")
-              .map((a) => (a.label ?? "").trim().toUpperCase())
+          newAnnotations.push(
+            ...(await readTitleFieldAnnotations(source, scanPage, now))
           );
-          try {
-            const fields = await runPageTitleFields(source);
-            for (const f of fields) {
-              if (!f.value.trim() || !f.bbox) continue;
-              if (existingFields.has(f.label.trim().toUpperCase())) continue;
-              newAnnotations.push({
-                id: uuidv4(),
-                number: 0,
-                label: f.label,
-                value: f.value.trim(),
-                type: "Title Block" as DimensionType,
-                confidence: f.confidence,
-                bbox: f.bbox,
-                rotation: 0,
-                page: scanPage,
-                createdAt: now,
-                kind: "dimension",
-              });
-            }
-          } catch {
-            // The balloons are the point of the scan; a failed title-block read
-            // must not throw them away. The export still lists every configured
-            // keyword, with an empty value to fill in by hand.
-          }
         }
 
         if (newAnnotations.length > 0) {
@@ -1746,6 +1703,15 @@ export function DrawingViewer() {
           agreement: undefined,
           needsReview: candidate.state === "review",
           valueBox: candidate.valueBox,
+          // The scan already ran the labelling rules on this text.
+          rule:
+            candidate.label || candidate.category
+              ? {
+                  text: candidate.text,
+                  category: candidate.category ?? "",
+                  label: candidate.label ?? "",
+                }
+              : undefined,
         },
       });
     },

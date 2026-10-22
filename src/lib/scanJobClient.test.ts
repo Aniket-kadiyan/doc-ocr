@@ -157,4 +157,36 @@ describe("scan overlay coordinates", () => {
     // Panel identity survives the mapping.
     expect(mapped?.panels[0]).toMatchObject({ id: "P1", state: "active" });
   });
+
+  it("submits the original PDF inside the queued scan job", async () => {
+    const fetchMock = vi.fn(async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit
+    ) => {
+      void _input;
+      void _init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => snapshot({ enabled: false }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runScanJob({
+      sourceCanvas: canvas,
+      sourcePdf: new Blob(["%PDF-test"], { type: "application/pdf" }),
+      pdfRenderScale: 250 / 72,
+      bbox: { x: 0, y: 0, width: 1263, height: 893 },
+      page: 1,
+      scopeKind: "page",
+      displayScale,
+    });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const submitted = request.body as FormData;
+    expect(submitted).toBeInstanceOf(FormData);
+    expect(submitted.get("source_pdf")).toBeInstanceOf(Blob);
+    expect(submitted.get("pdf_render_scale")).toBe(String(250 / 72));
+  });
 });

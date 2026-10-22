@@ -137,6 +137,10 @@ def has_dimension_value(text: str) -> bool:
     return True
 
 
+# Two or three capitals, a hyphen, a short number: SC-1, KC-12, CTQ-3.
+_CHARACTERISTIC_TAG_RE = re.compile(r"^[A-Z]{2,3}-\d{1,2}$")
+
+
 def is_segment_worthy(text: str) -> bool:
     """
     Return False for fragment reads like ``.05``, ``215.``, or ``05``.
@@ -147,6 +151,12 @@ def is_segment_worthy(text: str) -> bool:
     # A short radius callout (R1, R2) is a complete value; check it before the
     # length floor that rejects other 2-character fragments.
     if re.match(r"^[Rr]\d", t):
+        return True
+    # A characteristic tag -- "SC-1", "KC-2", "CTQ-3" -- is set in an oval
+    # beside the dimension it flags. It carries one digit, so the digit floor
+    # below rejected it, yet it is exactly the kind of mark an inspector
+    # balloons: it says this characteristic is the one to verify.
+    if _CHARACTERISTIC_TAG_RE.match(t):
         return True
     if len(t) < 3:
         return False

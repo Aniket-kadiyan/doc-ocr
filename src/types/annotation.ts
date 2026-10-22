@@ -110,6 +110,12 @@ export interface Annotation {
   tool?: string;
   /** Legacy parent-label id, removed when an older project is normalized. */
   labelId?: string;
+  /**
+   * For a title-block field: the configured keyword it was read for. The
+   * stable link between a "Keywords to look for" entry and its value; the
+   * read label ("DWG NO.", "DWG") varies from sheet to sheet.
+   */
+  titleKeyword?: string;
   /** Editable tolerance; numeric values default to "0" and embedded ± values
    * are normalized to "+x, -x". */
   range?: string;
@@ -142,6 +148,11 @@ export interface OCRResult {
   needsReview?: boolean;
   /** Tight bbox of the detected text in source-canvas coords (snap target). */
   valueBox?: BBox;
+  /**
+   * The backend labelling rules' verdict on the text as recognised (before
+   * any client-side symbol fixing). A balloon saved with this text keeps it.
+   */
+  rule?: { text: string; category: string; label: string };
   /** backend/debug_output/<hash>/ when step dump succeeded */
   debugDumpDir?: string;
   debugDumpSkipped?: string;
