@@ -1,47 +1,78 @@
-Doc OCR Box - internal checksheet integration replacements
-===========================================================
+QTracX optional HTTPS milestone
+================================
 
-Target branch: checksheet_integration
-Verified base commit: 0ae04b10dd3863685ff17af3d033765dd6414deb
+Expected base
+-------------
+Branch: https-support
+Base commit: be2133903dbcba8a55ac248a0460a16d4b25d15c
 
-How to apply
+This archive contains only the changed/new files. It contains no Git commit and
+nothing has been pushed.
+
+Apply
+-----
+1. Stop the QTracX UI and backend.
+2. Confirm that the repository is on the https-support branch at the base above.
+3. Extract this ZIP directly over the repository root and allow matching files
+   to be replaced.
+4. Keep HTTP as the normal deployment by leaving this in .env.local:
+
+   HTTPS_ENABLED=false
+
+5. Keep the normal LAN bind/address settings, for example:
+
+   UI_HOST=0.0.0.0
+   PORT=3002
+   OCR_HOST=0.0.0.0
+   OCR_PORT=8000
+   NEXT_PUBLIC_OCR_API_URL=http://YOUR_SERVER_NAME_OR_IP:8000
+
+Optional HTTPS
+--------------
+To request HTTPS for both the UI and backend, add a PEM certificate and its
+unencrypted PEM private key on the server, then configure:
+
+   HTTPS_ENABLED=true
+   TLS_CERT_FILE=certificates/qtracx-cert.pem
+   TLS_KEY_FILE=certificates/qtracx-key.pem
+
+Relative certificate paths are resolved from the repository root. Absolute
+paths are also accepted. Restart both processes after changing these values.
+
+Both launchers validate the certificate/key pair. If the flag is false, or if
+either configured file is missing, unreadable, invalid, or mismatched, QTracX
+uses HTTP. When HTTPS was requested but cannot activate, a warning explains the
+fallback. There is no HTTP-to-HTTPS redirect.
+
+The backend CORS policy intentionally accepts all browser origins because the
+client LAN hostnames, IP addresses, and ports are unknown. Credentialed requests
+remain supported, and application authentication plus CSRF checks remain active.
+
+Verification
 ------------
+From the repository root:
 
-1. Check out the checksheet_integration branch in your own repository.
-2. Extract this archive.
-3. Copy the extracted contents into the repository root, preserving folders.
-4. Allow existing files with the same paths to be replaced.
-5. Do not copy the containing archive folder itself into the repository.
+   npm run typecheck
+   npm run lint
+   npm run test:frontend
+   npm run test:runtime
+   npm run build
 
-The archive contains complete replacement copies of every modified file and
-complete contents for every new file. It does not contain node_modules, build
-output, OCR models, source documents, a database, test changes, or Git metadata.
+From backend, using the project's configured CPU or GPU virtual environment:
 
-Runtime
--------
+   python -m pytest -q test_config_env.py test_transport_security.py `
+     test_cors_config.py test_auth_routes.py
 
-Start the backend and frontend normally:
+After starting the backend, GET /health. The transport object reports:
 
-  npm run ocr-api
-  npm run dev
+   https_requested  - whether HTTPS_ENABLED requested TLS
+   https_active     - whether a valid certificate pair activated TLS
+   scheme           - http or https
+   http_fallback    - true when requested HTTPS fell back to HTTP
+   fallback_reason  - a non-secret explanation when fallback occurred
 
-The backend creates its SQLite database and source-document directory at:
+The same response reports cors.policy as allow_all_origins.
 
-  backend/data/checksheets/
-
-For a durable deployment location, add this to .env.local using an appropriate
-absolute path for the server:
-
-  CHECKSHEET_DATA_DIR=D:\doc-ocr-data\checksheets
-  CHECKSHEET_MAX_DOCUMENT_MB=200
-
-Validation already completed
-----------------------------
-
-- TypeScript compilation
-- Targeted ESLint checks
-- Next.js production build
-- Python syntax parsing
-- SQLite schema initialization
-
-No automated test files were added or changed.
+Suggested commit message
+------------------------
+feat(network): add optional HTTPS with automatic HTTP fallback

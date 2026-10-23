@@ -74,19 +74,20 @@ the username is absent, inactive, locked, or has a wrong password.
 
 ## Configure browser sessions
 
-The defaults are suitable for the current HTTP deployment:
+The default is suitable for the normal HTTP deployment:
 
 ```dotenv
 AUTH_SESSION_HOURS=8
-AUTH_COOKIE_SECURE=false
 ```
 
-`AUTH_SESSION_HOURS` accepts 1 through 168. Change `AUTH_COOKIE_SECURE` to
-`true` when the optional HTTPS milestone is deployed. A secure cookie is not
-sent by browsers over plain HTTP.
+`AUTH_SESSION_HOURS` accepts 1 through 168. Cookie security follows the
+transport that actually starts. HTTP uses non-Secure cookies. When
+`HTTPS_ENABLED=true` and the configured certificate pair validates, HTTPS uses
+Secure cookies. If certificate validation fails, the logged HTTP fallback also
+uses non-Secure cookies so login remains functional.
 
-For an HTTP LAN deployment, the UI and backend must use the same browser host
-name or IP address, although their ports may differ. For example, use
+For a LAN deployment, the UI and backend should use the same browser host name
+or IP address, although their ports may differ. For example, use
 `http://192.168.1.20:3002` for the UI and
 `http://192.168.1.20:8000` for the backend. Do not open the UI using an IP while
 configuring `NEXT_PUBLIC_OCR_API_URL` with a different alias such as

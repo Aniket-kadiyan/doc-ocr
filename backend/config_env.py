@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,6 +25,16 @@ class RuntimeConfigurationError(ValueError):
 def _configured_path(name: str, default: Path) -> Path:
     raw = os.environ.get(name, "").strip()
     path = Path(raw).expanduser() if raw else default
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
+
+
+def _optional_configured_path(name: str) -> Path | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
     if not path.is_absolute():
         path = _REPO_ROOT / path
     return path.resolve()
@@ -59,19 +68,6 @@ def _strict_bool(name: str, default: bool) -> bool:
     )
 
 
-def _validate_origin(origin: str) -> str:
-    parsed = urlsplit(origin)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise RuntimeConfigurationError(
-            "OCR_CORS_ORIGINS entries must be complete http:// or https:// origins"
-        )
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise RuntimeConfigurationError(
-            "OCR_CORS_ORIGINS entries must not contain paths, queries, or fragments"
-        )
-    return f"{parsed.scheme}://{parsed.netloc}"
-
-
 @dataclass(frozen=True)
 class RuntimeConfig:
     """Validated runtime settings shared by startup and diagnostics."""
@@ -83,12 +79,13 @@ class RuntimeConfig:
     backend_port: int
     backend_reload: bool
     ocr_model_instances: int
-    cors_origins: tuple[str, ...] | None
+    https_enabled: bool
+    tls_cert_file: Path | None = field(repr=False)
+    tls_key_file: Path | None = field(repr=False)
     checksheet_data_dir: Path
     checksheet_max_document_mb: int
     database_url: str = field(repr=False)
     auth_session_hours: int
-    auth_cookie_secure: bool
     log_dir: Path
     log_level: str
     log_max_mb: int
@@ -105,12 +102,14 @@ class RuntimeConfig:
             "backend_port": self.backend_port,
             "backend_reload": self.backend_reload,
             "ocr_model_instances": self.ocr_model_instances,
-            "cors_origins": list(self.cors_origins or ()),
+            "https_enabled": self.https_enabled,
+            "tls_cert_configured": self.tls_cert_file is not None,
+            "tls_key_configured": self.tls_key_file is not None,
+            "cors_policy": "allow_all_origins",
             "checksheet_data_dir": str(self.checksheet_data_dir),
             "checksheet_max_document_mb": self.checksheet_max_document_mb,
             "database_configured": bool(self.database_url),
             "auth_session_hours": self.auth_session_hours,
-            "auth_cookie_secure": self.auth_cookie_secure,
             "log_dir": str(self.log_dir),
             "log_level": self.log_level,
             "log_max_mb": self.log_max_mb,
@@ -158,14 +157,6 @@ def get_int(name: str, default: int) -> int:
         return default
 
 
-def get_cors_origins() -> list[str] | None:
-    """Explicit comma-separated allow-list, or None to fall back to a dev regex."""
-    raw = os.environ.get("OCR_CORS_ORIGINS", "").strip()
-    if not raw:
-        return None
-    return [_validate_origin(o.strip()) for o in raw.split(",") if o.strip()]
-
-
 def load_runtime_config() -> RuntimeConfig:
     """Read and validate the complete QTracX runtime configuration."""
 
@@ -191,9 +182,9 @@ def load_runtime_config() -> RuntimeConfig:
         ocr_model_instances=_strict_int(
             "OCR_MODEL_INSTANCES", 1, minimum=1, maximum=8
         ),
-        cors_origins=(
-            tuple(origins) if (origins := get_cors_origins()) is not None else None
-        ),
+        https_enabled=_strict_bool("HTTPS_ENABLED", False),
+        tls_cert_file=_optional_configured_path("TLS_CERT_FILE"),
+        tls_key_file=_optional_configured_path("TLS_KEY_FILE"),
         checksheet_data_dir=_configured_path(
             "CHECKSHEET_DATA_DIR",
             _REPO_ROOT / "backend" / "data" / "checksheets",
@@ -205,7 +196,6 @@ def load_runtime_config() -> RuntimeConfig:
         auth_session_hours=_strict_int(
             "AUTH_SESSION_HOURS", 8, minimum=1, maximum=168
         ),
-        auth_cookie_secure=_strict_bool("AUTH_COOKIE_SECURE", False),
         log_dir=_configured_path(
             "QTRACX_LOG_DIR", _REPO_ROOT / "backend" / "logs"
         ),

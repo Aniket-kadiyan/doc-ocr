@@ -88,6 +88,20 @@ class AuthenticationRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Invalid username or password")
 
+    def test_https_transport_marks_authentication_cookies_secure(self) -> None:
+        self.client.app.state.auth_cookie_secure = True
+        response = self.client.post(
+            "/auth/login",
+            json={
+                "username": "operator.one",
+                "password": "operator secure password 2026",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        cookie_headers = response.headers.get_list("set-cookie")
+        self.assertEqual(len(cookie_headers), 2)
+        self.assertTrue(all("Secure" in header for header in cookie_headers))
+
     def test_protected_routes_require_session_and_csrf(self) -> None:
         self.assertEqual(self.client.get("/protected").status_code, 401)
         login = self.client.post("/auth/login", json={

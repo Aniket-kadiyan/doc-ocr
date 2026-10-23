@@ -9,9 +9,10 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test:frontend": "vitest run",
+    "test:runtime": "node --test scripts/runtime-transport.node.mjs",
     "test:backend": "node scripts/run-python-tests.mjs --fast",
     "test:ocr": "node scripts/run-python-tests.mjs --ocr",
-    "verify": "npm run lint && npm run typecheck && npm run test:frontend && npm run test:backend",
+    "verify": "npm run lint && npm run typecheck && npm run test:frontend && npm run test:runtime && npm run test:backend",
     "ocr-api": "node scripts/run-ocr.mjs",
     "ocr-api:debug": "node scripts/run-ocr.mjs --debug",
     "ocr-api:debug:force": "node scripts/run-ocr.mjs --force"

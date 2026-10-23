@@ -18,6 +18,28 @@ export interface OcrApiHealth {
 const DEFAULT_HOST = "http://localhost";
 const DEFAULT_PORT = "8000";
 
+/** Keep the deployment address while following the protocol actually serving the UI. */
+export function alignApiUrlWithUiProtocol(
+  apiUrl: string,
+  uiProtocol?: string
+): string {
+  const protocol =
+    uiProtocol ??
+    (typeof window !== "undefined" ? window.location.protocol : "");
+  if (protocol !== "http:" && protocol !== "https:") {
+    return apiUrl.replace(/\/+$/, "");
+  }
+  try {
+    const parsed = new URL(apiUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      parsed.protocol = protocol;
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return apiUrl.replace(/\/+$/, "");
+  }
+}
+
 /**
  * Resolve the OCR backend base URL. Precedence:
  *   1. NEXT_PUBLIC_OCR_API_URL — full URL override (e.g. https://ocr.example.com)
@@ -28,7 +50,7 @@ const DEFAULT_PORT = "8000";
  */
 export function getOcrApiUrl(): string {
   const fullUrl = process.env.NEXT_PUBLIC_OCR_API_URL?.trim();
-  if (fullUrl) return fullUrl.replace(/\/+$/, "");
+  if (fullUrl) return alignApiUrlWithUiProtocol(fullUrl);
 
   let host = (process.env.NEXT_PUBLIC_OCR_API_HOST?.trim() || DEFAULT_HOST).replace(
     /\/+$/,
@@ -37,7 +59,7 @@ export function getOcrApiUrl(): string {
   if (!/^https?:\/\//i.test(host)) host = `http://${host}`;
 
   const port = process.env.NEXT_PUBLIC_OCR_API_PORT?.trim() || DEFAULT_PORT;
-  return port ? `${host}:${port}` : host;
+  return alignApiUrlWithUiProtocol(port ? `${host}:${port}` : host);
 }
 
 let healthCache: { at: number; health: OcrApiHealth } | null = null;

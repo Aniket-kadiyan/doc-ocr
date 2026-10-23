@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
+  alignApiUrlWithUiProtocol,
   mapPageSegmentRegions,
   mapSegmentCandidateOutcomes,
   mapSegmentRegions,
 } from "@/lib/paddleOcrClient";
+
+describe("OCR API transport", () => {
+  it("uses HTTPS when the UI actually started with HTTPS", () => {
+    expect(
+      alignApiUrlWithUiProtocol("http://qtracx-server:8000", "https:")
+    ).toBe("https://qtracx-server:8000");
+  });
+
+  it("uses HTTP after an HTTPS startup fallback", () => {
+    expect(
+      alignApiUrlWithUiProtocol("https://qtracx-server:8000", "http:")
+    ).toBe("http://qtracx-server:8000");
+  });
+
+  it("removes trailing slashes without changing non-browser schemes", () => {
+    expect(alignApiUrlWithUiProtocol("custom://server///", "file:")).toBe(
+      "custom://server"
+    );
+  });
+});
 
 describe("scan result coordinate mapping", () => {
   it("maps padded crop coordinates back to the base drawing", () => {

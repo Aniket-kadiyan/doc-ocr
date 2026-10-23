@@ -89,6 +89,13 @@ Open `http://localhost:3002`. Check `http://127.0.0.1:8000/health` if the
 frontend cannot reach OCR. A healthy configured service reports
 `"paddleocr": true`.
 
+HTTP is the default transport. To request optional HTTPS for both services,
+set `HTTPS_ENABLED=true`, `TLS_CERT_FILE`, and `TLS_KEY_FILE` in `.env.local`.
+Both launchers validate the PEM certificate pair. Missing, unreadable, or
+invalid files produce a visible warning and an automatic HTTP fallback. The
+backend accepts every browser origin because client LAN addresses are not known
+in advance; authentication and CSRF checks still protect application routes.
+
 Windows also has a one-shot backend setup and launcher:
 
 ```bat

@@ -21,7 +21,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -48,6 +47,7 @@ from app_logging import (
 )
 from client_diagnostics import ClientDiagnosticEvent, record_client_diagnostic
 from config_env import load_env_files, load_runtime_config
+from cors_config import install_unrestricted_cors
 from debug_dump import dump_status
 from database import DatabaseManager
 from gdt_routes import router as gdt_router
@@ -63,11 +63,13 @@ from page_value_filters import normalize_page_value_text
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
 from text_layer_scan import scan_result_from_text_layer
+from transport_security import resolve_transport_security
 
 # Draw config from the project's root .env.local / .env (same file the frontend
 # uses). Done before reading any OCR_* setting below.
 load_env_files()
 runtime_config = load_runtime_config()
+transport_security = resolve_transport_security(runtime_config)
 log_path = configure_logging(runtime_config)
 logger = get_logger("api")
 
@@ -83,7 +85,9 @@ auth_database_manager = (
 )
 app.state.auth_database_manager = auth_database_manager
 app.state.auth_session_hours = runtime_config.auth_session_hours
-app.state.auth_cookie_secure = runtime_config.auth_cookie_secure
+# Secure cookies follow the transport that actually started, not merely the
+# requested flag. A certificate failure therefore keeps HTTP fallback usable.
+app.state.auth_cookie_secure = transport_security.active
 app.include_router(auth_router)
 protected_request = [Depends(require_protected_request)]
 app.include_router(checksheet_router, dependencies=protected_request)
@@ -163,10 +167,6 @@ def _get_scan_job_manager() -> ScanJobManager:
             )
     return scan_job_manager
 
-# CORS origins: an explicit OCR_CORS_ORIGINS allow-list (comma-separated) when
-# set; otherwise a dev-friendly fallback that accepts any localhost port — so a
-# frontend on :3000, :4000, etc. all work without editing this file.
-_cors_origins = runtime_config.cors_origins
 _raster_response_headers = [
     "X-Document-Page-Count",
     "X-Document-Page-Width",
@@ -174,24 +174,7 @@ _raster_response_headers = [
     "X-Document-Format",
     "X-Request-ID",
 ]
-if _cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=_raster_response_headers,
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=_raster_response_headers,
-    )
+install_unrestricted_cors(app, expose_headers=_raster_response_headers)
 
 
 class DimensionType(str, Enum):
@@ -289,6 +272,22 @@ def startup() -> None:
             },
         },
     )
+    if transport_security.requested and not transport_security.active:
+        logger.warning(
+            "HTTPS was requested but is unavailable; using HTTP",
+            extra={
+                "event": "https_fallback_to_http",
+                "details": transport_security.public_summary(),
+            },
+        )
+    else:
+        logger.info(
+            f"QTracX backend transport is {transport_security.scheme.upper()}",
+            extra={
+                "event": "transport_selected",
+                "details": transport_security.public_summary(),
+            },
+        )
     initialize_checksheet_storage()
     pipeline = get_pipeline()
     manager = _get_scan_job_manager()
@@ -335,6 +334,11 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         **pipeline.status,
+        "transport": transport_security.public_summary(),
+        "cors": {
+            "policy": "allow_all_origins",
+            "credentials": True,
+        },
         "ocr_capacity": capacity,
         "authentication": {
             "configured": auth_database_manager is not None,
@@ -1354,9 +1358,18 @@ if __name__ == "__main__":
     # Run from this directory so uvicorn's reloader can import "main:app".
     import uvicorn
 
+    tls_arguments = (
+        {
+            "ssl_certfile": str(transport_security.cert_file),
+            "ssl_keyfile": str(transport_security.key_file),
+        }
+        if transport_security.active
+        else {}
+    )
     uvicorn.run(
         "main:app",
         host=runtime_config.backend_host,
         port=runtime_config.backend_port,
         reload=runtime_config.backend_reload,
+        **tls_arguments,
     )
