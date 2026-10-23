@@ -56,10 +56,14 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.auth_session_hours, 12)
         self.assertTrue(config.https_enabled)
         self.assertTrue(
-            str(config.tls_cert_file).endswith("certificates/qtracx.crt")
+            config.tls_cert_file.as_posix().endswith(
+                "certificates/qtracx.crt"
+            )
         )
         self.assertTrue(
-            str(config.tls_key_file).endswith("certificates/qtracx.key")
+            config.tls_key_file.as_posix().endswith(
+                "certificates/qtracx.key"
+            )
         )
         self.assertTrue(config.public_summary()["tls_cert_configured"])
 

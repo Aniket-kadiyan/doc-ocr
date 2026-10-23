@@ -1,0 +1,19 @@
+QTracX installer I1 - Windows test correction
+================================================
+
+Apply this over the previously applied I1 installer foundation.
+
+The runtime was not failing. The certificate-path assertion used a POSIX `/`
+suffix against a Windows path containing `\`. The test now normalizes the
+Path to POSIX form before comparing it.
+
+The apply instructions also use PowerShell backticks instead of Command
+Prompt caret continuation characters.
+
+Verify from the repository root:
+
+  Push-Location backend
+  .\.venv-gpu\Scripts\python.exe -m unittest -v test_config_env.py
+  Pop-Location
+
+Expected result: Ran 5 tests, OK.
