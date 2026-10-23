@@ -53,6 +53,13 @@ class WizardContractTests(unittest.TestCase):
         )
         self.assertLess(database_stage, verify_stage)
 
+    def test_layout_is_dpi_safe_and_numeric_values_are_visible(self) -> None:
+        self.assertIn("AutoScaleMode]::Dpi", self.script)
+        self.assertIn("$page.AutoScroll = $true", self.script)
+        self.assertIn("Drawing.SystemColors]::WindowText", self.script)
+        self.assertIn("$number.Value = [decimal]$Value", self.script)
+        self.assertIn("$tabs.Anchor", self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

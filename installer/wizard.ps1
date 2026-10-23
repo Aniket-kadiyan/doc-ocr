@@ -175,6 +175,8 @@ function Add-QTracXTextBox {
     $box = [System.Windows.Forms.TextBox]::new()
     $box.Location = [Drawing.Point]::new($X, $Y)
     $box.Size = [Drawing.Size]::new($Width, $(if ($Multiline) { 220 } else { 27 }))
+    $box.BackColor = [Drawing.SystemColors]::Window
+    $box.ForeColor = [Drawing.SystemColors]::WindowText
     $box.Text = $Text
     $box.UseSystemPasswordChar = [bool]$Password
     $box.Multiline = [bool]$Multiline
@@ -191,6 +193,8 @@ function Add-QTracXComboBox {
     $combo.Location = [Drawing.Point]::new($X, $Y)
     $combo.Size = [Drawing.Size]::new($Width, 28)
     $combo.DropDownStyle = "DropDownList"
+    $combo.BackColor = [Drawing.SystemColors]::Window
+    $combo.ForeColor = [Drawing.SystemColors]::WindowText
     [void]$combo.Items.AddRange($Items)
     $combo.SelectedIndex = 0
     $Parent.Controls.Add($combo)
@@ -205,15 +209,23 @@ function Add-QTracXNumeric {
         [int]$Value,
         [int]$Minimum,
         [int]$Maximum,
-        [int]$Width = 120
+        [int]$Width = 150
     )
     $number = [System.Windows.Forms.NumericUpDown]::new()
     $number.Location = [Drawing.Point]::new($X, $Y)
-    $number.Size = [Drawing.Size]::new($Width, 27)
+    $number.Size = [Drawing.Size]::new($Width, 32)
+    $number.MinimumSize = [Drawing.Size]::new($Width, 32)
+    $number.BackColor = [Drawing.SystemColors]::Window
+    $number.ForeColor = [Drawing.SystemColors]::WindowText
+    $number.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $number.TextAlign = [System.Windows.Forms.HorizontalAlignment]::Left
+    $number.UpDownAlign = [System.Windows.Forms.LeftRightAlignment]::Right
+    $number.ThousandsSeparator = $false
     $number.Minimum = $Minimum
     $number.Maximum = $Maximum
-    $number.Value = $Value
+    $number.Value = [decimal]$Value
     $Parent.Controls.Add($number)
+    $number.Refresh()
     return $number
 }
 
@@ -232,6 +244,9 @@ $form.Text = "QTracX Deployment Installer"
 $form.StartPosition = "CenterScreen"
 $form.ClientSize = [Drawing.Size]::new(900, 700)
 $form.MinimumSize = [Drawing.Size]::new(916, 739)
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.AutoScaleDimensions = [Drawing.SizeF]::new(96.0, 96.0)
+$form.AutoScroll = $true
 $form.Font = [Drawing.Font]::new("Segoe UI", 10)
 
 $title = Add-QTracXLabel $form "QTracX Deployment Installer" 24 18 500
@@ -244,6 +259,12 @@ $subtitle.ForeColor = [Drawing.Color]::DimGray
 $tabs = [System.Windows.Forms.TabControl]::new()
 $tabs.Location = [Drawing.Point]::new(20, 92)
 $tabs.Size = [Drawing.Size]::new(860, 540)
+$tabs.Anchor = (
+    [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Bottom -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
+)
 $form.Controls.Add($tabs)
 
 $sourceTab = [System.Windows.Forms.TabPage]::new("1. Source")
@@ -258,6 +279,10 @@ $reviewTab = [System.Windows.Forms.TabPage]::new("5. Review and install")
     $adminTab,
     $reviewTab
 ))
+foreach ($page in $tabs.TabPages) {
+    $page.AutoScroll = $true
+    $page.BackColor = [Drawing.SystemColors]::Control
+}
 
 Add-QTracXLabel $sourceTab "Installation directory" 28 32 | Out-Null
 $installDirectory = Add-QTracXTextBox $sourceTab 250 28 480 "C:\QTracX"
@@ -301,14 +326,14 @@ Add-QTracXLabel $serverTab "Scan workers" 430 220 | Out-Null
 $scanWorkers = Add-QTracXNumeric $serverTab 590 216 2 1 32
 $warmModels = [System.Windows.Forms.CheckBox]::new()
 $warmModels.Text = "Download and warm OCR models during installation"
-$warmModels.Location = [Drawing.Point]::new(250, 264)
-$warmModels.Size = [Drawing.Size]::new(450, 28)
+$warmModels.Location = [Drawing.Point]::new(28, 264)
+$warmModels.Size = [Drawing.Size]::new(790, 28)
 $warmModels.Checked = $true
 $serverTab.Controls.Add($warmModels)
 $httpsEnabled = [System.Windows.Forms.CheckBox]::new()
 $httpsEnabled.Text = "Enable HTTPS when certificate and private key are available"
-$httpsEnabled.Location = [Drawing.Point]::new(250, 304)
-$httpsEnabled.Size = [Drawing.Size]::new(510, 28)
+$httpsEnabled.Location = [Drawing.Point]::new(28, 304)
+$httpsEnabled.Size = [Drawing.Size]::new(790, 28)
 $serverTab.Controls.Add($httpsEnabled)
 Add-QTracXLabel $serverTab "Certificate file" 28 352 | Out-Null
 $certificateFile = Add-QTracXTextBox $serverTab 250 348 480
@@ -383,6 +408,9 @@ $installLog.Height = 220
 $backButton = Add-QTracXButton $form "Back" 604 648 90
 $nextButton = Add-QTracXButton $form "Next" 704 648 90
 $cancelButton = Add-QTracXButton $form "Close" 804 648 76
+$backButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$nextButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$cancelButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
 
 function Set-QTracXSourceState {
     $archive = $sourceMode.SelectedIndex -eq 0

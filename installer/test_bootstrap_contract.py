@@ -16,13 +16,29 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn('changesApplied = $false', self.script)
 
     def test_prerequisite_package_ids_are_fixed(self) -> None:
+        catalog = (
+            Path(__file__).resolve().parent
+            / "config"
+            / "prerequisites.windows-x64.json"
+        ).read_text(encoding="utf-8")
         for package_id in (
             "Python.Python.3.13",
             "OpenJS.NodeJS.LTS",
             "Git.Git",
             "Microsoft.msodbcsql.18",
         ):
-            self.assertIn(package_id, self.script)
+            self.assertIn(package_id, catalog)
+
+    def test_plan_exposes_exact_downloads_and_bundle_state(self) -> None:
+        self.assertIn("Get-QTracXPrerequisiteSummary", self.script)
+        self.assertIn("officialDownloadUrl", self.script)
+        self.assertIn("bundledStatus", self.script)
+        self.assertIn("--version $Package.wingetVersion", self.script)
+
+    def test_bundle_is_hash_checked_before_execution(self) -> None:
+        self.assertIn("Get-FileHash", self.script)
+        self.assertIn('else { "invalid-hash" }', self.script)
+        self.assertIn("if ($bundle.usable)", self.script)
 
     def test_mssql_driver_detection_is_64_bit_and_version_aware(self) -> None:
         self.assertIn('$_.Platform -eq "64-bit"', self.script)

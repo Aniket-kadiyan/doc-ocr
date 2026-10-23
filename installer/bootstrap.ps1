@@ -27,11 +27,140 @@ if (-not $ApplicationRoot) {
 }
 $ApplicationRoot = [System.IO.Path]::GetFullPath($ApplicationRoot)
 
-$installCommands = [ordered]@{
-    python = "winget install --exact --id Python.Python.3.13 --source winget --scope machine --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
-    node = "winget install --exact --id OpenJS.NodeJS.LTS --source winget --scope machine --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
-    git = "winget install --exact --id Git.Git --source winget --scope machine --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
-    mssqlOdbc = "winget install --exact --id Microsoft.msodbcsql.18 --source winget --scope machine --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
+$catalogPath = Join-Path $PSScriptRoot "config\prerequisites.windows-x64.json"
+if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
+    throw "Prerequisite catalog was not found: $catalogPath"
+}
+$prerequisiteCatalog = Get-Content -LiteralPath $catalogPath -Raw |
+    ConvertFrom-Json
+$prerequisiteBundleRoot = Join-Path $PSScriptRoot "prerequisites"
+
+function Get-QTracXPackage {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $property = $prerequisiteCatalog.packages.PSObject.Properties[$Name]
+    if (-not $property) {
+        throw "Unknown prerequisite package: $Name"
+    }
+    return $property.Value
+}
+
+function Get-QTracXWingetCommand {
+    param([Parameter(Mandatory = $true)]$Package)
+
+    return (
+        "winget install --exact --id {0} --version {1} --source winget " +
+        "--scope machine --architecture x64 --silent " +
+        "--accept-package-agreements --accept-source-agreements " +
+        "--disable-interactivity"
+    ) -f $Package.wingetId, $Package.wingetVersion
+}
+
+function Get-QTracXBundleLock {
+    $lockPath = Join-Path $prerequisiteBundleRoot "prerequisites.lock.json"
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-QTracXBundledInstaller {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $package = Get-QTracXPackage -Name $Name
+    $path = Join-Path $prerequisiteBundleRoot ([string]$package.fileName)
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return [pscustomobject]@{
+            status = "not-bundled"
+            usable = $false
+            path = $path
+            sha256 = $null
+            verification = $null
+        }
+    }
+
+    $expectedHash = ([string]$package.sha256).ToLowerInvariant()
+    $verification = "catalog"
+    if (-not $expectedHash) {
+        $verification = "bundle-lock"
+        $lock = Get-QTracXBundleLock
+        if ($lock) {
+            $entry = @($lock.files | Where-Object {
+                $_.key -eq $Name -and $_.fileName -eq $package.fileName
+            }) | Select-Object -First 1
+            if ($entry) {
+                $expectedHash = ([string]$entry.sha256).ToLowerInvariant()
+            }
+        }
+    }
+    if (-not $expectedHash) {
+        return [pscustomobject]@{
+            status = "unverified"
+            usable = $false
+            path = $path
+            sha256 = $null
+            verification = $verification
+        }
+    }
+
+    $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $valid = $actualHash -eq $expectedHash
+    $publisherProperty = $package.PSObject.Properties["authenticodePublisher"]
+    if ($valid -and $publisherProperty -and [string]$publisherProperty.Value) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $path
+        $publisher = [string]$publisherProperty.Value
+        $valid = (
+            $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+            $signature.SignerCertificate -and
+            $signature.SignerCertificate.Subject -like "*$publisher*"
+        )
+        if (-not $valid) {
+            return [pscustomobject]@{
+                status = "invalid-signature"
+                usable = $false
+                path = $path
+                sha256 = $actualHash
+                verification = "authenticode"
+            }
+        }
+    }
+    return [pscustomobject]@{
+        status = $(if ($valid) { "ready" } else { "invalid-hash" })
+        usable = $valid
+        path = $path
+        sha256 = $actualHash
+        verification = $verification
+    }
+}
+
+function Get-QTracXPrerequisiteSummary {
+    $packages = @()
+    foreach ($property in $prerequisiteCatalog.packages.PSObject.Properties) {
+        $package = $property.Value
+        $bundle = Get-QTracXBundledInstaller -Name $property.Name
+        $packages += [ordered]@{
+            key = $property.Name
+            displayName = [string]$package.displayName
+            version = [string]$package.version
+            officialDownloadUrl = [string]$package.officialDownloadUrl
+            fileName = [string]$package.fileName
+            wingetCommand = Get-QTracXWingetCommand -Package $package
+            bundledStatus = $bundle.status
+            bundledPath = $bundle.path
+            license = [string]$package.licenseName
+        }
+    }
+    return [ordered]@{
+        catalog = $catalogPath
+        platform = [string]$prerequisiteCatalog.platform
+        bundleDirectory = $prerequisiteBundleRoot
+        packages = $packages
+    }
 }
 
 function Update-ProcessPath {
@@ -249,31 +378,51 @@ function Get-QTracXActions {
 
     $actions = @()
     if (-not $State.python.supported) {
+        $package = Get-QTracXPackage -Name "python"
+        $bundle = Get-QTracXBundledInstaller -Name "python"
         $actions += [pscustomobject]@{
-            prerequisite = "Python 3.13 x64"
+            prerequisite = [string]$package.displayName
             required = $true
-            command = $installCommands.python
+            preferredSource = $(if ($bundle.usable) { "bundled" } else { "winget" })
+            bundledStatus = $bundle.status
+            command = Get-QTracXWingetCommand -Package $package
+            officialDownloadUrl = [string]$package.officialDownloadUrl
         }
     }
     if (-not $State.node.supported) {
+        $package = Get-QTracXPackage -Name "node"
+        $bundle = Get-QTracXBundledInstaller -Name "node"
         $actions += [pscustomobject]@{
-            prerequisite = "Node.js LTS and npm"
+            prerequisite = [string]$package.displayName
             required = $true
-            command = $installCommands.node
+            preferredSource = $(if ($bundle.usable) { "bundled" } else { "winget" })
+            bundledStatus = $bundle.status
+            command = Get-QTracXWingetCommand -Package $package
+            officialDownloadUrl = [string]$package.officialDownloadUrl
         }
     }
     if ($IncludeGit -and -not $State.git.available) {
+        $package = Get-QTracXPackage -Name "git"
+        $bundle = Get-QTracXBundledInstaller -Name "git"
         $actions += [pscustomobject]@{
-            prerequisite = "Git"
+            prerequisite = [string]$package.displayName
             required = $true
-            command = $installCommands.git
+            preferredSource = $(if ($bundle.usable) { "bundled" } else { "winget" })
+            bundledStatus = $bundle.status
+            command = Get-QTracXWingetCommand -Package $package
+            officialDownloadUrl = [string]$package.officialDownloadUrl
         }
     }
     if ($Database -eq "mssql" -and -not $State.mssqlOdbc.available) {
+        $package = Get-QTracXPackage -Name "mssqlOdbc"
+        $bundle = Get-QTracXBundledInstaller -Name "mssqlOdbc"
         $actions += [pscustomobject]@{
-            prerequisite = "Microsoft ODBC Driver 18 for SQL Server x64"
+            prerequisite = [string]$package.displayName
             required = $true
-            command = $installCommands.mssqlOdbc
+            preferredSource = $(if ($bundle.usable) { "bundled" } else { "winget" })
+            bundledStatus = $bundle.status
+            command = Get-QTracXWingetCommand -Package $package
+            officialDownloadUrl = [string]$package.officialDownloadUrl
         }
     }
     if ($Runtime -eq "gpu" -and -not $State.gpu.available) {
@@ -287,16 +436,20 @@ function Get-QTracXActions {
 }
 
 function Invoke-QTracXWingetInstall {
-    param([Parameter(Mandatory = $true)][string]$PackageId)
+    param([Parameter(Mandatory = $true)]$Package)
 
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) {
-        throw "WinGet is unavailable. Install the prerequisite manually and rerun Verify mode."
+        throw (
+            "WinGet is unavailable. Install {0} from {1} and rerun Verify mode." -f
+            $Package.displayName, $Package.officialDownloadUrl
+        )
     }
-    Write-Host "Installing $PackageId ..."
+    Write-Host "Installing $($Package.displayName) with WinGet ..."
     & $winget.Source install `
         --exact `
-        --id $PackageId `
+        --id $Package.wingetId `
+        --version $Package.wingetVersion `
         --source winget `
         --scope machine `
         --architecture x64 `
@@ -305,8 +458,45 @@ function Invoke-QTracXWingetInstall {
         --accept-source-agreements `
         --disable-interactivity
     if ($LASTEXITCODE -ne 0) {
-        throw "WinGet failed to install $PackageId (exit code $LASTEXITCODE)."
+        throw (
+            "WinGet failed to install {0} (exit code {1}). Direct official download: {2}" -f
+            $Package.displayName, $LASTEXITCODE, $Package.officialDownloadUrl
+        )
     }
+}
+
+function Invoke-QTracXBundledInstall {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)]$Bundle
+    )
+
+    Write-Host "Installing bundled $($Package.displayName) ..."
+    $arguments = @($Package.silentArguments | ForEach-Object { [string]$_ })
+    if ($Package.installerType -eq "msi") {
+        & msiexec.exe /i $Bundle.path @arguments
+    }
+    elseif ($Package.installerType -eq "exe") {
+        & $Bundle.path @arguments
+    }
+    else {
+        throw "Unsupported bundled installer type: $($Package.installerType)"
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Bundled installation of $($Package.displayName) failed (exit code $LASTEXITCODE)."
+    }
+}
+
+function Install-QTracXPrerequisite {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $package = Get-QTracXPackage -Name $Name
+    $bundle = Get-QTracXBundledInstaller -Name $Name
+    if ($bundle.usable) {
+        Invoke-QTracXBundledInstall -Package $package -Bundle $bundle
+        return
+    }
+    Invoke-QTracXWingetInstall -Package $package
 }
 
 function Invoke-QTracXRuntimeSetup {
@@ -357,10 +547,8 @@ $report = [ordered]@{
     applicationSetup = $(if ($HostOnly) { "skipped" } else { "included" })
     state = $state
     actions = $actions
+    prerequisiteCatalog = Get-QTracXPrerequisiteSummary
     manualDownloadPages = [ordered]@{
-        python = "https://www.python.org/downloads/windows/"
-        node = "https://nodejs.org/en/download"
-        mssqlOdbc = "https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server"
         winget = "https://learn.microsoft.com/windows/package-manager/winget/"
     }
 }
@@ -377,16 +565,16 @@ if ($Mode -eq "Plan") {
 
 if ($Mode -eq "Install") {
     if (-not $state.python.supported) {
-        Invoke-QTracXWingetInstall -PackageId "Python.Python.3.13"
+        Install-QTracXPrerequisite -Name "python"
     }
     if (-not $state.node.supported) {
-        Invoke-QTracXWingetInstall -PackageId "OpenJS.NodeJS.LTS"
+        Install-QTracXPrerequisite -Name "node"
     }
     if ($IncludeGit -and -not $state.git.available) {
-        Invoke-QTracXWingetInstall -PackageId "Git.Git"
+        Install-QTracXPrerequisite -Name "git"
     }
     if ($Database -eq "mssql" -and -not $state.mssqlOdbc.available) {
-        Invoke-QTracXWingetInstall -PackageId "Microsoft.msodbcsql.18"
+        Install-QTracXPrerequisite -Name "mssqlOdbc"
     }
     Update-ProcessPath
     $state = Get-QTracXHostState

@@ -87,17 +87,20 @@ The exact detected name is returned as `selectedDriver` and is passed into the
 later configuration/database step. It is not permanently hard-coded to Driver
 18. Legacy entries such as `SQL Server` are not selected for a new deployment.
 
-If neither Driver 18 nor 17 is installed, plan mode returns this command:
+If neither Driver 18 nor 17 is installed, plan mode returns an exact-version
+WinGet command and the direct official installer URL. The clean-host catalog
+currently pins Microsoft ODBC Driver 18.7.1.1 x64:
 
 ```powershell
-winget install --exact --id Microsoft.msodbcsql.18 `
+winget install --exact --id Microsoft.msodbcsql.18 --version 18.7.1.1 `
     --source winget --scope machine --architecture x64 --silent `
     --accept-package-agreements --accept-source-agreements `
     --disable-interactivity
 ```
 
-Install mode can execute the same command. If WinGet is unavailable, download
-the x64 driver from Microsoft's official page:
+Install mode can execute the same command. If WinGet is unavailable, use the
+direct x64 package URL printed by Plan mode. The catalog URL is versioned and
+points to Microsoft's download service; the general release page remains:
 
 <https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server>
 
@@ -108,16 +111,19 @@ and do not require Microsoft ODBC.
 
 ## Python and Node.js
 
-The bootstrap requires 64-bit CPython 3.13 and Node.js 20.19 or newer with
-npm. If they are missing, plan mode returns the commands and install mode uses:
+The bootstrap accepts 64-bit CPython 3.13 and Node.js 20.19 or newer with npm.
+Fresh installations are pinned to the tested CPython 3.13.14 x64 package and
+the supported Node.js 24.22.1 LTS x64 package. Plan output includes the exact
+official URL, filename and version for each package, even when the current host
+already satisfies the requirement.
 
 ```powershell
-winget install --exact --id Python.Python.3.13 `
+winget install --exact --id Python.Python.3.13 --version 3.13.14 `
     --source winget --scope machine --architecture x64 --silent `
     --accept-package-agreements --accept-source-agreements `
     --disable-interactivity
 
-winget install --exact --id OpenJS.NodeJS.LTS `
+winget install --exact --id OpenJS.NodeJS.LTS --version 24.22.1 `
     --source winget --scope machine --architecture x64 --silent `
     --accept-package-agreements --accept-source-agreements `
     --disable-interactivity
@@ -127,6 +133,31 @@ The Node package intentionally follows the currently supported LTS release
 instead of installing the now out-of-maintenance Node 20 release on a new
 client server. The application still accepts an existing Node 20.19 or newer
 runtime.
+
+## Optional offline prerequisite bundle
+
+Customer installers can include Python, Node.js, Git and MSSQL ODBC setup
+packages. The source repository intentionally does not store those binaries.
+On the release-build machine, prepare the bundle with:
+
+```powershell
+.\installer\prepare-prerequisites.ps1 -Mode Download
+```
+
+This downloads only the exact URLs in
+`config\prerequisites.windows-x64.json`, validates vendor-published SHA-256
+hashes where the vendor publishes one, calculates every resulting file hash,
+and writes `installer\prerequisites\prerequisites.lock.json`. Include that
+folder in the release installer package.
+
+At deployment time, `bootstrap.ps1` prefers a bundled installer only when its
+SHA-256 matches the catalog or generated lock. Otherwise, it reports the
+bundle problem and uses exact-version WinGet. If WinGet is unavailable, the
+error includes the direct official URL.
+
+Before redistributing third-party binaries, the release owner must review the
+applicable redistribution and license terms. In particular, Microsoft ODBC is
+a Microsoft redistributable rather than an MIT/BSD/Apache dependency.
 
 ## Install application dependencies
 

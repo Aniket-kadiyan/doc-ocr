@@ -18,7 +18,9 @@ installation, repair and upgrade modes.
 - database defaults `QTracX` and `qtracx_app`;
 - one model instance and two scan workers by default; and
 - tests that prevent passwords, ports and deployment bindings from being
-  rendered incorrectly.
+  rendered incorrectly; and
+- a pinned Windows x64 prerequisite catalog with exact vendor download URLs
+  and optional hash-locked offline installer packaging.
 
 ## Clean-machine host bootstrap
 
@@ -50,6 +52,13 @@ For MSSQL, an existing 64-bit Driver 18 is preferred and Driver 17 is accepted.
 The detected driver name is returned for configuration instead of assuming a
 fixed version. If neither is present, the exact WinGet command and official
 manual-download page are included in the plan.
+
+Every plan also includes the complete prerequisite catalog, including exact
+versions and official direct URLs. Release builders may run
+`prepare-prerequisites.ps1 -Mode Download` to stage third-party installers in
+`installer\prerequisites`; the bootstrap uses a bundled installer only after
+SHA-256 verification. Third-party binaries remain outside source control and
+must be distributed only after their license terms have been reviewed.
 
 Frontend build and OCR-model warmup are explicit options. The build requires
 the deployment `.env.local` to exist first because the browser-to-backend URL

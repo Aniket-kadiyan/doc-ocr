@@ -15,6 +15,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The script requests administrator approval because clean-machine installation
 may install Python, Node.js, Git and the MSSQL ODBC driver at machine scope.
+The form is DPI-aware, resizable and scrollable so every field remains
+available on scaled or lower-resolution displays.
 
 ## Information collected
 
@@ -44,7 +46,9 @@ restart.
 `Predefined Git branch`, complete the non-secret server/database fields, and
 click `Check plan`. It checks host prerequisites without acquiring source,
 creating a virtual environment, installing packages, changing the database or
-writing configuration.
+writing configuration. The output always lists the pinned prerequisite
+versions, exact official download URLs and optional bundle status—even when no
+host action is required.
 
 ## Install sequence
 

@@ -1,8 +1,9 @@
-QTracX Installer I4A - Graphical deployment wizard
-==================================================
+QTracX Installer I4A.1 - Prerequisite catalog and wizard display fix
+====================================================================
 
-Apply this after Installer I3A on the deployment-readiness branch. The ZIP
-contains source changes only. It contains no commit and does not push anything.
+This is a cumulative overlay. Apply it after Installer I3A or over the existing
+I4A wizard on the deployment-readiness branch. The ZIP contains source changes
+only. It contains no commit, third-party installer binaries, or pushed changes.
 
 What this slice adds
 --------------------
@@ -19,6 +20,12 @@ What this slice adds
 - Host-only prerequisite setup so Python/Node/ODBC/Git can be installed before
   application source exists.
 - Standard-input transport for database and application-admin secrets.
+- An exact-version Windows x64 prerequisite catalog with direct official
+  download URLs shown in every Check Plan result.
+- Optional offline prerequisite packaging through
+  installer\prepare-prerequisites.ps1.
+- SHA-256 verification before any bundled prerequisite is executed.
+- DPI-aware, resizable and scrollable wizard pages with visible numeric values.
 
 Apply
 -----
@@ -48,7 +55,20 @@ Approve the administrator prompt. For a non-mutating first test:
 
 Check Plan must finish without creating source, a virtual environment,
 configuration, dependencies or database objects. Passwords are not required
-for Check Plan.
+for Check Plan. Its prerequisiteCatalog section must list Python, Node.js, Git
+and MSSQL ODBC with exact versions, direct URLs and bundledStatus values.
+
+Optional offline prerequisite package
+-------------------------------------
+
+On the release-build machine only, download the catalog-pinned packages and
+generate their lock file:
+
+    .\installer\prepare-prerequisites.ps1 -Mode Download
+
+The generated EXE/MSI files and prerequisites.lock.json are ignored by Git.
+Include installer\prerequisites in the customer installer package only after
+reviewing the vendors' redistribution and license terms.
 
 Do not run the full installation against the current development directory.
 Use Windows Sandbox/a disposable Windows 11 VM, an empty destination and a
@@ -59,7 +79,7 @@ Automated tests
 
 From the repository root:
 
-    .\backend\.venv-gpu\Scripts\python.exe -m unittest -v installer.test_setup_config installer.test_preflight installer.test_source_acquisition installer.test_database_bootstrap installer.test_runtime_setup installer.test_bootstrap_contract installer.test_wizard_contract
+    .\backend\.venv-gpu\Scripts\python.exe -m unittest -v installer.test_setup_config installer.test_preflight installer.test_source_acquisition installer.test_database_bootstrap installer.test_runtime_setup installer.test_bootstrap_contract installer.test_wizard_contract installer.test_prerequisite_catalog
 
     Push-Location backend
     .\.venv-gpu\Scripts\python.exe -m unittest -v test_config_env.py
@@ -75,4 +95,4 @@ firewall assistance and repair/uninstall are the next installer slice.
 Suggested commit message
 ------------------------
 
-    feat(installer): add graphical deployment wizard
+    fix(installer): pin prerequisites and correct wizard scaling
