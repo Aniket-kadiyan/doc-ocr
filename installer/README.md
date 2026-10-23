@@ -43,6 +43,9 @@ CPU mode or `backend\.venv-gpu` for GPU mode, install only the matching Python
 manifest and run `npm ci`. An explicit `-EnvironmentDir` may override the
 mode-specific default.
 
+Node.js validation includes npm 10 or newer. Application setup uses the npm
+CLI bundled with Node.js rather than a potentially stale user-level npm shim.
+
 Plan output includes `environment_action`: `create` for a missing target,
 `reuse` for a valid existing environment, or `blocked-invalid-directory` when
 the target exists but is not a virtual environment. Plan mode never creates

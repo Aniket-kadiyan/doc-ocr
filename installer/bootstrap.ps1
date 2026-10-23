@@ -253,7 +253,7 @@ function Get-QTracXPython {
 function Get-QTracXNode {
     $node = Get-Command node.exe -ErrorAction SilentlyContinue
     $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $node -or -not $npm) {
+    if (-not $node) {
         $nodePath = $null
         $npmPath = $null
         if ($node) { $nodePath = $node.Source }
@@ -264,17 +264,59 @@ function Get-QTracXNode {
             version = $null
             executable = $nodePath
             npm = $npmPath
+            npmVersion = $null
+            npmCli = $null
+            npmSource = $null
+            required = "Node.js 20.19 or newer with npm 10 or newer"
         }
     }
     try {
         $rawVersion = (& $node.Source --version 2>$null | Out-String).Trim()
         $version = [version]($rawVersion.TrimStart([char]"v"))
+
+        # npm.cmd can redirect to a stale globally installed npm under
+        # %APPDATA%. Prefer the npm-cli.js shipped with the selected Node.js
+        # installation so setup is deterministic and leaves global npm alone.
+        $nodeDirectory = Split-Path -Parent $node.Source
+        $bundledNpmCli = Join-Path $nodeDirectory "node_modules\npm\bin\npm-cli.js"
+        $npmVersion = $null
+        $npmCli = $null
+        $npmSource = $null
+        if (Test-Path -LiteralPath $bundledNpmCli -PathType Leaf) {
+            $rawNpmVersion = (
+                & $node.Source $bundledNpmCli --version 2>$null |
+                    Out-String
+            ).Trim()
+            if ($LASTEXITCODE -eq 0 -and $rawNpmVersion) {
+                $npmVersion = [version]$rawNpmVersion
+                $npmCli = $bundledNpmCli
+                $npmSource = "node-bundled"
+            }
+        }
+        elseif ($npm) {
+            $rawNpmVersion = (& $npm.Source --version 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $rawNpmVersion) {
+                $npmVersion = [version]$rawNpmVersion
+                $npmCli = $npm.Source
+                $npmSource = "path"
+            }
+        }
+
+        $supported = (
+            $version -ge [version]"20.19.0" -and
+            $npmVersion -and
+            $npmVersion -ge [version]"10.0.0"
+        )
         return [pscustomobject]@{
             available = $true
-            supported = $version -ge [version]"20.19.0"
+            supported = [bool]$supported
             version = $version.ToString()
             executable = $node.Source
-            npm = $npm.Source
+            npm = $(if ($npm) { $npm.Source } else { $null })
+            npmVersion = $(if ($npmVersion) { $npmVersion.ToString() } else { $null })
+            npmCli = $npmCli
+            npmSource = $npmSource
+            required = "Node.js 20.19 or newer with npm 10 or newer"
         }
     }
     catch {
@@ -283,7 +325,11 @@ function Get-QTracXNode {
             supported = $false
             version = $null
             executable = $node.Source
-            npm = $npm.Source
+            npm = $(if ($npm) { $npm.Source } else { $null })
+            npmVersion = $null
+            npmCli = $null
+            npmSource = $null
+            required = "Node.js 20.19 or newer with npm 10 or newer"
         }
     }
 }

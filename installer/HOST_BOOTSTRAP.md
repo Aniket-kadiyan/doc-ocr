@@ -111,7 +111,10 @@ and do not require Microsoft ODBC.
 
 ## Python and Node.js
 
-The bootstrap accepts 64-bit CPython 3.13 and Node.js 20.19 or newer with npm.
+The bootstrap accepts 64-bit CPython 3.13 and Node.js 20.19 or newer with
+npm 10 or newer. It probes and invokes the `npm-cli.js` bundled with the
+selected Node.js installation. This prevents an obsolete user-level npm under
+`%APPDATA%` from overriding the supported npm shipped with Node.js.
 Fresh installations are pinned to the tested CPython 3.13.14 x64 package and
 the supported Node.js 24.22.1 LTS x64 package. Plan output includes the exact
 official URL, filename and version for each package, even when the current host
@@ -132,7 +135,7 @@ winget install --exact --id OpenJS.NodeJS.LTS --version 24.22.1 `
 The Node package intentionally follows the currently supported LTS release
 instead of installing the now out-of-maintenance Node 20 release on a new
 client server. The application still accepts an existing Node 20.19 or newer
-runtime.
+runtime when its bundled npm is version 10 or newer.
 
 ## Optional offline prerequisite bundle
 

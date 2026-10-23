@@ -27,6 +27,7 @@ from typing import Callable, Mapping, Sequence
 
 
 MINIMUM_NODE_VERSION = (20, 19, 0)
+MINIMUM_NPM_VERSION = (10, 0, 0)
 REQUIRED_PYTHON_VERSION = (3, 13)
 _NODE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 CommandRunner = Callable[[Sequence[str], Path, Mapping[str, str] | None], None]
@@ -127,15 +128,35 @@ def host_python_status() -> dict[str, object]:
 def node_status() -> dict[str, object]:
     node = shutil.which("node")
     npm = shutil.which("npm")
-    if node is None or npm is None:
+    if node is None:
         return {
             "available": False,
             "supported": False,
             "version": None,
             "node": node,
             "npm": npm,
-            "required": "Node.js 20.19 or newer with npm",
+            "npm_version": None,
+            "npm_command": None,
+            "npm_source": None,
+            "required": "Node.js 20.19 or newer with npm 10 or newer",
         }
+
+    # npm.cmd can deliberately redirect to a globally installed npm under
+    # %APPDATA%.  A stale user-level npm then overrides the modern npm shipped
+    # with Node.js.  Prefer Node's own npm-cli.js so setup is deterministic and
+    # does not alter or depend on the user's global npm installation.
+    bundled_npm_cli = (
+        Path(node).resolve().parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    )
+    npm_command: list[str] | None = None
+    npm_source: str | None = None
+    if bundled_npm_cli.is_file():
+        npm_command = [node, str(bundled_npm_cli)]
+        npm_source = "node-bundled"
+    elif npm is not None:
+        npm_command = [npm]
+        npm_source = "path"
+
     try:
         result = subprocess.run(
             [node, "--version"],
@@ -148,9 +169,32 @@ def node_status() -> dict[str, object]:
         version = None
     else:
         version = parse_node_version(result.stdout) if result.returncode == 0 else None
+
+    npm_version = None
+    if npm_command is not None:
+        try:
+            npm_result = subprocess.run(
+                [*npm_command, "--version"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        else:
+            if npm_result.returncode == 0:
+                npm_version = parse_node_version(npm_result.stdout)
+
+    supported = (
+        version is not None
+        and version >= MINIMUM_NODE_VERSION
+        and npm_version is not None
+        and npm_version >= MINIMUM_NPM_VERSION
+    )
     return {
         "available": version is not None,
-        "supported": version is not None and version >= MINIMUM_NODE_VERSION,
+        "supported": supported,
         "version": (
             ".".join(str(part) for part in version)
             if version is not None
@@ -158,7 +202,14 @@ def node_status() -> dict[str, object]:
         ),
         "node": node,
         "npm": npm,
-        "required": "Node.js 20.19 or newer with npm",
+        "npm_version": (
+            ".".join(str(part) for part in npm_version)
+            if npm_version is not None
+            else None
+        ),
+        "npm_command": npm_command,
+        "npm_source": npm_source,
+        "required": "Node.js 20.19 or newer with npm 10 or newer",
     }
 
 
@@ -179,9 +230,24 @@ def _environment_action(request: RuntimeSetupRequest) -> str:
     return "create"
 
 
-def _commands(request: RuntimeSetupRequest) -> list[dict[str, object]]:
+def _npm_command(node: Mapping[str, object]) -> list[str]:
+    command = node.get("npm_command")
+    if not isinstance(command, list) or not command or not all(
+        isinstance(part, str) and part for part in command
+    ):
+        raise RuntimeSetupError(
+            "node",
+            "a supported npm command could not be resolved from the Node.js installation",
+        )
+    return list(command)
+
+
+def _commands(
+    request: RuntimeSetupRequest,
+    node: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
     environment_python = str(request.environment_python)
-    npm = shutil.which("npm") or "npm"
+    npm = _npm_command(node or node_status())
     actions: list[tuple[str, list[str], Path]] = []
     environment_action = _environment_action(request)
     if environment_action == "blocked-invalid-directory":
@@ -207,13 +273,13 @@ def _commands(request: RuntimeSetupRequest) -> list[dict[str, object]]:
     ))
     actions.append((
         "frontend-dependencies",
-        [npm, "ci", "--no-audit", "--no-fund"],
+        [*npm, "ci", "--no-audit", "--no-fund"],
         request.root,
     ))
     if request.build_frontend:
         actions.append((
             "frontend-build",
-            [npm, "run", "build"],
+            [*npm, "run", "build"],
             request.root,
         ))
     if request.warm_models:
@@ -243,7 +309,7 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
     if not python["supported"]:
         blockers.append("CPython 3.13 x64 is not available")
     if not node["supported"]:
-        blockers.append("Node.js 20.19 or newer with npm is not available")
+        blockers.append("Node.js 20.19 or newer with npm 10 or newer is not available")
     if environment_action == "blocked-invalid-directory":
         blockers.append(
             "the selected environment directory exists but is not a valid "
@@ -268,7 +334,7 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
         "python": python,
         "node": node,
         "blockers": blockers,
-        "actions": _commands(request),
+        "actions": _commands(request, node) if node["supported"] else [],
     }
 
 
@@ -316,7 +382,7 @@ def _validate_prerequisites() -> tuple[dict[str, object], dict[str, object]]:
     if not node["supported"]:
         raise RuntimeSetupError(
             "node",
-            "QTracX requires Node.js 20.19 or newer with npm",
+            "QTracX requires Node.js 20.19 or newer with npm 10 or newer",
         )
     return python, node
 
@@ -439,9 +505,8 @@ def install_runtime_setup(
             "configuration",
             "generate .env.local before building the production frontend",
         )
-    npm = shutil.which("npm")
-    if npm is None:
-        raise RuntimeSetupError("node", "npm was not found")
+    node = node_status()
+    npm = _npm_command(node)
 
     if request.environment.exists() and not request.environment_python.is_file():
         raise RuntimeSetupError(
@@ -473,14 +538,14 @@ def install_runtime_setup(
     _run_stage(
         "frontend-dependencies",
         runner,
-        [npm, "ci", "--no-audit", "--no-fund"],
+        [*npm, "ci", "--no-audit", "--no-fund"],
         request.root,
     )
     if request.build_frontend:
         _run_stage(
             "frontend-build",
             runner,
-            [npm, "run", "build"],
+            [*npm, "run", "build"],
             request.root,
         )
     if request.warm_models:

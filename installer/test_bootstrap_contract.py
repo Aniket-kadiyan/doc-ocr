@@ -52,6 +52,11 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn('$PSScriptRoot "runtime_setup.py"', self.script)
         self.assertIn('Invoke-QTracXRuntimeSetup', self.script)
 
+    def test_node_probe_requires_modern_node_bundled_npm(self) -> None:
+        self.assertIn('node_modules\\npm\\bin\\npm-cli.js', self.script)
+        self.assertIn('$npmVersion -ge [version]"10.0.0"', self.script)
+        self.assertIn('npmSource = "node-bundled"', self.script)
+
     def test_missing_gpu_is_not_silently_changed_to_cpu(self) -> None:
         self.assertIn('Supported NVIDIA GPU and driver', self.script)
         self.assertNotIn('$Runtime = "cpu" # fallback', self.script)

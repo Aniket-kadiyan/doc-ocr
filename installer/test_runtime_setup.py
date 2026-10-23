@@ -47,7 +47,10 @@ def _supported_node() -> dict[str, object]:
         "version": "24.19.0",
         "node": "node.exe",
         "npm": "npm.cmd",
-        "required": "Node.js 20.19 or newer with npm",
+        "npm_version": "11.9.0",
+        "npm_command": ["node.exe", "npm-cli.js"],
+        "npm_source": "node-bundled",
+        "required": "Node.js 20.19 or newer with npm 10 or newer",
     }
 
 
@@ -223,7 +226,6 @@ class RuntimeSetupTests(unittest.TestCase):
                     "installer.runtime_setup.node_status",
                     return_value=_supported_node(),
                 ),
-                patch("installer.runtime_setup.shutil.which", return_value="npm.cmd"),
             ):
                 result = install_runtime_setup(request, runner=runner)
 
@@ -231,7 +233,16 @@ class RuntimeSetupTests(unittest.TestCase):
             self.assertEqual(len(calls), 3)
             self.assertEqual(calls[0][0][1:3], ["-m", "venv"])
             self.assertIn("requirements.txt", calls[1][0][-1])
-            self.assertEqual(calls[2][0][1:], ["ci", "--no-audit", "--no-fund"])
+            self.assertEqual(
+                calls[2][0],
+                [
+                    "node.exe",
+                    "npm-cli.js",
+                    "ci",
+                    "--no-audit",
+                    "--no-fund",
+                ],
+            )
 
     def test_existing_non_environment_is_not_overwritten(self) -> None:
         with TemporaryDirectory() as temporary:

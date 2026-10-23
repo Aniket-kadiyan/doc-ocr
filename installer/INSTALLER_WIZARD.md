@@ -64,6 +64,10 @@ After final confirmation, `Install QTracX` performs these stages:
    QTracX administrator; and
 8. verify the completed application runtime and frontend build.
 
+After source acquisition, the wizard uses the runtime, configuration and
+database installer modules from the acquired Git branch or ZIP. This keeps the
+installed application and its setup logic on the same revision.
+
 The source ZIP path is validated and unsafe/generated content is rejected. Git
 mode is fixed by `config/installer.defaults.json`; this development build uses
 the `deployment-readiness` branch.

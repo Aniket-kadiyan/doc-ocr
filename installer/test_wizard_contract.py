@@ -53,6 +53,15 @@ class WizardContractTests(unittest.TestCase):
         )
         self.assertLess(database_stage, verify_stage)
 
+    def test_acquired_source_drives_application_setup(self) -> None:
+        self.assertIn(
+            '$installedBootstrap = Join-Path $installedInstaller "bootstrap.ps1"',
+            self.script,
+        )
+        self.assertIn('"-File", $installedBootstrap', self.script)
+        self.assertIn('$installedConfiguration,', self.script)
+        self.assertIn('$installedDatabase,', self.script)
+
     def test_layout_is_dpi_safe_and_numeric_values_are_visible(self) -> None:
         self.assertIn("AutoScaleMode]::Dpi", self.script)
         self.assertIn("$page.AutoScroll = $true", self.script)

@@ -706,13 +706,32 @@ function Invoke-QTracXInstallation {
             -FilePath $python.FilePath `
             -Arguments $sourceArguments)
 
+        # From this point forward, use the installer modules from the acquired
+        # application source. The selected Git branch or ZIP is the source of
+        # truth for runtime, configuration and database behavior; the small
+        # launcher package is only responsible for host preparation and source
+        # acquisition.
+        $installedInstaller = Join-Path $destination "installer"
+        $installedBootstrap = Join-Path $installedInstaller "bootstrap.ps1"
+        $installedConfiguration = Join-Path $installedInstaller "setup_config.py"
+        $installedDatabase = Join-Path $installedInstaller "database_bootstrap.py"
+        foreach ($requiredScript in @(
+            $installedBootstrap,
+            $installedConfiguration,
+            $installedDatabase
+        )) {
+            if (-not (Test-Path -LiteralPath $requiredScript -PathType Leaf)) {
+                throw "The acquired source is missing installer module: $requiredScript"
+            }
+        }
+
         if ((Get-QTracXDatabaseEngine) -eq "mssql") {
             $odbcDriver.Text = Get-QTracXMssqlDriver
         }
         $payload = Get-QTracXPayload
         $payloadJson = $payload | ConvertTo-Json -Depth 10 -Compress
         $configArguments = @($python.PrefixArguments) + @(
-            $script:ConfigurationScript,
+            $installedConfiguration,
             "--destination", (Join-Path $destination ".env.local")
         )
         [void](Invoke-QTracXStage `
@@ -724,7 +743,7 @@ function Invoke-QTracXInstallation {
         $applicationArguments = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
-            "-File", $script:BootstrapScript,
+            "-File", $installedBootstrap,
             "-Mode", "Install",
             "-Runtime", (Get-QTracXRuntimeName),
             "-Database", (Get-QTracXDatabaseEngine),
@@ -750,7 +769,7 @@ function Invoke-QTracXInstallation {
             -Name "Creating and migrating the QTracX database" `
             -FilePath $environmentPython `
             -Arguments @(
-                $script:DatabaseScript,
+                $installedDatabase,
                 "--repo-root", $destination
             ) `
             -InputText $payloadJson)
@@ -758,7 +777,7 @@ function Invoke-QTracXInstallation {
         $verifyArguments = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
-            "-File", $script:BootstrapScript,
+            "-File", $installedBootstrap,
             "-Mode", "Verify",
             "-Runtime", (Get-QTracXRuntimeName),
             "-Database", (Get-QTracXDatabaseEngine),
