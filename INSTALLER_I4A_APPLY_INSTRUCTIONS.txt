@@ -1,0 +1,78 @@
+QTracX Installer I4A - Graphical deployment wizard
+==================================================
+
+Apply this after Installer I3A on the deployment-readiness branch. The ZIP
+contains source changes only. It contains no commit and does not push anything.
+
+What this slice adds
+--------------------
+
+- A built-in Windows Forms setup wizard at installer\wizard.ps1.
+- Offline source ZIP and predefined deployment-readiness Git modes.
+- LAN/localhost, configurable ports, CPU/GPU, capacity and optional HTTPS
+  selections.
+- MSSQL/PostgreSQL and installer-managed/preconfigured database modes.
+- Initial QTracX application-administrator creation.
+- A read-only Check Plan action.
+- End-to-end install orchestration through the already-tested installer
+  modules.
+- Host-only prerequisite setup so Python/Node/ODBC/Git can be installed before
+  application source exists.
+- Standard-input transport for database and application-admin secrets.
+
+Apply
+-----
+
+1. Check out deployment-readiness.
+2. Extract this ZIP into the doc-ocr repository root.
+3. Allow it to overwrite matching installer files.
+4. Review:
+
+       git status --short
+       git diff --check
+
+Safe development-machine test
+-----------------------------
+
+Launch:
+
+    Set-ExecutionPolicy -Scope Process Bypass
+    .\installer\wizard.ps1
+
+Approve the administrator prompt. For a non-mutating first test:
+
+1. Select Predefined Git branch on Source.
+2. Keep or adjust the non-secret server/database fields.
+3. Open Review and install.
+4. Click Check plan, not Install QTracX.
+
+Check Plan must finish without creating source, a virtual environment,
+configuration, dependencies or database objects. Passwords are not required
+for Check Plan.
+
+Do not run the full installation against the current development directory.
+Use Windows Sandbox/a disposable Windows 11 VM, an empty destination and a
+disposable database for the complete path.
+
+Automated tests
+---------------
+
+From the repository root:
+
+    .\backend\.venv-gpu\Scripts\python.exe -m unittest -v installer.test_setup_config installer.test_preflight installer.test_source_acquisition installer.test_database_bootstrap installer.test_runtime_setup installer.test_bootstrap_contract installer.test_wizard_contract
+
+    Push-Location backend
+    .\.venv-gpu\Scripts\python.exe -m unittest -v test_config_env.py
+    Pop-Location
+
+Current boundary
+----------------
+
+This slice installs/builds/verifies QTracX but does not yet register the UI and
+backend as Windows services. Automatic startup, recovery, health checks,
+firewall assistance and repair/uninstall are the next installer slice.
+
+Suggested commit message
+------------------------
+
+    feat(installer): add graphical deployment wizard

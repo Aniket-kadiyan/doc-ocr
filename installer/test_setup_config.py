@@ -96,6 +96,47 @@ class InstallerSetupTests(unittest.TestCase):
             with self.assertRaisesRegex(SetupConfigurationError, "already exists"):
                 setup.write_environment(destination)
 
+    def test_wizard_mapping_generates_gpu_lan_configuration(self) -> None:
+        setup = InstallerSetup.from_mapping({
+            "deploymentMode": "lan",
+            "serverAddress": "10.10.20.15",
+            "uiPort": "3002",
+            "backendPort": "8000",
+            "runtime": "gpu",
+            "modelInstances": "2",
+            "scanWorkers": "3",
+            "database": {
+                "engine": "mssql",
+                "host": "sql-server",
+                "port": "1433",
+                "name": "QTracX",
+                "applicationUser": "qtracx_app",
+                "applicationPassword": "safe password",
+                "odbcDriver": "ODBC Driver 17 for SQL Server",
+                "encrypt": True,
+                "trustServerCertificate": True,
+            },
+            "https": {"enabled": False},
+        })
+
+        text = setup.environment_text()
+        self.assertIn("UI_HOST=0.0.0.0", text)
+        self.assertIn("NEXT_PUBLIC_OCR_API_URL=http://10.10.20.15:8000", text)
+        self.assertIn("OCR_DEVICE=gpu:0", text)
+        self.assertIn("OCR_MODEL_INSTANCES=2", text)
+        self.assertIn("driver=ODBC+Driver+17+for+SQL+Server", text)
+
+    def test_safe_summary_never_contains_database_password(self) -> None:
+        password = "do-not-show-this"
+        setup = InstallerSetup(
+            database=DatabaseSetup(application_password=password),
+        )
+
+        summary = json.dumps(setup.safe_summary())
+
+        self.assertNotIn(password, summary)
+        self.assertNotIn("DATABASE_URL", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

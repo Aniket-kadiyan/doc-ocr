@@ -7,9 +7,13 @@ are transient setup inputs and must never be written to the generated config.
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 import re
+import sys
+from typing import Any, Mapping, Sequence
 from urllib.parse import quote_plus
 
 
@@ -37,6 +41,30 @@ def _require_identifier(name: str, value: str) -> None:
 def _require_host(name: str, value: str) -> None:
     if not value or not _HOST.fullmatch(value):
         raise SetupConfigurationError(f"{name} is not a valid host or IP address")
+
+
+def _integer(payload: Mapping[str, Any], key: str, default: int) -> int:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        raise SetupConfigurationError(f"{key} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise SetupConfigurationError(f"{key} must be an integer") from error
+
+
+def _boolean(payload: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise SetupConfigurationError(f"{key} must be true or false")
+    return value
+
+
+def _mapping(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = payload.get(key, {})
+    if not isinstance(value, Mapping):
+        raise SetupConfigurationError(f"{key} must be an object")
+    return value
 
 
 @dataclass(frozen=True)
@@ -190,6 +218,99 @@ class InstallerSetup:
         ])
         return "\n".join(rows)
 
+    def safe_summary(self) -> dict[str, object]:
+        """Return installer selections without credentials or connection URLs."""
+
+        return {
+            "deployment_mode": self.deployment_mode,
+            "server_address": self.server_address,
+            "ui_port": self.ui_port,
+            "backend_port": self.backend_port,
+            "protocol": self.scheme,
+            "ocr_device": self.ocr_device,
+            "model_instances": self.model_instances,
+            "scan_workers": self.scan_workers,
+            "database_engine": self.database.engine,
+            "database_host": self.database.host,
+            "database_port": self.database.port,
+            "database_name": self.database.name,
+            "database_application_user": self.database.application_user,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "InstallerSetup":
+        database_payload = _mapping(payload, "database")
+        https_payload = _mapping(payload, "https")
+        storage_payload = _mapping(payload, "storage")
+        engine = str(database_payload.get("engine", "mssql")).strip().lower()
+        runtime = str(payload.get("runtime", "cpu")).strip().lower()
+        ocr_device = str(
+            payload.get(
+                "ocrDevice",
+                "gpu:0" if runtime == "gpu" else "cpu",
+            )
+        ).strip().lower()
+        database = DatabaseSetup(
+            engine=engine,
+            host=str(database_payload.get("host", "localhost")).strip(),
+            port=_integer(
+                database_payload,
+                "port",
+                1433 if engine == "mssql" else 5432,
+            ),
+            name=str(database_payload.get("name", "QTracX")).strip(),
+            application_user=str(
+                database_payload.get("applicationUser", "qtracx_app")
+            ).strip(),
+            application_password=str(
+                database_payload.get("applicationPassword", "")
+            ),
+            odbc_driver=str(
+                database_payload.get(
+                    "odbcDriver",
+                    "ODBC Driver 18 for SQL Server",
+                )
+            ).strip(),
+            encrypt=_boolean(database_payload, "encrypt", True),
+            trust_server_certificate=_boolean(
+                database_payload,
+                "trustServerCertificate",
+                True,
+            ),
+        )
+        setup = cls(
+            deployment_mode=str(
+                payload.get("deploymentMode", "local")
+            ).strip().lower(),
+            server_address=str(
+                payload.get("serverAddress", "localhost")
+            ).strip(),
+            ui_port=_integer(payload, "uiPort", 3002),
+            backend_port=_integer(payload, "backendPort", 8000),
+            ocr_device=ocr_device,
+            model_instances=_integer(payload, "modelInstances", 1),
+            scan_workers=_integer(payload, "scanWorkers", 2),
+            https_enabled=_boolean(https_payload, "enabled", False),
+            certificate_file=str(
+                https_payload.get("certificateFile", "")
+            ).strip(),
+            private_key_file=str(
+                https_payload.get("privateKeyFile", "")
+            ).strip(),
+            checksheet_data_directory=str(
+                storage_payload.get(
+                    "checksheetDataDirectory",
+                    "backend/data/checksheets",
+                )
+            ).strip(),
+            log_directory=str(
+                storage_payload.get("logDirectory", "backend/logs")
+            ).strip(),
+            database=database,
+        )
+        setup.validate()
+        return setup
+
     def write_environment(self, destination: Path, *, overwrite: bool = False) -> None:
         self.validate()
         if destination.exists() and not overwrite:
@@ -198,4 +319,42 @@ class InstallerSetup:
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(self.environment_text(), encoding="utf-8")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate the validated QTracX deployment environment"
+    )
+    parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--overwrite", action="store_true")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, Mapping):
+            raise SetupConfigurationError("stdin must contain a setup object")
+        setup = InstallerSetup.from_mapping(payload)
+        setup.write_environment(
+            arguments.destination,
+            overwrite=arguments.overwrite,
+        )
+    except (OSError, json.JSONDecodeError, SetupConfigurationError) as error:
+        print(json.dumps({
+            "status": "failed",
+            "message": str(error),
+        }))
+        return 1
+    print(json.dumps({
+        "status": "ok",
+        "destination": str(arguments.destination.resolve()),
+        "configuration": setup.safe_summary(),
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 

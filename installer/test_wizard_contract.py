@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from pathlib import Path
+import unittest
+
+
+class WizardContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.script = (
+            Path(__file__).resolve().parent / "wizard.ps1"
+        ).read_text(encoding="utf-8")
+
+    def test_wizard_is_built_from_windows_inbox_components(self) -> None:
+        self.assertIn("System.Windows.Forms", self.script)
+        self.assertIn("System.Drawing", self.script)
+        self.assertNotIn("Install-Module", self.script)
+
+    def test_wizard_offers_required_source_database_and_runtime_modes(self) -> None:
+        for expected in (
+            "Offline source ZIP",
+            "Predefined Git branch",
+            "Microsoft SQL Server",
+            "PostgreSQL",
+            "CPU",
+            "GPU 0",
+        ):
+            self.assertIn(expected, self.script)
+
+    def test_host_prerequisites_run_before_source_acquisition(self) -> None:
+        host_stage = self.script.index(
+            "Installing or verifying host prerequisites"
+        )
+        source_stage = self.script.index("Acquiring QTracX application source")
+        self.assertLess(host_stage, source_stage)
+        self.assertIn(
+            'Get-QTracXBootstrapArguments -Mode "Install" -HostOnly',
+            self.script,
+        )
+
+    def test_secrets_are_passed_through_standard_input(self) -> None:
+        self.assertIn("-InputText $payloadJson", self.script)
+        self.assertNotIn('"--administrator-password"', self.script)
+        self.assertNotIn('"--application-password"', self.script)
+        self.assertIn("UseSystemPasswordChar", self.script)
+
+    def test_installation_finishes_with_verification(self) -> None:
+        database_stage = self.script.index(
+            "Creating and migrating the QTracX database"
+        )
+        verify_stage = self.script.index(
+            "Verifying the completed QTracX installation"
+        )
+        self.assertLess(database_stage, verify_stage)
+
+
+if __name__ == "__main__":
+    unittest.main()

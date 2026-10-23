@@ -139,10 +139,29 @@ It reads the predefined HTTPS repository and branch from
 removes Git metadata from the deployed copy. This keeps release-source control
 with the installer build while still allowing a connected installation.
 
-The current build default is branch `MVP2`. Change that build default to the
-approved release branch before producing a customer installer.
+The current development build default is branch `deployment-readiness`. Change
+that build default to the approved immutable release branch or tag before
+producing a customer installer.
+
+## Graphical deployment wizard
+
+Run the Windows Forms wizard from an elevated PowerShell session:
+
+```powershell
+.\installer\wizard.ps1
+```
+
+It collects source, server, runtime, database, HTTPS and initial-administrator
+settings, provides a read-only host plan, and can execute the complete source,
+configuration, runtime, frontend-build, database-migration and final-verification
+sequence. Passwords are passed to Python through standard input and are not
+placed in command arguments or installer logs.
+
+See [INSTALLER_WIZARD.md](INSTALLER_WIZARD.md) for the current workflow and
+the remaining service-registration boundary.
 
 ## Next installer layer
 
-The next layer will add the Windows graphical wizard over the tested host
-bootstrap, source, preflight, configuration and database-bootstrap operations.
+The next layer will register the installed backend and frontend for automatic
+Windows startup, add recovery/health checks and provide repair/uninstall
+operations.

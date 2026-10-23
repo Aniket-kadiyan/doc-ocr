@@ -8,6 +8,7 @@ from unittest.mock import patch
 from installer.database_bootstrap import (
     DatabaseBootstrapError,
     DatabaseBootstrapRequest,
+    _parser,
     _detected_mssql_driver,
     _odbc_value,
     _postgresql_string,
@@ -43,6 +44,10 @@ def _payload(engine: str = "mssql") -> dict[str, object]:
 
 
 class DatabaseBootstrapTests(unittest.TestCase):
+    def test_cli_accepts_an_explicit_application_root(self) -> None:
+        arguments = _parser().parse_args(["--repo-root", "C:/QTracX"])
+        self.assertEqual(arguments.repo_root, Path("C:/QTracX"))
+
     def test_detected_odbc_driver_is_used_for_interactive_default(self) -> None:
         with patch(
             "installer.preflight.detect_database_drivers",

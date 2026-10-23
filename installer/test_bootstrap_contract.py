@@ -33,12 +33,23 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn('supportedMajorVersions = @(18, 17)', self.script)
 
     def test_runtime_setup_is_delegated_after_python_detection(self) -> None:
-        self.assertIn('"installer\\runtime_setup.py"', self.script)
+        self.assertIn('$PSScriptRoot "runtime_setup.py"', self.script)
         self.assertIn('Invoke-QTracXRuntimeSetup', self.script)
 
     def test_missing_gpu_is_not_silently_changed_to_cpu(self) -> None:
         self.assertIn('Supported NVIDIA GPU and driver', self.script)
         self.assertNotIn('$Runtime = "cpu" # fallback', self.script)
+
+    def test_host_only_mode_can_prepare_a_machine_before_source_acquisition(self) -> None:
+        self.assertIn("[switch]$HostOnly", self.script)
+        self.assertIn(
+            'applicationSetup = $(if ($HostOnly) { "skipped" }',
+            self.script,
+        )
+        self.assertIn(
+            'if (-not $HostOnly) {\n        Invoke-QTracXRuntimeSetup',
+            self.script,
+        )
 
 
 if __name__ == "__main__":

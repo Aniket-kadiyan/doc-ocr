@@ -5,7 +5,7 @@
   "codeSource": {
     "mode": "archive",
     "repositoryUrl": "https://github.com/Aniket-kadiyan/doc-ocr.git",
-    "branch": "MVP2"
+    "branch": "deployment-readiness"
   },
   "prerequisites": {
     "python": {

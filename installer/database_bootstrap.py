@@ -825,6 +825,12 @@ def _stdin_request() -> DatabaseBootstrapRequest:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create the QTracX database")
     parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=_REPO_ROOT,
+        help="QTracX application root containing backend/",
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         help="prompt for setup values; otherwise read one JSON object from stdin",
@@ -846,6 +852,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             result = bootstrap_database(
                 request,
+                repo_root=arguments.repo_root,
                 progress=lambda stage, message: print(json.dumps({
                     "status": "working",
                     "stage": stage,

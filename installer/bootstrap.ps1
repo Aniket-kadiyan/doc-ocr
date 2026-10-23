@@ -13,6 +13,7 @@ param(
 
     [string]$EnvironmentDir = "",
 
+    [switch]$HostOnly,
     [switch]$IncludeGit,
     [switch]$BuildFrontend,
     [switch]$WarmModels
@@ -315,7 +316,7 @@ function Invoke-QTracXRuntimeSetup {
         [string]$RuntimeMode
     )
 
-    $script = Join-Path $ApplicationRoot "installer\runtime_setup.py"
+    $script = Join-Path $PSScriptRoot "runtime_setup.py"
     if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
         throw "Runtime setup module was not found: $script"
     }
@@ -353,6 +354,7 @@ $report = [ordered]@{
     applicationRoot = $ApplicationRoot
     selectedRuntime = $Runtime
     selectedDatabase = $Database
+    applicationSetup = $(if ($HostOnly) { "skipped" } else { "included" })
     state = $state
     actions = $actions
     manualDownloadPages = [ordered]@{
@@ -364,7 +366,7 @@ $report = [ordered]@{
 }
 
 if ($Mode -eq "Plan") {
-    if ($state.python.supported -and $state.node.supported) {
+    if (-not $HostOnly -and $state.python.supported -and $state.node.supported) {
         Write-Host "`nApplication dependency plan (read-only):"
         Invoke-QTracXRuntimeSetup -Python $state.python -RuntimeMode "plan"
         Write-Host "`nHost prerequisite plan:"
@@ -393,7 +395,9 @@ if ($Mode -eq "Install") {
         $remaining = ($actions | ForEach-Object { $_.prerequisite }) -join ", "
         throw "Required prerequisites remain unavailable: $remaining"
     }
-    Invoke-QTracXRuntimeSetup -Python $state.python -RuntimeMode "install"
+    if (-not $HostOnly) {
+        Invoke-QTracXRuntimeSetup -Python $state.python -RuntimeMode "install"
+    }
     $report.status = "ok"
     $report.changesApplied = $true
     $report.state = $state
@@ -408,7 +412,9 @@ if ($actions.Count -gt 0) {
     $report | ConvertTo-Json -Depth 10
     exit 1
 }
-Invoke-QTracXRuntimeSetup -Python $state.python -RuntimeMode "verify"
+if (-not $HostOnly) {
+    Invoke-QTracXRuntimeSetup -Python $state.python -RuntimeMode "verify"
+}
 $report.status = "ok"
 $report.actions = @()
 Write-Host "`nHost verification result:"
