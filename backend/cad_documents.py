@@ -5,11 +5,12 @@ checksheets, exports) is built around PDF pages. Rather than teach every
 stage a new format, an uploaded CAD file is converted once into a vector PDF
 and then handled exactly like any other PDF drawing.
 
-DWG is a closed binary format, so it is first turned into DXF by an external
-converter: the ODA File Converter when it is installed (best fidelity, every
-DWG version), otherwise LibreDWG's ``dwg2dxf``. DXF is then drawn with ezdxf:
-one PDF page per paper-space layout that has content, or a single page of
-model space when there are none. Everything is drawn black on white, because
+DWG is a closed binary format, so it is first turned into DXF by
+``tools/dwg2dxf``, a small converter built on ACadSharp (MIT). Converters
+with copyleft or proprietary licences (LibreDWG, the ODA File Converter) are
+deliberately not used. DXF is then drawn with ezdxf: one PDF page per
+paper-space layout that has content, or a single page of model space when
+there are none. Everything is drawn black on white, because
 CAD colours such as yellow or cyan are close to invisible on paper and to OCR.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import io
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -69,21 +71,28 @@ def detect_cad_format(data: bytes, filename: str = "") -> str:
     return actual
 
 
-def _oda_converter() -> str | None:
-    configured = os.getenv("ODA_FILE_CONVERTER")
-    if configured and Path(configured).exists():
+def _dwg_converter() -> str | None:
+    # An explicit setting wins outright, so a wrong path is reported instead
+    # of being quietly replaced by some other converter.
+    configured = os.getenv("DWG2DXF_ACADSHARP")
+    if configured:
         return configured
-    candidates = [
-        "/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter",
-        shutil.which("ODAFileConverter"),
-    ]
-    for root in (os.getenv("ProgramFiles"), os.getenv("ProgramFiles(x86)")):
-        if root:
-            candidates.extend(
-                str(path)
-                for path in sorted(Path(root, "ODA").glob("ODAFileConverter*/ODAFileConverter.exe"))
+    executable = "dwg2dxf-acadsharp.exe" if os.name == "nt" else "dwg2dxf-acadsharp"
+    candidates = [shutil.which(executable)]
+    # Self-contained builds land in tools/dwg2dxf/dist/<runtime id>/ (see its
+    # README); only this machine's runtime can run.
+    system = {"Darwin": "osx", "Linux": "linux", "Windows": "win"}.get(platform.system(), "")
+    machine = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(
+        platform.machine().casefold(), ""
+    )
+    if system and machine:
+        candidates.append(
+            str(
+                Path(__file__).resolve().parent.parent
+                / "tools" / "dwg2dxf" / "dist" / f"{system}-{machine}" / executable
             )
-    return next((path for path in candidates if path and Path(path).exists()), None)
+        )
+    return next((path for path in candidates if path and Path(path).is_file()), None)
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -92,6 +101,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
             command,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=CONVERT_TIMEOUT_SECONDS,
             check=False,
         )
@@ -99,36 +109,28 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise CadDocumentError(
             f"DWG conversion took longer than {CONVERT_TIMEOUT_SECONDS} s"
         ) from error
+    except OSError as error:
+        # Not executable, or built for another operating system or CPU.
+        raise CadDocumentError(
+            f"The DWG converter on the server could not be started: {error.strerror or error}"
+        ) from error
 
 
 def _dwg_to_dxf(dwg_path: Path, work_dir: Path) -> Path:
-    oda = _oda_converter()
-    if oda:
-        out_dir = work_dir / "oda-out"
-        out_dir.mkdir()
-        # in-dir, out-dir, version, type, recurse, audit, filter
-        _run([oda, str(dwg_path.parent), str(out_dir), "ACAD2018", "DXF", "0", "1", dwg_path.name])
-        produced = out_dir / f"{dwg_path.stem}.dxf"
-        if produced.exists():
-            return produced
-
-    dwg2dxf = os.getenv("DWG2DXF") or shutil.which("dwg2dxf")
-    if not dwg2dxf:
-        for candidate in ("/opt/homebrew/bin/dwg2dxf", "/usr/local/bin/dwg2dxf"):
-            if Path(candidate).exists():
-                dwg2dxf = candidate
-                break
-    if not dwg2dxf:
+    converter = _dwg_converter()
+    if not converter:
         raise CadDocumentError(
-            "DWG support needs a converter on the server: install the ODA File "
-            "Converter or LibreDWG (brew install libredwg), or save the drawing as DXF or PDF"
+            "DWG support needs the dwg2dxf-acadsharp converter on the server "
+            "(build tools/dwg2dxf), or save the drawing as DXF or PDF"
+        )
+    if not Path(converter).is_file():
+        raise CadDocumentError(
+            "The DWG converter set in DWG2DXF_ACADSHARP on the server does not exist"
         )
 
     produced = work_dir / f"{dwg_path.stem}.dxf"
-    result = _run([dwg2dxf, "-y", "-o", str(produced), str(dwg_path)])
-    # dwg2dxf reports recoverable problems with a non-zero exit but still
-    # writes a usable file, so only a missing output counts as failure.
-    if not produced.exists() or produced.stat().st_size == 0:
+    result = _run([converter, str(dwg_path), str(produced)])
+    if result.returncode != 0 or not produced.exists() or produced.stat().st_size == 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()[-1:] or ["no output"]
         raise CadDocumentError(f"Could not convert the DWG file: {detail[0]}")
     return produced
@@ -146,16 +148,50 @@ def _read_dxf(path: Path):
     return doc
 
 
+def _viewport_shows_model(viewport, model_extents) -> bool:
+    """Whether a viewport looks at any model-space geometry."""
+
+    # id 1 is the sheet's own viewport and status 0 means switched off.
+    if viewport.dxf.id == 1 or viewport.dxf.status == 0:
+        return False
+    if not model_extents.has_data:
+        return False
+    plan_view = (
+        tuple(viewport.dxf.view_direction_vector) == (0, 0, 1)
+        and tuple(viewport.dxf.view_target_point) == (0, 0, 0)
+        and not viewport.dxf.view_twist_angle
+    )
+    if not plan_view:
+        return True  # 3D or twisted views are not cheap to bound; trust them.
+    view_height = viewport.dxf.view_height
+    view_width = view_height * viewport.dxf.width / max(viewport.dxf.height, 1e-9)
+    center = viewport.dxf.view_center_point
+    low, high = model_extents.extmin, model_extents.extmax
+    return (
+        center.x - view_width / 2 <= high.x
+        and center.x + view_width / 2 >= low.x
+        and center.y - view_height / 2 <= high.y
+        and center.y + view_height / 2 >= low.y
+    )
+
+
 def _drawable_layouts(doc) -> list:
     """Paper-space sheets that have content, else model space."""
 
+    from ezdxf import bbox
+
+    model_extents = bbox.extents(doc.modelspace(), fast=True)
     sheets = [
         layout
         for name in doc.layout_names_in_taborder()
         if name.casefold() != "model"
         for layout in [doc.paperspace(name)]
-        # Every paper layout owns its main viewport; anything beyond that is content.
-        if len(layout) > 1
+        # A sheet holding only viewports onto empty model space would be a
+        # blank page; the model itself is the better page then.
+        if any(
+            entity.dxftype() != "VIEWPORT" or _viewport_shows_model(entity, model_extents)
+            for entity in layout
+        )
     ]
     return sheets or [doc.modelspace()]
 

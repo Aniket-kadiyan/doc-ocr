@@ -52,3 +52,8 @@ node_modules/
 dist/
 build/
 outputs/
+
+# dwg2dxf converter build output (see tools/dwg2dxf/README.md)
+tools/dwg2dxf/bin/
+tools/dwg2dxf/obj/
+tools/dwg2dxf/dist/

@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import io
-import shutil
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import ezdxf
 import pypdfium2 as pdfium
 
-from cad_documents import CadDocumentError, convert_cad_to_pdf, detect_cad_format
+from cad_documents import CadDocumentError, _dwg_converter, convert_cad_to_pdf, detect_cad_format
+
+# Model-space part shown through a viewport on an A3 paper-space sheet with a
+# title block, written as AutoCAD 2018 DWG by ACadSharp.
+A3_SHEET_DWG = Path(__file__).parent / "test_fixtures" / "cad" / "a3_sheet.dwg"
 
 
 def sample_dxf() -> bytes:
@@ -60,20 +65,88 @@ class ConvertCadToPdfTest(unittest.TestCase):
         image = page.render(scale=0.5).to_pil().convert("L")
         self.assertLess(image.getextrema()[0], 80)
 
-    @unittest.skipUnless(shutil.which("dxf2dwg") and shutil.which("dwg2dxf"), "LibreDWG not installed")
-    def test_dwg_converts_through_dxf(self):
-        import subprocess
+    def test_sheet_of_viewports_onto_nothing_falls_back_to_model_space(self):
+        doc = ezdxf.read(io.StringIO(sample_dxf().decode()))
+        sheet = doc.paperspace(doc.layout_names_in_taborder()[1])
+        sheet.page_setup(size=(420, 297), margins=(0, 0, 0, 0), units="mm")
+        # Looks far away from the part, so the sheet would print blank.
+        sheet.add_viewport(center=(210, 150), size=(300, 200), view_center_point=(5000, 5000), view_height=100)
+        stream = io.StringIO()
+        doc.write(stream)
 
-        with tempfile.TemporaryDirectory() as work:
-            dxf = Path(work, "part.dxf")
-            dwg = Path(work, "part.dwg")
-            dxf.write_bytes(sample_dxf())
-            subprocess.run(["dxf2dwg", "-y", "-o", str(dwg), str(dxf)], capture_output=True, check=False)
-            if not dwg.exists():
-                self.skipTest("dxf2dwg could not write a sample DWG")
-            pdf, pages = convert_cad_to_pdf(dwg.read_bytes(), "part.dwg")
-        self.assertEqual(page_count(pdf), pages)
-        self.assertGreaterEqual(pages, 1)
+        pdf, pages = convert_cad_to_pdf(stream.getvalue().encode(), "part.dxf")
+        width, height = pdfium.PdfDocument(pdf)[0].get_size()
+        self.assertEqual(pages, 1)
+        # The 2:1 model page, not the A3 sheet.
+        self.assertAlmostEqual(width / height, 2.0, delta=0.05)
+
+    def test_sheet_with_a_viewport_onto_the_part_stays_the_page(self):
+        doc = ezdxf.read(io.StringIO(sample_dxf().decode()))
+        sheet = doc.paperspace(doc.layout_names_in_taborder()[1])
+        sheet.page_setup(size=(420, 297), margins=(0, 0, 0, 0), units="mm")
+        sheet.add_viewport(center=(210, 150), size=(300, 200), view_center_point=(100, 50), view_height=120)
+        stream = io.StringIO()
+        doc.write(stream)
+
+        pdf, pages = convert_cad_to_pdf(stream.getvalue().encode(), "part.dxf")
+        width, height = pdfium.PdfDocument(pdf)[0].get_size()
+        self.assertEqual(pages, 1)
+        self.assertAlmostEqual(width, 420 / 25.4 * 72, delta=1)
+        self.assertAlmostEqual(height, 297 / 25.4 * 72, delta=1)
+
+    def test_dxf_needs_no_dwg_converter(self):
+        with mock.patch("cad_documents._dwg_converter", return_value=None):
+            _pdf, pages = convert_cad_to_pdf(sample_dxf(), "part.dxf")
+        self.assertEqual(pages, 1)
+
+    def test_dwg_without_converter_explains_what_is_missing(self):
+        with mock.patch("cad_documents._dwg_converter", return_value=None):
+            with self.assertRaisesRegex(CadDocumentError, "dwg2dxf-acadsharp"):
+                convert_cad_to_pdf(A3_SHEET_DWG.read_bytes(), "sheet.dwg")
+
+
+class DwgConverterDiscoveryTest(unittest.TestCase):
+    def test_configured_path_wins_and_a_wrong_one_is_reported(self):
+        missing = str(Path(__file__).parent / "no-such-converter")
+        with mock.patch.dict(os.environ, {"DWG2DXF_ACADSHARP": missing}):
+            self.assertEqual(_dwg_converter(), missing)
+            with self.assertRaisesRegex(CadDocumentError, "DWG2DXF_ACADSHARP .* does not exist"):
+                convert_cad_to_pdf(A3_SHEET_DWG.read_bytes(), "sheet.dwg")
+
+    def test_converter_that_cannot_start_is_a_cad_error(self):
+        # Not executable here, like a binary for another OS or CPU.
+        with tempfile.NamedTemporaryFile(suffix="-dwg2dxf") as stub:
+            with mock.patch.dict(os.environ, {"DWG2DXF_ACADSHARP": stub.name}):
+                with self.assertRaisesRegex(CadDocumentError, "could not be started"):
+                    convert_cad_to_pdf(A3_SHEET_DWG.read_bytes(), "sheet.dwg")
+
+    def test_no_bundled_build_is_guessed_for_an_unknown_platform(self):
+        environ = {key: value for key, value in os.environ.items() if key != "DWG2DXF_ACADSHARP"}
+        with (
+            mock.patch.dict(os.environ, environ, clear=True),
+            mock.patch("shutil.which", return_value=None),
+            mock.patch("platform.system", return_value="FreeBSD"),
+        ):
+            self.assertIsNone(_dwg_converter())
+
+
+@unittest.skipUnless(_dwg_converter(), "dwg2dxf-acadsharp not built (see tools/dwg2dxf)")
+class ConvertDwgTest(unittest.TestCase):
+    def test_dwg_sheet_becomes_an_a3_page(self):
+        pdf, pages = convert_cad_to_pdf(A3_SHEET_DWG.read_bytes(), "sheet.dwg")
+        self.assertEqual((pages, page_count(pdf)), (1, 1))
+
+        page = pdfium.PdfDocument(pdf)[0]
+        width, height = page.get_size()
+        self.assertAlmostEqual(width, 420 / 25.4 * 72, delta=1)
+        self.assertAlmostEqual(height, 297 / 25.4 * 72, delta=1)
+        # The part is drawn through the sheet's viewport, not just the frame.
+        image = page.render(scale=0.5).to_pil().convert("L")
+        self.assertLess(image.getextrema()[0], 80)
+
+    def test_unreadable_dwg_reports_the_converter_error(self):
+        with self.assertRaisesRegex(CadDocumentError, "Could not convert the DWG file"):
+            convert_cad_to_pdf(b"AC1032" + b"\0" * 4096, "broken.dwg")
 
 
 if __name__ == "__main__":
