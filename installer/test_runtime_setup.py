@@ -8,6 +8,7 @@ from unittest.mock import patch
 from installer.runtime_setup import (
     RuntimeSetupError,
     RuntimeSetupRequest,
+    _display_command,
     install_runtime_setup,
     parse_node_version,
     plan_runtime_setup,
@@ -75,6 +76,8 @@ class RuntimeSetupTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "ready")
             self.assertFalse(result["changes_applied"])
+            self.assertEqual(result["environment_action"], "create")
+            self.assertEqual(request.environment, root / "backend" / ".venv")
             self.assertTrue(str(result["requirements"]).endswith("requirements.txt"))
             self.assertFalse(request.environment.exists())
             stages = [action["stage"] for action in result["actions"]]
@@ -86,6 +89,92 @@ class RuntimeSetupTests(unittest.TestCase):
                     "frontend-dependencies",
                 ],
             )
+
+    def test_gpu_defaults_to_a_separate_environment_that_will_be_created(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source_tree(root)
+            request = RuntimeSetupRequest(application_root=root, runtime="gpu")
+            with (
+                patch(
+                    "installer.runtime_setup.host_python_status",
+                    return_value=_supported_python(),
+                ),
+                patch(
+                    "installer.runtime_setup.node_status",
+                    return_value=_supported_node(),
+                ),
+            ):
+                result = plan_runtime_setup(request)
+
+            self.assertEqual(request.environment, root / "backend" / ".venv-gpu")
+            self.assertEqual(result["environment_action"], "create")
+            self.assertEqual(result["actions"][0]["stage"], "python-environment")
+
+    def test_plan_reports_when_an_existing_environment_will_be_reused(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source_tree(root)
+            request = RuntimeSetupRequest(application_root=root, runtime="gpu")
+            request.environment_python.parent.mkdir(parents=True)
+            request.environment_python.touch()
+            with (
+                patch(
+                    "installer.runtime_setup.host_python_status",
+                    return_value=_supported_python(),
+                ),
+                patch(
+                    "installer.runtime_setup.node_status",
+                    return_value=_supported_node(),
+                ),
+            ):
+                result = plan_runtime_setup(request)
+
+            self.assertEqual(result["environment_action"], "reuse")
+            stages = [action["stage"] for action in result["actions"]]
+            self.assertNotIn("python-environment", stages)
+
+    def test_plan_blocks_an_existing_non_environment_directory(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source_tree(root)
+            request = RuntimeSetupRequest(application_root=root, runtime="cpu")
+            request.environment.mkdir()
+            with (
+                patch(
+                    "installer.runtime_setup.host_python_status",
+                    return_value=_supported_python(),
+                ),
+                patch(
+                    "installer.runtime_setup.node_status",
+                    return_value=_supported_node(),
+                ),
+            ):
+                result = plan_runtime_setup(request)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(
+                result["environment_action"],
+                "blocked-invalid-directory",
+            )
+            self.assertEqual(result["actions"], [])
+
+    def test_display_command_separates_and_quotes_paths_with_spaces(self) -> None:
+        command = _display_command(
+            [
+                r"G:\job related works\Python313\python.exe",
+                "-m",
+                "pip",
+                "-r",
+                r"G:\job related works\doc-ocr\backend\requirements.txt",
+            ]
+        )
+
+        self.assertEqual(
+            command,
+            '"G:\\job related works\\Python313\\python.exe" -m pip -r '
+            '"G:\\job related works\\doc-ocr\\backend\\requirements.txt"',
+        )
 
     def test_gpu_plan_uses_gpu_manifest_and_can_include_warmup(self) -> None:
         with TemporaryDirectory() as temporary:

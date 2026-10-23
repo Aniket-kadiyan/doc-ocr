@@ -60,7 +60,8 @@ class RuntimeSetupRequest:
     def environment(self) -> Path:
         configured = self.environment_dir
         if configured is None:
-            return self.backend_dir / ".venv"
+            default_name = ".venv-gpu" if self.runtime == "gpu" else ".venv"
+            return self.backend_dir / default_name
         if configured.is_absolute():
             return configured.resolve()
         return (self.root / configured).resolve()
@@ -170,11 +171,22 @@ def _display_command(arguments: Sequence[str]) -> str:
     return " ".join(quote(str(argument)) for argument in arguments)
 
 
+def _environment_action(request: RuntimeSetupRequest) -> str:
+    if request.environment_python.is_file():
+        return "reuse"
+    if request.environment.exists():
+        return "blocked-invalid-directory"
+    return "create"
+
+
 def _commands(request: RuntimeSetupRequest) -> list[dict[str, object]]:
     environment_python = str(request.environment_python)
     npm = shutil.which("npm") or "npm"
     actions: list[tuple[str, list[str], Path]] = []
-    if not request.environment_python.is_file():
+    environment_action = _environment_action(request)
+    if environment_action == "blocked-invalid-directory":
+        return []
+    if environment_action == "create":
         actions.append((
             "python-environment",
             [sys.executable, "-m", "venv", str(request.environment)],
@@ -226,8 +238,19 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
     request.validate_layout()
     python = host_python_status()
     node = node_status()
+    environment_action = _environment_action(request)
+    blockers: list[str] = []
+    if not python["supported"]:
+        blockers.append("CPython 3.13 x64 is not available")
+    if not node["supported"]:
+        blockers.append("Node.js 20.19 or newer with npm is not available")
+    if environment_action == "blocked-invalid-directory":
+        blockers.append(
+            "the selected environment directory exists but is not a valid "
+            "Python virtual environment"
+        )
     return {
-        "status": "ready" if python["supported"] and node["supported"] else "blocked",
+        "status": "ready" if not blockers else "blocked",
         "mode": "plan",
         "changes_applied": False,
         "platform": {
@@ -239,10 +262,12 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
         "application_root": str(request.root),
         "environment": str(request.environment),
         "environment_exists": request.environment_python.is_file(),
+        "environment_action": environment_action,
         "configuration_exists": (request.root / ".env.local").is_file(),
         "requirements": str(request.requirements),
         "python": python,
         "node": node,
+        "blockers": blockers,
         "actions": _commands(request),
     }
 

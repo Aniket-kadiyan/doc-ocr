@@ -1,0 +1,81 @@
+QTracX Installer I3A - Mode-specific fresh Python environments
+==============================================================
+
+Apply this small correction after Installer I3. The ZIP contains source
+changes only. It contains no commit and does not push anything.
+
+What changed
+------------
+
+- CPU installations default to backend\.venv.
+- GPU installations default to backend\.venv-gpu.
+- A missing target is explicitly reported as environment_action=create.
+- A valid existing environment is explicitly reported as reuse.
+- An existing directory that is not a virtual environment blocks setup rather
+  than being overwritten.
+- Install mode creates the selected environment with 64-bit CPython 3.13 and
+  installs only the matching CPU or GPU requirements file.
+
+Apply
+-----
+
+1. Extract this ZIP into the doc-ocr repository root.
+2. Allow it to overwrite the matching installer files.
+3. Review:
+
+       git status --short
+       git diff --check
+
+Safe fresh-environment test
+---------------------------
+
+This read-only test uses a deliberately nonexistent path:
+
+    .\installer\bootstrap.ps1 `
+        -Mode Plan `
+        -Runtime gpu `
+        -Database mssql `
+        -EnvironmentDir backend\.venv-gpu-fresh-plan
+
+Expected application-plan fields:
+
+    "environment_action": "create"
+
+The first application action must have:
+
+    "stage": "python-environment"
+
+Confirm that Plan mode did not create it:
+
+    Test-Path backend\.venv-gpu-fresh-plan
+
+Expected result:
+
+    False
+
+Actual fresh-machine defaults
+-----------------------------
+
+On the clean deployment machine, omit -EnvironmentDir:
+
+    .\installer\bootstrap.ps1 -Mode Install -Runtime cpu -Database mssql
+
+creates backend\.venv, while:
+
+    .\installer\bootstrap.ps1 -Mode Install -Runtime gpu -Database mssql
+
+creates backend\.venv-gpu. Both commands install Python and Node first when
+they are missing, then create the virtual environment, install application
+packages, run npm ci and verify the result.
+
+Unit tests
+----------
+
+From the repository root:
+
+    .\backend\.venv-gpu\Scripts\python.exe -m unittest -v installer.test_runtime_setup installer.test_bootstrap_contract installer.test_preflight installer.test_database_bootstrap installer.test_setup_config installer.test_source_acquisition
+
+Suggested commit message
+------------------------
+
+    fix(installer): create mode-specific Python environments on fresh hosts

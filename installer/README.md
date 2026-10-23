@@ -36,8 +36,15 @@ development machine:
 
 `Install` mode can install missing 64-bit CPython 3.13, current Node.js LTS,
 Git when requested and Microsoft ODBC Driver 18 when MSSQL has no supported
-driver. It then delegates to `runtime_setup.py` to create `backend\.venv`,
-install the selected CPU/GPU Python manifest and run `npm ci`.
+driver. It then delegates to `runtime_setup.py` to create `backend\.venv` for
+CPU mode or `backend\.venv-gpu` for GPU mode, install only the matching Python
+manifest and run `npm ci`. An explicit `-EnvironmentDir` may override the
+mode-specific default.
+
+Plan output includes `environment_action`: `create` for a missing target,
+`reuse` for a valid existing environment, or `blocked-invalid-directory` when
+the target exists but is not a virtual environment. Plan mode never creates
+the directory or installs dependencies.
 
 For MSSQL, an existing 64-bit Driver 18 is preferred and Driver 17 is accepted.
 The detected driver name is returned for configuration instead of assuming a

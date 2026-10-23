@@ -36,6 +36,34 @@ For the CPU environment:
 Plan mode does not install software, create a virtual environment, run pip,
 run npm, build the frontend, download OCR models or change the database.
 
+When `-EnvironmentDir` is omitted, the selected runtime determines the target:
+
+- CPU mode uses `backend\.venv`;
+- GPU mode uses `backend\.venv-gpu`.
+
+The application plan now reports `environment_action` as `create`, `reuse`,
+or `blocked-invalid-directory`. To prove the fresh-environment path safely on
+an already configured GPU development machine, point Plan mode at a path that
+does not exist:
+
+```powershell
+.\installer\bootstrap.ps1 `
+    -Mode Plan `
+    -Runtime gpu `
+    -Database mssql `
+    -EnvironmentDir backend\.venv-gpu-fresh-plan
+```
+
+The application plan must report `"environment_action": "create"`, and its
+first action must be `python-environment`. Because this is Plan mode, the path
+must remain absent:
+
+```powershell
+Test-Path backend\.venv-gpu-fresh-plan
+```
+
+The expected result is `False`.
+
 Verify mode is also read-only, but returns a failure when a required runtime,
 package set or frontend dependency is unavailable:
 
@@ -102,9 +130,9 @@ runtime.
 
 ## Install application dependencies
 
-On a clean deployment, the default environment is `backend\.venv`. The CPU
-or GPU Paddle requirement set is installed into that single production
-environment according to `-Runtime`.
+On a clean deployment, CPU mode creates `backend\.venv` and GPU mode creates
+`backend\.venv-gpu`. Only the requirement set matching `-Runtime` is installed
+in that environment.
 
 ```powershell
 .\installer\bootstrap.ps1 `
@@ -117,7 +145,7 @@ Install mode:
 
 1. installs missing host prerequisites through WinGet;
 2. refreshes the current process `PATH`;
-3. creates `backend\.venv` if it does not exist;
+3. creates the mode-specific virtual environment if it does not exist;
 4. installs the selected Python runtime manifest;
 5. runs `npm ci` from the checked-in lock file; and
 6. verifies the installed Python and frontend dependencies.
