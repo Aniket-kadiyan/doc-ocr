@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "applicationName": "QTracX",
+  "environment": "production",
+  "codeSource": {
+    "mode": "archive",
+    "repositoryUrl": "https://github.com/Aniket-kadiyan/doc-ocr.git",
+    "branch": "MVP2"
+  },
+  "network": {
+    "deploymentMode": "local",
+    "serverAddress": "localhost",
+    "uiPort": 3002,
+    "backendPort": 8000,
+    "protocol": "http"
+  },
+  "database": {
+    "type": "mssql",
+    "name": "QTracX",
+    "applicationUser": "qtracx_app",
+    "mssql": {
+      "host": "localhost",
+      "port": 1433,
+      "administratorUser": "sa",
+      "odbcDriver": "ODBC Driver 18 for SQL Server",
+      "encrypt": true,
+      "trustServerCertificate": true
+    },
+    "postgresql": {
+      "host": "localhost",
+      "port": 5432,
+      "administratorUser": "postgres"
+    }
+  },
+  "ocr": {
+    "device": "cpu",
+    "modelInstances": 1,
+    "scanWorkers": 2
+  },
+  "https": {
+    "enabled": false,
+    "certificateFile": "",
+    "privateKeyFile": ""
+  },
+  "storage": {
+    "checksheetDataDirectory": "backend/data/checksheets",
+    "logDirectory": "backend/logs"
+  }
+}

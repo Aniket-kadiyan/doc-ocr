@@ -19,6 +19,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_port, 8000)
         self.assertTrue(config.backend_reload)
         self.assertEqual(config.ocr_model_instances, 1)
+        self.assertEqual(config.ocr_scan_workers, 2)
         self.assertFalse(config.https_enabled)
         self.assertIsNone(config.tls_cert_file)
         self.assertIsNone(config.tls_key_file)
@@ -32,6 +33,7 @@ class RuntimeConfigTests(unittest.TestCase):
             "QTRACX_ENV": "PRODUCTION", "UI_HOST": "0.0.0.0", "PORT": "3102",
             "OCR_HOST": "0.0.0.0", "OCR_PORT": "8100", "OCR_RELOAD": "false",
             "OCR_MODEL_INSTANCES": "3",
+            "OCR_SCAN_WORKERS": "4",
             "HTTPS_ENABLED": "true",
             "TLS_CERT_FILE": "certificates/qtracx.crt",
             "TLS_KEY_FILE": "certificates/qtracx.key",
@@ -47,7 +49,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_port, 8100)
         self.assertFalse(config.backend_reload)
         self.assertEqual(config.ocr_model_instances, 3)
+        self.assertEqual(config.ocr_scan_workers, 4)
         self.assertEqual(config.public_summary()["ocr_model_instances"], 3)
+        self.assertEqual(config.public_summary()["ocr_scan_workers"], 4)
         self.assertEqual(config.log_level, "WARNING")
         self.assertEqual(config.auth_session_hours, 12)
         self.assertTrue(config.https_enabled)
@@ -76,6 +80,12 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "9"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_SCAN_WORKERS": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_SCAN_WORKERS": "33"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
 

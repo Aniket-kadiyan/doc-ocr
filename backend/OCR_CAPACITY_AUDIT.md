@@ -12,11 +12,13 @@ this milestone.
   cooperating components inside one bundle; they are not four independent job
   slots.
 - `OCR_MODEL_INSTANCES` requests 1-8 complete bundles and defaults to one.
+- `OCR_SCAN_WORKERS` requests 1-32 scan workers and defaults to two. Workers
+  can prepare separate jobs, but do not add Paddle inference capacity.
 - Additional bundles join the pool only when they load successfully with the
   same component capabilities, API version and device as the first bundle.
-- The auto-balloon executor is created with one worker per successfully loaded
-  bundle. A failed additional load reduces real scheduler capacity instead of
-  advertising an unusable worker.
+- The auto-balloon executor uses the configured worker count. A failed model
+  load still reduces effective inference capacity, regardless of how many
+  worker threads exist.
 - Paddle/Paddle Inference may use internal compute threads. Those threads can
   accelerate one inference call but do not create additional QTracX job slots.
 - Every Paddle inference call passes through one process-wide inference gate.
@@ -44,7 +46,7 @@ the `ocr_capacity_detected` event.
 
 ## Scheduler implication
 
-The scheduler uses loaded model-bundle slots as its limiting resource. Adding
-HTTP workers or executor threads alone does not increase OCR concurrency.
-Changing `OCR_MODEL_INSTANCES` requires a backend restart because model loading
-and scan-executor sizing happen together during startup.
+The scheduler uses loaded model-bundle slots as its inference limit. Adding
+HTTP workers or executor threads alone does not increase Paddle concurrency.
+Changing either `OCR_MODEL_INSTANCES` or `OCR_SCAN_WORKERS` requires a backend
+restart.

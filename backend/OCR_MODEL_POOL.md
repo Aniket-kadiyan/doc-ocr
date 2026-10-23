@@ -7,6 +7,7 @@ load in one QTracX backend process. The valid range is 1-8 and the default is 1.
 
 ```dotenv
 OCR_MODEL_INSTANCES=1
+OCR_SCAN_WORKERS=2
 ```
 
 One bundle contains the main PaddleOCR pipeline plus the standalone detector,
@@ -29,13 +30,14 @@ which avoids repeatedly attempting allocation after a likely memory failure.
 The backend then:
 
 1. creates one inference-gate slot per successfully loaded bundle;
-2. creates one auto-balloon worker per successfully loaded bundle;
+2. creates the configured number of auto-balloon workers (two by default);
 3. leases one exclusive bundle for every Paddle call; and
 4. reports requested, loaded and failed counts through `/health`.
 
-If Paddle itself is unavailable, the pool reports zero inference capacity. A
-single scan worker remains only so submitted jobs can return a real failure
-instead of waiting forever.
+Workers may prepare images concurrently, but only the successfully loaded
+model bundles determine concurrent Paddle inference capacity. If Paddle is
+unavailable, the pool reports zero inference capacity and submitted jobs fail
+honestly rather than waiting forever.
 
 ## Runtime verification
 
@@ -46,9 +48,10 @@ $health.ocr_capacity.inference_gate | ConvertTo-Json -Depth 5
 $health.ocr_capacity.auto_balloon_scans | ConvertTo-Json -Depth 5
 ```
 
-Confirm that `created`, `inference_ready`, `configured_slots` and
-`worker_threads` equal the number that actually loaded. `configured` records
-the requested value and `failed` records any shortfall.
+Confirm that `created`, `inference_ready` and `configured_slots` equal the
+number of bundles that actually loaded. `worker_threads` reports the separate
+`OCR_SCAN_WORKERS` setting. `configured` records the requested bundle count
+and `failed` records any shortfall.
 
 This remains a single-process design. Running multiple Uvicorn worker processes
 would create separate pools and queues and is not supported by this milestone.

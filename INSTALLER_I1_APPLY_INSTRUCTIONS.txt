@@ -1,0 +1,58 @@
+QTracX installer foundation I1
+================================
+
+Base branch
+-----------
+deployment-readiness at commit 2e49540
+
+Apply
+-----
+1. Make sure your current branch is deployment-readiness and your worktree is
+   clean.
+2. Extract this ZIP into the repository root, keeping the folder structure.
+3. Existing files under backend/ and .env.local.example will be updated. The
+   new top-level installer/ folder will be added beside backend/.
+4. Do not copy node_modules, .next, a Python virtual environment or other
+   generated dependencies into installer/.
+
+Configuration note
+------------------
+Add this value to an existing .env.local when testing the new worker default:
+
+OCR_SCAN_WORKERS=2
+
+If it is absent, the backend now defaults to 2 automatically.
+
+Code-source modes
+-----------------
+- archive: the deployment user selects a dependency-free source ZIP;
+- git: the installer pulls the fixed repository/branch declared in
+  installer/config/installer.defaults.json.
+
+The current predefined Git branch is MVP2. Change it to the approved release
+branch before building a customer installer.
+
+Verification
+------------
+From the repository root:
+
+  .\backend\.venv-gpu\Scripts\python.exe -m unittest -v ^
+    installer.test_setup_config ^
+    installer.test_preflight ^
+    installer.test_source_acquisition
+
+  cd backend
+  .\.venv-gpu\Scripts\python.exe -m unittest -v test_config_env.py
+  cd ..
+
+  .\backend\.venv-gpu\Scripts\python.exe installer\preflight.py --json
+
+For a CPU environment, replace .venv-gpu with .venv.
+
+Scope of this package
+---------------------
+This is the reusable installer foundation, not the final graphical installer.
+It provides source acquisition, validated configuration generation, host/GPU
+preflight and the approved defaults. The next package will add database
+creation and migrations before the graphical wizard is built over these
+tested operations.

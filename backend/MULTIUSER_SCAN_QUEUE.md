@@ -11,9 +11,10 @@ backend.
   the existing reload/retry behaviour.
 - A user cannot poll or cancel another user's job. An unknown job and a job
   owned by somebody else both return HTTP 404.
-- The default remains one concurrent auto-balloon scan. When additional model
-  bundles are explicitly requested and successfully loaded, the executor gains
-  one worker for each verified bundle.
+- The default executor has two scan workers and one model bundle. Two jobs may
+  prepare concurrently, while the inference gate permits only one of them to
+  use Paddle at a time. Additional verified model bundles increase effective
+  inference concurrency.
 - Adding web-server threads does not increase the reported OCR capacity.
 
 ## Queue information returned with each job

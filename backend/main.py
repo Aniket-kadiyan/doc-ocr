@@ -144,9 +144,9 @@ async def request_diagnostics(request: Request, call_next):
         )
         return response
 
-# The executor is created only after Paddle has loaded, because requested
-# instances and successfully loaded model bundles are not the same thing.
-# This prevents the job queue from advertising workers that cannot run OCR.
+# Scan workers prepare jobs independently from the model pool. Paddle calls
+# still pass through the model-capacity gate, so extra workers cannot make one
+# loaded bundle run unsafe concurrent inference calls.
 scan_job_manager: ScanJobManager | None = None
 _scan_job_manager_lock = Lock()
 page_layout_cache = PageLayoutCache(max_entries=8)
@@ -159,11 +159,9 @@ def _get_scan_job_manager() -> ScanJobManager:
         return scan_job_manager
     with _scan_job_manager_lock:
         if scan_job_manager is None:
-            loaded_capacity = get_pipeline().inference_capacity
-            # Keep one worker when Paddle is unavailable so a submitted job
-            # can fail honestly instead of remaining queued forever.
+            get_pipeline()
             scan_job_manager = ScanJobManager(
-                max_workers=max(1, loaded_capacity)
+                max_workers=runtime_config.ocr_scan_workers
             )
     return scan_job_manager
 

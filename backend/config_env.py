@@ -79,6 +79,7 @@ class RuntimeConfig:
     backend_port: int
     backend_reload: bool
     ocr_model_instances: int
+    ocr_scan_workers: int
     https_enabled: bool
     tls_cert_file: Path | None = field(repr=False)
     tls_key_file: Path | None = field(repr=False)
@@ -102,6 +103,7 @@ class RuntimeConfig:
             "backend_port": self.backend_port,
             "backend_reload": self.backend_reload,
             "ocr_model_instances": self.ocr_model_instances,
+            "ocr_scan_workers": self.ocr_scan_workers,
             "https_enabled": self.https_enabled,
             "tls_cert_configured": self.tls_cert_file is not None,
             "tls_key_configured": self.tls_key_file is not None,
@@ -181,6 +183,9 @@ def load_runtime_config() -> RuntimeConfig:
         backend_reload=_strict_bool("OCR_RELOAD", True),
         ocr_model_instances=_strict_int(
             "OCR_MODEL_INSTANCES", 1, minimum=1, maximum=8
+        ),
+        ocr_scan_workers=_strict_int(
+            "OCR_SCAN_WORKERS", 2, minimum=1, maximum=32
         ),
         https_enabled=_strict_bool("HTTPS_ENABLED", False),
         tls_cert_file=_optional_configured_path("TLS_CERT_FILE"),
