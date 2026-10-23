@@ -20,9 +20,52 @@ installation, repair and upgrade modes.
 - tests that prevent passwords, ports and deployment bindings from being
   rendered incorrectly.
 
-Database-administrator credentials are intentionally absent from persisted
-installer configuration. A later setup step will receive them transiently,
-create the database/application user, run migrations and then discard them.
+## Database bootstrap
+
+`database_bootstrap.py` supports MSSQL through the MIT-0 `pyodbc` driver and
+PostgreSQL through the BSD-3-Clause `pg8000` driver. It:
+
+1. tests the supplied database-administrator connection;
+2. creates the `QTracX` database when it is missing;
+3. creates the `qtracx_app` database login/role when it is missing;
+4. grants the permissions required by QTracX and Alembic;
+5. verifies the application login independently;
+6. applies every Alembic migration and checks the required tables; and
+7. creates or repairs the initial QTracX application administrator.
+
+Two provisioning modes are available:
+
+- `installer`: enter `sa`, `postgres`, or another sufficiently privileged
+  database account. The installer creates the database and application user.
+- `preconfigured`: IT creates the `QTracX` database and a dedicated account
+  beforehand. The installer receives only that account's connection details,
+  verifies its schema-migration permissions, and never asks for `sa` or a
+  PostgreSQL superuser password.
+
+Database-administrator credentials are used only in process memory. The CLI
+accepts them through hidden prompts or JSON stdin, never command arguments.
+An existing `qtracx_app` password is preserved unless password reset is
+explicitly selected. Existing QTracX application administrators are not given
+a new password automatically.
+
+Run the temporary interactive setup interface from the repository root:
+
+```powershell
+.\backend\.venv-gpu\Scripts\python.exe installer\database_bootstrap.py --interactive
+```
+
+Test the selected administrator or preconfigured application connection
+without changing the database:
+
+```powershell
+.\backend\.venv-gpu\Scripts\python.exe installer\database_bootstrap.py --interactive --check-only
+```
+
+Use `.venv` instead of `.venv-gpu` for the CPU environment. The graphical
+installer will call the same bootstrap function and show its progress stages.
+
+Database-administrator credentials remain absent from persisted installer
+configuration and generated application configuration.
 
 ## Run the preflight inventory
 
@@ -66,8 +109,5 @@ approved release branch before producing a customer installer.
 
 ## Next installer layer
 
-The next layer will add database bootstrap commands for MSSQL and PostgreSQL,
-including connection testing, creation of the `QTracX` database and
-`qtracx_app` login, Alembic migrations and initial QTracX administrator setup.
-The graphical wizard will call those commands rather than implementing SQL in
-its UI.
+The next layer will add the Windows graphical wizard over the tested source,
+preflight, configuration and database-bootstrap operations.

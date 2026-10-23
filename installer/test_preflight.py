@@ -28,6 +28,8 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(report["defaults"]["model_instances"], 1)
         self.assertEqual(report["defaults"]["scan_workers"], 2)
         self.assertTrue(report["code_source_modes"]["archive"])
+        self.assertIn("mssql", report["database_options"])
+        self.assertIn("postgresql", report["database_options"])
 
 
 if __name__ == "__main__":

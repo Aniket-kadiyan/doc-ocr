@@ -83,6 +83,26 @@ def detect_nvidia_gpus() -> Check:
     )
 
 
+def detect_database_drivers() -> tuple[list[str], bool]:
+    """Return installed MSSQL ODBC drivers and pg8000 availability."""
+
+    odbc_drivers: list[str] = []
+    if importlib.util.find_spec("pyodbc") is not None:
+        try:
+            import pyodbc
+
+            odbc_drivers = [
+                name
+                for name in pyodbc.drivers()
+                if "sql server" in name.casefold()
+            ]
+        except Exception:
+            # Driver inventory is advisory; the connection test remains the
+            # authoritative check during database setup.
+            odbc_drivers = []
+    return odbc_drivers, importlib.util.find_spec("pg8000") is not None
+
+
 def _port_check(host: str, port: int, label: str) -> Check:
     bind_host = "127.0.0.1" if host.lower() == "localhost" else host
     family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
@@ -154,6 +174,27 @@ def collect_preflight(
     ))
     checks.append(detect_nvidia_gpus())
 
+    odbc_drivers, pg8000_available = detect_database_drivers()
+    checks.append(Check(
+        "mssql_driver",
+        "ok" if odbc_drivers else "not-installed",
+        (
+            "MSSQL connectivity is available."
+            if odbc_drivers
+            else "No Microsoft SQL Server ODBC driver was detected."
+        ),
+        {"drivers": odbc_drivers},
+    ))
+    checks.append(Check(
+        "postgresql_driver",
+        "ok" if pg8000_available else "not-installed",
+        (
+            "PostgreSQL pg8000 connectivity is available."
+            if pg8000_available
+            else "The PostgreSQL pg8000 driver is not installed yet."
+        ),
+    ))
+
     paddle_installed = importlib.util.find_spec("paddle") is not None
     checks.append(Check(
         "paddle_runtime",
@@ -176,6 +217,16 @@ def collect_preflight(
         "code_source_modes": {
             "archive": True,
             "git": git_ok,
+        },
+        "database_options": {
+            "mssql": {
+                "available": bool(odbc_drivers),
+                "odbc_drivers": odbc_drivers,
+            },
+            "postgresql": {
+                "available": pg8000_available,
+                "driver": "pg8000",
+            },
         },
         "defaults": {
             "server_address": host,

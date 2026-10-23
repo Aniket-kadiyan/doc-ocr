@@ -46,7 +46,7 @@ class DatabaseSetup:
     port: int = 1433
     name: str = "QTracX"
     application_user: str = "qtracx_app"
-    application_password: str = ""
+    application_password: str = field(default="", repr=False)
     odbc_driver: str = "ODBC Driver 18 for SQL Server"
     encrypt: bool = True
     trust_server_certificate: bool = True

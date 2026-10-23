@@ -25,7 +25,7 @@ Installing this smaller file avoids reinstalling or replacing PaddlePaddle.
 Add a URL like this to the repository's `.env.local`:
 
 ```dotenv
-DATABASE_URL=postgresql+pg8000://qtracx_user:CHANGE_ME@db-server:5432/qtracx
+DATABASE_URL=postgresql+pg8000://qtracx_app:CHANGE_ME@db-server:5432/QTracX
 ```
 
 Create a dedicated database and account. The account needs permission to
@@ -37,7 +37,7 @@ Install Microsoft ODBC Driver 18 for SQL Server on the backend machine, then
 add a URL like this to `.env.local`:
 
 ```dotenv
-DATABASE_URL=mssql+pyodbc://qtracx_user:CHANGE_ME@db-server:1433/qtracx?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
+DATABASE_URL=mssql+pyodbc://qtracx_app:CHANGE_ME@db-server:1433/QTracX?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
 ```
 
 If the SQL Server uses an internal certificate that the backend machine does
@@ -142,7 +142,7 @@ After `db upgrade` and `db check` succeed, run:
 
 The command prompts twice for the password. The password is not accepted as a
 command-line argument, written to the console, stored in shell history, or
-included in application logs. Passwords require at least 12 characters and are
+included in application logs. Passwords require at least 4 characters and are
 stored as Argon2id hashes.
 
 Additional administration commands:

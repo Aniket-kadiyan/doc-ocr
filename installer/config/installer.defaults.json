@@ -15,6 +15,7 @@
     "protocol": "http"
   },
   "database": {
+    "provisioningMode": "installer",
     "type": "mssql",
     "name": "QTracX",
     "applicationUser": "qtracx_app",
