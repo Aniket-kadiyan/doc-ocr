@@ -8,8 +8,10 @@ import importlib.util
 import json
 from pathlib import Path
 import platform
+import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 from typing import Sequence
@@ -103,6 +105,33 @@ def detect_database_drivers() -> tuple[list[str], bool]:
     return odbc_drivers, importlib.util.find_spec("pg8000") is not None
 
 
+_MSSQL_ODBC_DRIVER = re.compile(
+    r"^ODBC Driver (?P<major>\d+) for SQL Server$",
+    re.IGNORECASE,
+)
+
+
+def select_mssql_driver(drivers: Sequence[str]) -> str | None:
+    """Choose the newest supported Microsoft SQL Server ODBC driver.
+
+    Driver 18 is preferred, but Driver 17 remains supported for client hosts
+    that already have it. Legacy names such as ``SQL Server`` are reported by
+    preflight but are not selected for a new QTracX deployment.
+    """
+
+    candidates: list[tuple[int, str]] = []
+    for name in drivers:
+        match = _MSSQL_ODBC_DRIVER.fullmatch(name.strip())
+        if match is None:
+            continue
+        major = int(match.group("major"))
+        if major in {17, 18}:
+            candidates.append((major, name.strip()))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def _port_check(host: str, port: int, label: str) -> Check:
     bind_host = "127.0.0.1" if host.lower() == "localhost" else host
     family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
@@ -151,9 +180,20 @@ def collect_preflight(
     ))
     checks.append(Check(
         "python",
-        "ok" if sys.version_info[:2] == (3, 13) else "warning",
+        (
+            "ok"
+            if sys.version_info[:2] == (3, 13) and struct.calcsize("P") * 8 == 64
+            else "warning"
+        ),
         f"Detected Python {platform.python_version()} at {sys.executable}.",
-        {"required": "CPython 3.13 x64"},
+        {
+            "required": "CPython 3.13 x64",
+            "architecture_bits": struct.calcsize("P") * 8,
+            "install_command": (
+                "winget install --exact --id Python.Python.3.13 "
+                "--source winget --architecture x64"
+            ),
+        },
     ))
 
     node_ok, node_version = _command_version("node", "--version")
@@ -175,15 +215,24 @@ def collect_preflight(
     checks.append(detect_nvidia_gpus())
 
     odbc_drivers, pg8000_available = detect_database_drivers()
+    selected_odbc_driver = select_mssql_driver(odbc_drivers)
     checks.append(Check(
         "mssql_driver",
-        "ok" if odbc_drivers else "not-installed",
+        "ok" if selected_odbc_driver else "not-installed",
         (
-            "MSSQL connectivity is available."
-            if odbc_drivers
-            else "No Microsoft SQL Server ODBC driver was detected."
+            f"MSSQL connectivity will use {selected_odbc_driver}."
+            if selected_odbc_driver
+            else "No supported 64-bit Microsoft SQL Server ODBC driver was detected."
         ),
-        {"drivers": odbc_drivers},
+        {
+            "drivers": odbc_drivers,
+            "selected_driver": selected_odbc_driver,
+            "supported_major_versions": [18, 17],
+            "install_command": (
+                "winget install --exact --id Microsoft.msodbcsql.18 "
+                "--source winget"
+            ),
+        },
     ))
     checks.append(Check(
         "postgresql_driver",
@@ -220,8 +269,13 @@ def collect_preflight(
         },
         "database_options": {
             "mssql": {
-                "available": bool(odbc_drivers),
+                "available": selected_odbc_driver is not None,
                 "odbc_drivers": odbc_drivers,
+                "selected_driver": selected_odbc_driver,
+                "install_command": (
+                    "winget install --exact --id Microsoft.msodbcsql.18 "
+                    "--source winget"
+                ),
             },
             "postgresql": {
                 "available": pg8000_available,

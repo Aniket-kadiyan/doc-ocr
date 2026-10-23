@@ -1,0 +1,550 @@
+"""Create the QTracX Python/Node runtime after host prerequisites exist.
+
+The Windows ``bootstrap.ps1`` layer installs or locates Python, Node and the
+MSSQL ODBC driver. This module owns the repeatable application-level work:
+virtual-environment creation, Python dependencies, npm dependencies, optional
+frontend build, and optional OCR-model warmup.
+
+Plan and verify modes are read-only. Install mode never deletes or recreates an
+existing environment; an incompatible environment is reported for the user or
+future graphical installer to resolve explicitly.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import struct
+import subprocess
+import sys
+from typing import Callable, Mapping, Sequence
+
+
+MINIMUM_NODE_VERSION = (20, 19, 0)
+REQUIRED_PYTHON_VERSION = (3, 13)
+_NODE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+CommandRunner = Callable[[Sequence[str], Path, Mapping[str, str] | None], None]
+
+
+class RuntimeSetupError(RuntimeError):
+    """A safe, user-facing runtime setup failure."""
+
+    def __init__(self, stage: str, message: str) -> None:
+        self.stage = stage
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class RuntimeSetupRequest:
+    application_root: Path
+    runtime: str = "cpu"
+    environment_dir: Path | None = None
+    build_frontend: bool = False
+    warm_models: bool = False
+
+    @property
+    def root(self) -> Path:
+        return self.application_root.resolve()
+
+    @property
+    def backend_dir(self) -> Path:
+        return self.root / "backend"
+
+    @property
+    def environment(self) -> Path:
+        configured = self.environment_dir
+        if configured is None:
+            return self.backend_dir / ".venv"
+        if configured.is_absolute():
+            return configured.resolve()
+        return (self.root / configured).resolve()
+
+    @property
+    def requirements(self) -> Path:
+        filename = (
+            "requirements-gpu-cu126.txt"
+            if self.runtime == "gpu"
+            else "requirements.txt"
+        )
+        return self.backend_dir / filename
+
+    @property
+    def environment_python(self) -> Path:
+        if os.name == "nt":
+            return self.environment / "Scripts" / "python.exe"
+        return self.environment / "bin" / "python"
+
+    def validate_layout(self) -> None:
+        if self.runtime not in {"cpu", "gpu"}:
+            raise RuntimeSetupError("validation", "runtime must be cpu or gpu")
+        required = [
+            self.backend_dir,
+            self.requirements,
+            self.root / "package.json",
+            self.root / "package-lock.json",
+        ]
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            raise RuntimeSetupError(
+                "validation",
+                "QTracX source is incomplete: " + ", ".join(missing),
+            )
+        if self.environment == self.root or self.environment == self.backend_dir:
+            raise RuntimeSetupError(
+                "validation",
+                "the virtual environment must be a dedicated child directory",
+            )
+
+
+def parse_node_version(value: str) -> tuple[int, int, int] | None:
+    match = _NODE_VERSION.match(value.strip())
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def host_python_status() -> dict[str, object]:
+    bits = struct.calcsize("P") * 8
+    version = sys.version_info[:3]
+    supported = sys.version_info[:2] == REQUIRED_PYTHON_VERSION and bits == 64
+    return {
+        "available": True,
+        "supported": supported,
+        "version": ".".join(str(part) for part in version),
+        "architecture_bits": bits,
+        "executable": sys.executable,
+        "required": "CPython 3.13 x64",
+    }
+
+
+def node_status() -> dict[str, object]:
+    node = shutil.which("node")
+    npm = shutil.which("npm")
+    if node is None or npm is None:
+        return {
+            "available": False,
+            "supported": False,
+            "version": None,
+            "node": node,
+            "npm": npm,
+            "required": "Node.js 20.19 or newer with npm",
+        }
+    try:
+        result = subprocess.run(
+            [node, "--version"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    else:
+        version = parse_node_version(result.stdout) if result.returncode == 0 else None
+    return {
+        "available": version is not None,
+        "supported": version is not None and version >= MINIMUM_NODE_VERSION,
+        "version": (
+            ".".join(str(part) for part in version)
+            if version is not None
+            else None
+        ),
+        "node": node,
+        "npm": npm,
+        "required": "Node.js 20.19 or newer with npm",
+    }
+
+
+def _display_command(arguments: Sequence[str]) -> str:
+    def quote(value: str) -> str:
+        if not value or any(character.isspace() for character in value):
+            return '"' + value.replace('"', '\\"') + '"'
+        return value
+
+    return " ".join(quote(str(argument)) for argument in arguments)
+
+
+def _commands(request: RuntimeSetupRequest) -> list[dict[str, object]]:
+    environment_python = str(request.environment_python)
+    npm = shutil.which("npm") or "npm"
+    actions: list[tuple[str, list[str], Path]] = []
+    if not request.environment_python.is_file():
+        actions.append((
+            "python-environment",
+            [sys.executable, "-m", "venv", str(request.environment)],
+            request.root,
+        ))
+    actions.append((
+        "python-dependencies",
+        [
+            environment_python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(request.requirements),
+        ],
+        request.root,
+    ))
+    actions.append((
+        "frontend-dependencies",
+        [npm, "ci", "--no-audit", "--no-fund"],
+        request.root,
+    ))
+    if request.build_frontend:
+        actions.append((
+            "frontend-build",
+            [npm, "run", "build"],
+            request.root,
+        ))
+    if request.warm_models:
+        actions.append((
+            "ocr-model-warmup",
+            [environment_python, str(request.backend_dir / "run_ocr.py"), "health"],
+            request.backend_dir,
+        ))
+    return [
+        {
+            "stage": stage,
+            "command": _display_command(argv),
+            "cwd": str(cwd),
+        }
+        for stage, argv, cwd in actions
+    ]
+
+
+def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
+    """Return a read-only setup plan for an existing or fresh host."""
+
+    request.validate_layout()
+    python = host_python_status()
+    node = node_status()
+    return {
+        "status": "ready" if python["supported"] and node["supported"] else "blocked",
+        "mode": "plan",
+        "changes_applied": False,
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+        },
+        "runtime": request.runtime,
+        "application_root": str(request.root),
+        "environment": str(request.environment),
+        "environment_exists": request.environment_python.is_file(),
+        "configuration_exists": (request.root / ".env.local").is_file(),
+        "requirements": str(request.requirements),
+        "python": python,
+        "node": node,
+        "actions": _commands(request),
+    }
+
+
+def _run_command(
+    arguments: Sequence[str],
+    cwd: Path,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    try:
+        result = subprocess.run(
+            list(arguments),
+            cwd=cwd,
+            env=None if environment is None else dict(environment),
+            check=False,
+        )
+    except OSError as error:
+        raise RuntimeSetupError("command", error.__class__.__name__) from error
+    if result.returncode != 0:
+        raise RuntimeSetupError("command", f"command exited with {result.returncode}")
+
+
+def _run_stage(
+    stage: str,
+    runner: CommandRunner,
+    arguments: Sequence[str],
+    cwd: Path,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    try:
+        runner(arguments, cwd, environment)
+    except RuntimeSetupError as error:
+        raise RuntimeSetupError(stage, str(error)) from error
+    except Exception as error:
+        raise RuntimeSetupError(stage, error.__class__.__name__) from error
+
+
+def _validate_prerequisites() -> tuple[dict[str, object], dict[str, object]]:
+    python = host_python_status()
+    node = node_status()
+    if not python["supported"]:
+        raise RuntimeSetupError(
+            "python",
+            "QTracX requires 64-bit CPython 3.13",
+        )
+    if not node["supported"]:
+        raise RuntimeSetupError(
+            "node",
+            "QTracX requires Node.js 20.19 or newer with npm",
+        )
+    return python, node
+
+
+def _environment_probe(request: RuntimeSetupRequest) -> dict[str, object]:
+    python = request.environment_python
+    if not python.is_file():
+        raise RuntimeSetupError(
+            "verification",
+            f"virtual-environment Python was not found: {python}",
+        )
+    probe = (
+        "import importlib, importlib.metadata, json, struct, sys; "
+        "modules=['fastapi','paddle','paddleocr','sqlalchemy','alembic','pyodbc','pg8000']; "
+        "[importlib.import_module(name) for name in modules]; "
+        "import paddle; "
+        "print(json.dumps({'python':sys.version.split()[0],"
+        "'bits':struct.calcsize('P')*8,"
+        "'paddle':getattr(paddle,'__version__','unknown'),"
+        "'paddle_distributions':importlib.metadata.packages_distributions().get('paddle',[]),"
+        "'cuda_compiled':bool(paddle.device.is_compiled_with_cuda())}))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python), "-c", probe],
+            cwd=request.root,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeSetupError("verification", error.__class__.__name__) from error
+    if result.returncode != 0:
+        raise RuntimeSetupError(
+            "verification",
+            "one or more Python runtime dependencies could not be imported",
+        )
+    try:
+        details = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as error:
+        raise RuntimeSetupError(
+            "verification",
+            "the Python runtime probe returned an invalid result",
+        ) from error
+    if details.get("bits") != 64:
+        raise RuntimeSetupError("verification", "the virtual environment is not 64-bit")
+    if not str(details.get("python", "")).startswith("3.13."):
+        raise RuntimeSetupError(
+            "verification",
+            "the virtual environment does not use Python 3.13",
+        )
+    if request.runtime == "gpu" and not details.get("cuda_compiled"):
+        raise RuntimeSetupError(
+            "verification",
+            "GPU mode was selected but PaddlePaddle has no CUDA support",
+        )
+    distributions = {
+        str(name).casefold()
+        for name in (details.get("paddle_distributions") or [])
+    }
+    if request.runtime == "gpu" and "paddlepaddle-gpu" not in distributions:
+        raise RuntimeSetupError(
+            "verification",
+            "GPU mode does not contain the paddlepaddle-gpu package",
+        )
+    if request.runtime == "cpu" and (
+        "paddlepaddle" not in distributions or "paddlepaddle-gpu" in distributions
+    ):
+        raise RuntimeSetupError(
+            "verification",
+            "CPU mode does not contain the CPU-only paddlepaddle package",
+        )
+    return details
+
+
+def verify_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
+    """Verify installed packages without modifying the installation."""
+
+    request.validate_layout()
+    _python, node = _validate_prerequisites()
+    python_details = _environment_probe(request)
+    next_package = request.root / "node_modules" / "next" / "package.json"
+    if not next_package.is_file():
+        raise RuntimeSetupError(
+            "verification",
+            "frontend dependencies are not installed",
+        )
+    if request.build_frontend and not (request.root / ".next" / "BUILD_ID").is_file():
+        raise RuntimeSetupError(
+            "verification",
+            "the production frontend build was not found",
+        )
+    return {
+        "status": "ok",
+        "mode": "verify",
+        "changes_applied": False,
+        "runtime": request.runtime,
+        "environment": str(request.environment),
+        "python": python_details,
+        "node": node,
+        "frontend_dependencies": "installed",
+        "frontend_build": (
+            "verified" if request.build_frontend else "not-requested"
+        ),
+    }
+
+
+def install_runtime_setup(
+    request: RuntimeSetupRequest,
+    *,
+    runner: CommandRunner = _run_command,
+) -> dict[str, object]:
+    """Create/reuse the environment and install application dependencies."""
+
+    request.validate_layout()
+    _validate_prerequisites()
+    if request.build_frontend and not (request.root / ".env.local").is_file():
+        raise RuntimeSetupError(
+            "configuration",
+            "generate .env.local before building the production frontend",
+        )
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeSetupError("node", "npm was not found")
+
+    if request.environment.exists() and not request.environment_python.is_file():
+        raise RuntimeSetupError(
+            "python-environment",
+            "the environment directory exists but is not a valid virtual environment",
+        )
+    if not request.environment_python.is_file():
+        _run_stage(
+            "python-environment",
+            runner,
+            [sys.executable, "-m", "venv", str(request.environment)],
+            request.root,
+        )
+
+    _run_stage(
+        "python-dependencies",
+        runner,
+        [
+            str(request.environment_python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(request.requirements),
+        ],
+        request.root,
+    )
+    _run_stage(
+        "frontend-dependencies",
+        runner,
+        [npm, "ci", "--no-audit", "--no-fund"],
+        request.root,
+    )
+    if request.build_frontend:
+        _run_stage(
+            "frontend-build",
+            runner,
+            [npm, "run", "build"],
+            request.root,
+        )
+    if request.warm_models:
+        environment = dict(os.environ)
+        environment.update({
+            "OCR_DEVICE": "gpu:0" if request.runtime == "gpu" else "cpu",
+            "OCR_MODEL_INSTANCES": "1",
+            "OCR_SCAN_WORKERS": "1",
+            "OCR_RELOAD": "false",
+        })
+        _run_stage(
+            "ocr-model-warmup",
+            runner,
+            [
+                str(request.environment_python),
+                str(request.backend_dir / "run_ocr.py"),
+                "health",
+            ],
+            request.backend_dir,
+            environment,
+        )
+
+    # The injected runner used by unit tests deliberately does not create an
+    # environment. Production uses the default runner and receives full probe
+    # verification here.
+    if runner is _run_command:
+        verified = verify_runtime_setup(request)
+    else:
+        verified = {"status": "deferred-to-runner-test"}
+    return {
+        "status": "ok",
+        "mode": "install",
+        "changes_applied": True,
+        "runtime": request.runtime,
+        "environment": str(request.environment),
+        "requirements": str(request.requirements),
+        "frontend_build": (
+            "created" if request.build_frontend else "not-requested"
+        ),
+        "ocr_models": "warmed" if request.warm_models else "not-requested",
+        "verification": verified,
+    }
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Prepare the QTracX application runtime")
+    parser.add_argument(
+        "--mode",
+        choices=("plan", "install", "verify"),
+        default="plan",
+    )
+    parser.add_argument(
+        "--application-root",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent,
+    )
+    parser.add_argument("--runtime", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument("--environment-dir", type=Path)
+    parser.add_argument("--build-frontend", action="store_true")
+    parser.add_argument("--warm-models", action="store_true")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    request = RuntimeSetupRequest(
+        application_root=arguments.application_root,
+        runtime=arguments.runtime,
+        environment_dir=arguments.environment_dir,
+        build_frontend=arguments.build_frontend,
+        warm_models=arguments.warm_models,
+    )
+    try:
+        if arguments.mode == "plan":
+            result = plan_runtime_setup(request)
+        elif arguments.mode == "verify":
+            result = verify_runtime_setup(request)
+        else:
+            result = install_runtime_setup(request)
+    except RuntimeSetupError as error:
+        print(json.dumps({
+            "status": "failed",
+            "stage": error.stage,
+            "message": str(error),
+        }, indent=2))
+        return 1
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("status") in {"ok", "ready"} else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

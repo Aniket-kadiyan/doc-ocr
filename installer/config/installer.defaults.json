@@ -7,6 +7,25 @@
     "repositoryUrl": "https://github.com/Aniket-kadiyan/doc-ocr.git",
     "branch": "MVP2"
   },
+  "prerequisites": {
+    "python": {
+      "requiredVersion": "3.13",
+      "architecture": "x64",
+      "wingetId": "Python.Python.3.13"
+    },
+    "node": {
+      "minimumVersion": "20.19.0",
+      "wingetId": "OpenJS.NodeJS.LTS"
+    },
+    "git": {
+      "wingetId": "Git.Git"
+    },
+    "mssqlOdbc": {
+      "supportedMajorVersions": [18, 17],
+      "preferredDriver": "ODBC Driver 18 for SQL Server",
+      "wingetId": "Microsoft.msodbcsql.18"
+    }
+  },
   "network": {
     "deploymentMode": "local",
     "serverAddress": "localhost",

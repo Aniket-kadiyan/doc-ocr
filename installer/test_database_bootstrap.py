@@ -8,6 +8,7 @@ from unittest.mock import patch
 from installer.database_bootstrap import (
     DatabaseBootstrapError,
     DatabaseBootstrapRequest,
+    _detected_mssql_driver,
     _odbc_value,
     _postgresql_string,
     _sql_string,
@@ -42,6 +43,16 @@ def _payload(engine: str = "mssql") -> dict[str, object]:
 
 
 class DatabaseBootstrapTests(unittest.TestCase):
+    def test_detected_odbc_driver_is_used_for_interactive_default(self) -> None:
+        with patch(
+            "installer.preflight.detect_database_drivers",
+            return_value=(["ODBC Driver 17 for SQL Server"], True),
+        ):
+            self.assertEqual(
+                _detected_mssql_driver(),
+                "ODBC Driver 17 for SQL Server",
+            )
+
     def test_request_contains_approved_defaults_without_exposing_secrets(self) -> None:
         request = DatabaseBootstrapRequest.from_mapping(_payload())
         summary = request.safe_summary()

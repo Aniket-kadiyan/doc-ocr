@@ -22,6 +22,14 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertEqual(defaults["database"]["name"], "QTracX")
         self.assertEqual(defaults["ocr"]["modelInstances"], 1)
         self.assertEqual(defaults["ocr"]["scanWorkers"], 2)
+        self.assertEqual(
+            defaults["prerequisites"]["python"]["wingetId"],
+            "Python.Python.3.13",
+        )
+        self.assertEqual(
+            defaults["prerequisites"]["mssqlOdbc"]["supportedMajorVersions"],
+            [18, 17],
+        )
 
     def test_localhost_is_valid_and_generates_local_bindings(self) -> None:
         setup = InstallerSetup(

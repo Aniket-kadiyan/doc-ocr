@@ -20,6 +20,34 @@ installation, repair and upgrade modes.
 - tests that prevent passwords, ports and deployment bindings from being
   rendered incorrectly.
 
+## Clean-machine host bootstrap
+
+`bootstrap.ps1` is the phase-zero Windows entry point. It runs before a Python
+environment exists and therefore does not assume that Python, Node.js, npm,
+Git, an ODBC driver or application dependencies are installed.
+
+Its default `Plan` mode is read-only, making it safe to test on an existing
+development machine:
+
+```powershell
+.\installer\bootstrap.ps1 -Mode Plan -Runtime gpu -Database mssql `
+    -EnvironmentDir backend\.venv-gpu
+```
+
+`Install` mode can install missing 64-bit CPython 3.13, current Node.js LTS,
+Git when requested and Microsoft ODBC Driver 18 when MSSQL has no supported
+driver. It then delegates to `runtime_setup.py` to create `backend\.venv`,
+install the selected CPU/GPU Python manifest and run `npm ci`.
+
+For MSSQL, an existing 64-bit Driver 18 is preferred and Driver 17 is accepted.
+The detected driver name is returned for configuration instead of assuming a
+fixed version. If neither is present, the exact WinGet command and official
+manual-download page are included in the plan.
+
+Frontend build and OCR-model warmup are explicit options. The build requires
+the deployment `.env.local` to exist first because the browser-to-backend URL
+is fixed at deployment time. See [HOST_BOOTSTRAP.md](HOST_BOOTSTRAP.md).
+
 ## Database bootstrap
 
 `database_bootstrap.py` supports MSSQL through the MIT-0 `pyodbc` driver and
@@ -109,5 +137,5 @@ approved release branch before producing a customer installer.
 
 ## Next installer layer
 
-The next layer will add the Windows graphical wizard over the tested source,
-preflight, configuration and database-bootstrap operations.
+The next layer will add the Windows graphical wizard over the tested host
+bootstrap, source, preflight, configuration and database-bootstrap operations.

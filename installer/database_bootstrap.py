@@ -726,6 +726,23 @@ def _confirmed_password(label: str) -> str:
     return first
 
 
+def _detected_mssql_driver() -> str:
+    """Return the best installed driver, with Driver 18 as install fallback."""
+
+    try:
+        from installer.preflight import (
+            detect_database_drivers,
+            select_mssql_driver,
+        )
+
+        drivers, _postgresql_available = detect_database_drivers()
+        return select_mssql_driver(drivers) or "ODBC Driver 18 for SQL Server"
+    except Exception:
+        # The connection check will report a sanitized error if the fallback is
+        # not installed. Preflight/bootstrap.ps1 supplies installation guidance.
+        return "ODBC Driver 18 for SQL Server"
+
+
 def _interactive_request() -> DatabaseBootstrapRequest:
     engine = _prompt("Database engine (mssql/postgresql)", "mssql").lower()
     if engine not in {"mssql", "postgresql"}:
@@ -772,7 +789,7 @@ def _interactive_request() -> DatabaseBootstrapRequest:
         database_payload.update({
             "odbcDriver": _prompt(
                 "MSSQL ODBC driver",
-                "ODBC Driver 18 for SQL Server",
+                _detected_mssql_driver(),
             ),
             "encrypt": True,
             "trustServerCertificate": (

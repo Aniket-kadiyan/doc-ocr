@@ -4,10 +4,32 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from installer.preflight import collect_preflight
+from installer.preflight import collect_preflight, select_mssql_driver
 
 
 class PreflightTests(unittest.TestCase):
+    def test_newest_supported_mssql_driver_is_selected(self) -> None:
+        self.assertEqual(
+            select_mssql_driver([
+                "SQL Server",
+                "ODBC Driver 17 for SQL Server",
+                "ODBC Driver 18 for SQL Server",
+            ]),
+            "ODBC Driver 18 for SQL Server",
+        )
+
+    def test_existing_driver_17_is_supported(self) -> None:
+        self.assertEqual(
+            select_mssql_driver(["ODBC Driver 17 for SQL Server"]),
+            "ODBC Driver 17 for SQL Server",
+        )
+
+    def test_legacy_mssql_driver_is_not_silently_selected(self) -> None:
+        self.assertIsNone(select_mssql_driver(["SQL Server"]))
+
+    def test_unvalidated_future_mssql_driver_is_not_silently_selected(self) -> None:
+        self.assertIsNone(select_mssql_driver(["ODBC Driver 19 for SQL Server"]))
+
     def test_missing_application_layout_fails(self) -> None:
         with TemporaryDirectory() as temporary:
             report = collect_preflight(
@@ -30,6 +52,8 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(report["code_source_modes"]["archive"])
         self.assertIn("mssql", report["database_options"])
         self.assertIn("postgresql", report["database_options"])
+        self.assertIn("selected_driver", report["database_options"]["mssql"])
+        self.assertIn("install_command", report["database_options"]["mssql"])
 
 
 if __name__ == "__main__":
