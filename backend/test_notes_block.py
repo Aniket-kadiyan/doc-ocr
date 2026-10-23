@@ -244,3 +244,139 @@ if __name__ == "__main__":
             passed += 1
             print(f"PASS {name}")
     print(f"\n{passed} passed")
+
+
+# ── Notes in the bottom-left corner, beside the title block ───────────────
+# LP58.pdf and TS2: the notes sit at the left of the bottom border and the
+# title block sits to their RIGHT, at the same height. The title-block floor
+# used to take any title-block word below the first markers, anywhere across
+# the sheet, and cut the list off at its height.
+
+BOTTOM_LEFT_NOTES = [
+    _b("NOTES:", 237, 1485, 167, 40),
+    _b("1. MATERIAL: PER ANSI C135.1", 225, 1554, 800, 40),
+    _b("2. FINISH: HOT DIP GALVANIZED PER ASTM A-153", 222, 1600, 1200, 40),
+    _b("3. DIMENSION L PER PURCHASE ORDER SHALL BE MEASURED", 221, 1650, 1300, 40),
+    _b("OF THE HEAD TO THE LAST THREAD", 287, 1700, 885, 40),
+    # The title block beside them, starting above the last two notes.
+    _b("TOLERANCES", 1455, 1730, 178, 28),
+    _b("UNLESS SPECIFIED", 1411, 1760, 261, 30),
+    _b("DWG NO.", 1709, 1730, 69, 22),
+    _b("4. SPECIAL POINT SHALL BE MEASURED FROM", 218, 1750, 1000, 40),
+    _b("THE LAST THREAD TO THE END AND IS", 287, 1800, 957, 40),
+    _b("CONSIDERED A CRITICAL FEATURE.", 285, 1850, 835, 40),
+]
+
+
+def test_notes_beside_the_title_block_keep_every_point():
+    region, _ = OcrPipeline._detect_notes_block(BOTTOM_LEFT_NOTES)
+    assert region is not None
+    lines = region["text"].splitlines()
+    assert lines[-1] == "CONSIDERED A CRITICAL FEATURE."
+    assert any(line.startswith("4. SPECIAL POINT") for line in lines)
+    assert "TOLERANCES" not in region["text"]
+
+
+def test_a_comma_read_for_the_marker_dot_still_opens_a_point():
+    # A heavy scanned "3." is read as "3," often enough to lose a list.
+    boxes = [
+        _b("1, MATERIAL: PER ANSI C135.1", 60, 100, 500, 30),
+        _b("2, FINISH: HOT DIP GALVANIZED", 60, 140, 500, 30),
+    ]
+    assert OcrPipeline._detect_notes_block(boxes)[0] is not None
+    # A thousands figure is not a marker.
+    assert OcrPipeline._detect_notes_block([_b("1,326 [33.68]", 60, 100, 200, 30)] * 2)[0] is None
+
+
+def test_the_block_box_covers_a_wrapped_line_wider_than_its_markers():
+    region, _ = OcrPipeline._detect_notes_block(NOTES_ABOVE_TITLE_BLOCK[:6])
+    right = region["bbox"]["x"] + region["bbox"]["width"]
+    # "TENSILE MIN." runs to x=1138, past every numbered line.
+    assert right >= 1138
+
+
+# ── The whole notes pass, on detector boxes ───────────────────────────────
+
+from PIL import Image, ImageDraw  # noqa: E402
+
+
+def _notes_from(boxes, size=(1600, 1200), image=None):
+    """Run _notes_regions with the page detector replaced by fixed boxes."""
+    pipeline = OcrPipeline.__new__(OcrPipeline)
+    page = image or Image.new("RGB", size, "white")
+
+    def detect(img):
+        # The page gets the fixed boxes; crop re-reads find nothing, so the
+        # page reading is what is published.
+        return [dict(b) for b in boxes] if img.size == page.size else []
+
+    pipeline._detect_regions_ocr = detect
+    return pipeline._notes_regions(page)
+
+
+def test_a_single_note_in_the_bottom_left_corner_is_published():
+    # TS2: "NOTE:" over one numbered point, against the bottom border. The
+    # numbered-list detector needs two points, so it was never found.
+    regions = _notes_from(
+        [_b("NOTE:", 45, 1100, 90, 37, 1.0), _b("1. MATERIAL MUST BE FREE FROM CRACK.", 46, 1137, 632, 37, 1.0)]
+    )
+    assert [r["text"] for r in regions] == ["1. MATERIAL MUST BE FREE FROM CRACK."]
+    region = regions[0]
+    assert region["type"] == "General Note" and region["heading"] == "NOTE:"
+    assert region["bbox"]["x"] <= 46 and region["bbox"]["y"] + region["bbox"]["height"] >= 1170
+
+
+def test_an_unnumbered_note_is_published_as_one_region():
+    regions = _notes_from(
+        [
+            _b("THIS DRAWING IS CUSTOMIZED TO PROCURE FROM INDIA", 400, 600, 900, 40, 0.99),
+            _b("* MARKS ARE DIFFERENT FROM ORIGINAL DRAWING", 400, 646, 880, 40, 0.99),
+        ]
+    )
+    assert len(regions) == 1
+    assert regions[0]["text"].splitlines() == [
+        "THIS DRAWING IS CUSTOMIZED TO PROCURE FROM INDIA",
+        "* MARKS ARE DIFFERENT FROM ORIGINAL DRAWING",
+    ]
+    assert [line["text"] for line in regions[0]["lines"]] == regions[0]["text"].splitlines()
+
+
+def test_a_ruled_table_is_not_published_as_a_note():
+    image = Image.new("RGB", (1600, 1200), "white")
+    draw = ImageDraw.Draw(image)
+    for y in (295, 325, 355, 385):
+        draw.line([(80, y), (700, y)], fill="black", width=2)
+    for x in (80, 400, 700):
+        draw.line([(x, 295), (x, 385)], fill="black", width=2)
+    rows = []
+    for i, (label, value) in enumerate([("MODULE OF THE GEAR", "1.75"), ("NUMBER OF TEETH", "18"), ("PRESSURE ANGLE", "20")]):
+        rows += [_b(label, 100, 300 + 30 * i, 280, 22, 1.0), _b(value, 420, 300 + 30 * i, 60, 22, 1.0)]
+    assert _notes_from(rows, image=image) == []
+
+
+def test_vertical_text_is_read_upright_and_mapped_back_onto_the_page():
+    # A margin note printed up the left edge. The page pass reads it as tall
+    # scraps; the turned read must land back on the same ink.
+    image = Image.new("RGB", (800, 1000), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([30, 300, 50, 700], fill="black")  # the "text" column
+    scraps = [_b("oughess", 28, 300, 24, 120, 0.8), _b("imens", 28, 440, 24, 110, 0.8), _b("va", 28, 580, 24, 110, 0.8)]
+
+    pipeline = OcrPipeline.__new__(OcrPipeline)
+
+    def detect(img):
+        import numpy as np
+
+        ys, xs = np.nonzero(np.asarray(img.convert("L")) < 128)
+        if not len(xs):
+            return []
+        return [{"x": float(xs.min()), "y": float(ys.min()), "w": float(xs.max() - xs.min() + 1),
+                 "h": float(ys.max() - ys.min() + 1), "text": "DO NOT SCALE THE DRAWING", "conf": 0.99}]
+
+    pipeline._detect_regions_ocr = detect
+    turned, replaced = pipeline._rotated_text_boxes(image, scraps)
+    assert replaced == {0, 1, 2}
+    (box,) = turned
+    assert box["angle"] in (90.0, 270.0)
+    assert abs(box["x"] - 30) <= 2 and abs(box["y"] - 300) <= 2
+    assert abs(box["x"] + box["w"] - 51) <= 2 and abs(box["y"] + box["h"] - 701) <= 2

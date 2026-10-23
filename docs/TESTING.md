@@ -69,6 +69,36 @@ collapses is exactly what that report exists to catch. See
 `backend/.venv/bin/python` on macOS/Linux. It falls back to the system Python
 only when the repository virtual environment is absent.
 
+## Document accuracy benchmarks
+
+Three real drawings are scored end to end by `backend/scripts/run_benchmark.py`.
+Each fixture carries a `requires` floor measured from a real run, so a change
+that costs a callout fails rather than passing quietly.
+
+| Drawing | Matched | Mean | Type | Unexpected |
+|---|---|---|---|---|
+| 47630 | 18/18 | 99.3% | 16/18 | 1 |
+| 56103-0182B | 20/24 | 92.2% | 21/24 | 5 |
+| BS1801006.020 | 11/12 | 98.0% | 12/12 | 0 |
+
+Measured 2026-10-21 on CPU. The same three before that day's detection and
+normalisation work: 11/19 at 71.6%, 12/24 at 71.8% and 9/12 at 93.3%.
+
+```bash
+cd backend
+PYTHONPATH=. .venv/bin/python scripts/run_benchmark.py            # all three, minutes each
+PYTHONPATH=. .venv/bin/python scripts/run_benchmark.py 47630 --save-regions
+RUN_DOC_BENCHMARKS=1 .venv/bin/python -m pytest -q test_benchmark_documents.py
+```
+
+A saved run can be re-scored without OCR, which is how a scoring or fixture
+change is checked in seconds rather than minutes:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_benchmark.py 47630 \
+    --regions benchmarks/results/47630.regions.json
+```
+
 ## Automated regression boundaries
 
 The fast suite verifies:
@@ -91,6 +121,14 @@ The fast suite verifies:
 - Whole-page auto-ballooning bypasses the section cascade: every page is split
   into four to eight adaptive overlapping panels, with two bounded standalone
   detector calls (`0°` and `90°`) per panel.
+- Detection proposals are deduplicated so a covering text line survives a
+  fragment inside it, not the other way round.
+- Letter-for-digit repair fires only where the surrounding token reads as a
+  number, so thread classes, fit grades and tags keep their letters.
+- A section cluster whose fused read is not one complete value is re-segmented
+  before the value gates judge it.
+- A material-condition modifier that nothing contends is resolved by its
+  position in the tolerance compartment.
 - Repeated-cell grids produce hard-exclusion masks only when they touch or lie
   within 2% of the shorter page dimension from a page edge. Interior table-like
   drawing geometry remains unmasked. Section crops retain all selected pixels.

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { classifyDimension } from "@/lib/dimensionClassifier";
+import { ruleForValue, typeForVerdict } from "@/lib/labelRules";
 import type { Annotation } from "@/types/annotation";
 import { SPECIAL_SYMBOLS, deriveRange } from "@/lib/valueFields";
 
@@ -28,6 +29,7 @@ export function AnnotationPopup({
 
   const [value, setValue] = useState("");
   const [range, setRange] = useState("");
+  const [saving, setSaving] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -74,14 +76,23 @@ export function AnnotationPopup({
     setRange("");
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (saving) return;
     const cleanValue = value.trim();
+    // The labelling rules apply to a balloon however it was made. This used
+    // to save label "" for every manual balloon and every item accepted from
+    // the review queue, so a drawing's labels depended on how many of its
+    // values the scan was unsure about.
+    setSaving(true);
+    const rule = pending.ocrResult.rule;
+    const verdict = await ruleForValue(cleanValue, rule, rule?.text);
+    setSaving(false);
     const annotation: Annotation = {
       id: uuidv4(),
       number: getNextNumber(),
-      label: "",
+      label: verdict?.label ?? "",
       value: cleanValue,
-      type: classifyDimension(cleanValue),
+      type: typeForVerdict(verdict, classifyDimension(cleanValue)),
       confidence,
       // Preserve the exact manual selection or scan-review detector box.
       bbox: pending.bbox,
@@ -218,8 +229,8 @@ export function AnnotationPopup({
             </button>
             <button
               type="button"
-              onClick={handleSave}
-              disabled={!value.trim()}
+              onClick={() => void handleSave()}
+              disabled={!value.trim() || saving}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               OK

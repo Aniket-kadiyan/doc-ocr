@@ -5,9 +5,9 @@
   "match_threshold": 0.9,
   "partial_threshold": 0.6,
   "requires": {
-    "matched": 15,
-    "mean_percent": 78.0,
-    "type_correct": 17,
+    "matched": 19,
+    "mean_percent": 88.0,
+    "type_correct": 20,
     "max_unexpected": 6
   },
   "notes": [
@@ -15,7 +15,8 @@
     "All dimensions on this sheet are metric, and it carries significant-characteristic tags (SC-1..SC-4) that the app reports as values.",
     "Several listed entries are two readings of one callout: 2 and 3 are both 10.0 TO INT; 9 and 10 both cover the SC-3 / 10.3 deg TYP area; 21 and 22 both cover SC-2 / R1.4; 23 and 24 are both a 35 POS ON .. PCD note. Pairing is one-to-one, so a future join will satisfy one of each pair and not the other.",
     "Item 19 is typed radius here, not linear as recorded: the drawing carries R0.5 and the recorded 7R0.5- was a misread.",
-    "Baseline 2026-09-20: matched 15/24, partial 4, missed 5, mean 80.8%, type 18/24, ~132 s. Misses are item 3 (the second reading of 10.0 TO INT, which item 2 takes), item 9 (the SC-3 tag), item 15 (60.8 PCD), item 22 (the second R1.4 — only one of the two is detected) and item 24 (the 60.8 PCD note). Partials: R0.75 reads R075, R0.5 reads 1-0.5, and both SC tags run into the value beside them."
+    "Baseline 2026-09-20: matched 15/24, partial 4, missed 5, mean 80.8%, type 18/24, ~132 s. Misses are item 3 (the second reading of 10.0 TO INT, which item 2 takes), item 9 (the SC-3 tag), item 15 (60.8 PCD), item 22 (the second R1.4 — only one of the two is detected) and item 24 (the 60.8 PCD note). Partials: R0.75 reads R075, R0.5 reads 1-0.5, and both SC tags run into the value beside them.",
+    "2026-10-21 after the same work: matched 20/24, partial 1, missed 3, mean 92.2%, type 21/24, 5 unexpected, ~263 s. Was 12/24, 71.8%, 14/24. Remaining misses are items 3, 23 and 24 -- '10.0 TO INT' and the two '35 POS ON .. PCD' notes, which are instruction text wrapped over two lines rather than one callout."
   ],
   "expected": [
     {

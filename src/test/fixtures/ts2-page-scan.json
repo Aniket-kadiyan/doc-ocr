@@ -1,0 +1,493 @@
+{
+ "_source": "Whole-page scan of 'TS2 32224 CUP TURNING DRAWING.pdf' at 250 dpi, as /ocr/scan-jobs returns it (regions only).",
+ "page_width": 2923,
+ "page_height": 2067,
+ "regions": [
+  {
+   "bbox": {
+    "x": 2008.5,
+    "y": 84.9,
+    "width": 117.4,
+    "height": 60.3
+   },
+   "text": "50.30IOM",
+   "confidence": 0.9374706447124481,
+   "type": "linear",
+   "category": "Linear",
+   "subtype": null,
+   "label": "Linear Dimension",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 72.6,
+    "y": 139.6,
+    "width": 78.2,
+    "height": 72.9
+   },
+   "text": "R5.00",
+   "confidence": 0.9776817560195923,
+   "type": "radius",
+   "category": "Radius",
+   "subtype": null,
+   "label": "Radius",
+   "orientation": "horizontal",
+   "rotation": 41.0,
+   "needs_review": false,
+   "recognized": true,
+   "oriented_box": {
+    "x": 90.2,
+    "y": 139.6,
+    "width": 236.0,
+    "height": 79.0,
+    "rotation": 41.0
+   }
+  },
+  {
+   "bbox": {
+    "x": 292.7,
+    "y": 159.6,
+    "width": 145.1,
+    "height": 45.5
+   },
+   "text": "5.27±0.50",
+   "confidence": 0.999535858631134,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 438.8,
+    "y": 227.0,
+    "width": 109.1,
+    "height": 56.1
+   },
+   "text": "15°±3°",
+   "confidence": 0.9944669604301453,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1229.9,
+    "y": 239.0,
+    "width": 100.8,
+    "height": 48.9
+   },
+   "text": "12°±3°",
+   "confidence": 0.9852914810180664,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 846.3,
+    "y": 253.6,
+    "width": 159.1,
+    "height": 40.5
+   },
+   "text": "50.22±0.05",
+   "confidence": 0.9635427594184875,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1674.9,
+    "y": 344.9,
+    "width": 45.7,
+    "height": 148.7
+   },
+   "text": "2.25±0.20",
+   "confidence": 0.9533534646034241,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 67.1,
+    "y": 352.0,
+    "width": 40.2,
+    "height": 138.7
+   },
+   "text": "3.81±0.20",
+   "confidence": 0.9727431535720825,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1393.2,
+    "y": 377.3,
+    "width": 112.3,
+    "height": 56.1
+   },
+   "text": "30°±3°",
+   "confidence": 0.9965893626213074,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1893.1,
+    "y": 379.3,
+    "width": 44.7,
+    "height": 143.4
+   },
+   "text": "Ø174.22A",
+   "confidence": 0.7560996115207672,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 2159.2,
+    "y": 384.2,
+    "width": 43.7,
+    "height": 139.3
+   },
+   "text": "Ø203.39",
+   "confidence": 0.9689839482307434,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 2009.5,
+    "y": 385.5,
+    "width": 124.7,
+    "height": 46.8
+   },
+   "text": "132°20'40\"",
+   "confidence": 0.780093789100647,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1837.6,
+    "y": 658.8,
+    "width": 25.4,
+    "height": 43.1
+   },
+   "text": "12",
+   "confidence": 0.293698750436306,
+   "type": "linear",
+   "category": "Linear",
+   "subtype": null,
+   "label": "Linear Dimension",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1589.7,
+    "y": 707.3,
+    "width": 132.0,
+    "height": 80.1
+   },
+   "text": "45°",
+   "confidence": 0.9951607584953308,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 267.1,
+    "y": 838.9,
+    "width": 74.1,
+    "height": 77.3
+   },
+   "text": "R3.00",
+   "confidence": 0.9970772862434387,
+   "type": "radius",
+   "category": "Radius",
+   "subtype": null,
+   "label": "Radius",
+   "orientation": "vertical",
+   "rotation": -47.4,
+   "needs_review": false,
+   "recognized": true,
+   "oriented_box": {
+    "x": 267.1,
+    "y": 897.8,
+    "width": 151.3,
+    "height": 51.3,
+    "rotation": -47.4
+   }
+  },
+  {
+   "bbox": {
+    "x": 54.5,
+    "y": 853.1,
+    "width": 47.5,
+    "height": 147.8
+   },
+   "text": "2.02±0.15",
+   "confidence": 0.9892913103103638,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 814.1,
+    "y": 895.9,
+    "width": 46.8,
+    "height": 137.2
+   },
+   "text": "Ø175.32",
+   "confidence": 0.9999439716339111,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 639.4,
+    "y": 958.5,
+    "width": 42.4,
+    "height": 204.6
+   },
+   "text": "Ø174.07±0.05",
+   "confidence": 0.9923479557037354,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 509.2,
+    "y": 959.5,
+    "width": 48.6,
+    "height": 210.8
+   },
+   "text": "Ø215.37±0.05",
+   "confidence": 0.9887967705726624,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1186.3,
+    "y": 1049.7,
+    "width": 44.7,
+    "height": 146.6
+   },
+   "text": "Ø203.20",
+   "confidence": 0.9955708384513855,
+   "type": "diameter",
+   "category": "Diameter",
+   "subtype": null,
+   "label": "Diameter",
+   "orientation": "vertical",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 901.4,
+    "y": 1117.3,
+    "width": 165.3,
+    "height": 59.3
+   },
+   "text": "32°20'40\"",
+   "confidence": 0.9387416839599609,
+   "type": "angle",
+   "category": "Angle",
+   "subtype": null,
+   "label": "Angle",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 235.4,
+    "y": 1155.8,
+    "width": 141.6,
+    "height": 44.4
+   },
+   "text": "2.16±0.15",
+   "confidence": 0.9929195046424866,
+   "type": "tolerance",
+   "category": "Tolerance",
+   "subtype": null,
+   "label": "Toleranced Dimension",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1096.9,
+    "y": 1827.9,
+    "width": 173.6,
+    "height": 86.3
+   },
+   "text": "2",
+   "confidence": 0.827673077583313,
+   "type": "linear",
+   "category": "Linear",
+   "subtype": null,
+   "label": "Linear Dimension",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false,
+   "recognized": true
+  },
+  {
+   "bbox": {
+    "x": 1586.7,
+    "y": 117.5,
+    "width": 87.7,
+    "height": 87.7
+   },
+   "text": "R1,50",
+   "confidence": 0.9873191118240356,
+   "type": "radius",
+   "category": "Radius",
+   "subtype": null,
+   "label": "Radius",
+   "orientation": "horizontal",
+   "rotation": -45.0,
+   "needs_review": false,
+   "oriented_box": {
+    "x": 1586.7,
+    "y": 175.5,
+    "width": 162.0,
+    "height": 83.3,
+    "rotation": -45.0
+   }
+  },
+  {
+   "bbox": {
+    "x": 46.0,
+    "y": 1877.0,
+    "width": 632.0,
+    "height": 37.0
+   },
+   "text": "1. MATERIAL MUST BE FREE FROM CRACK.",
+   "confidence": 0.9995,
+   "type": "General Note",
+   "category": "General Note",
+   "subtype": null,
+   "label": "General Notes",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false
+  },
+  {
+   "bbox": {
+    "x": 0.0,
+    "y": 1949.3,
+    "width": 469.7,
+    "height": 108.7
+   },
+   "text": "ALL DIMENSIONS ARE IN M.M.\nDO NOT SCALE DRAW ING\nElectronic Valid Copy rintel",
+   "confidence": 0.9963,
+   "type": "General Note",
+   "category": "General Note",
+   "subtype": null,
+   "label": "General Notes",
+   "orientation": "horizontal",
+   "rotation": 0,
+   "needs_review": false
+  }
+ ]
+}

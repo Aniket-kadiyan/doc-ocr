@@ -2,6 +2,7 @@ import type { Annotation } from "@/types/annotation";
 import type { ScanCandidate } from "@/types/scanCandidate";
 import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
+import { titleFieldFor } from "@/lib/labelRules";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
 import {
   normalizeDocumentMetadata,
@@ -255,12 +256,12 @@ function titleFieldRows(annotations: Annotation[], width: number): string[][] {
   const keywords = getTitleKeywords();
   if (keywords.length === 0) return [];
 
-  const found = annotations.filter((a) => a.type === "Title Block");
-  const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
-
   const blank = () => Array<string>(width).fill("");
   const rows = keywords.map((keyword) => {
-    const match = found.find((a) => norm(a.label).startsWith(norm(keyword)));
+    // Matched by the keyword the field was read for, not by re-matching its
+    // read label: "DWG NO." never matched a field read as "DWG: 47630", so
+    // the export showed it blank while the drawing had it.
+    const match = titleFieldFor(annotations, keyword);
     const row = blank();
     row[1] = match ? oneLine(match.label) : keyword; // Label column
     row[2] = match ? oneLine(match.value) : ""; // Value column

@@ -65,7 +65,10 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-review-candidate-persistence"
+OCR_CHANGESET_ID = "mvp2-chitra-detection-notes-queued-pdf"
+#: A section-scan value read below this confidence is excluded rather than
+#: ballooned. See the gate in ``segment`` for the measurement behind it.
+SECTION_MIN_CONFIDENCE = 0.6
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -169,7 +172,10 @@ def assemble_paddle_lines(
 # followed by a letter, so a decimal callout (".12R", "1.5") can never match.
 # The "." or ")" separator is REQUIRED here. Simply making it optional was
 # tried and is a regression: it turns ordinary lines into false markers.
-_NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]\s*[A-Za-z]")
+# A comma counts as the separator: a scanned "3." with a heavy dot is read as
+# "3," often enough that LP58 lost its whole list over it. It still needs
+# the letter after it, so a thousands figure ("1,326") never matches.
+_NOTE_POINT_RE = re.compile(r"^\s*(\d{1,2})\s*[.,)]\s*[A-Za-z]")
 
 # Plenty of drawing offices number their notes with no separator at all —
 # "1 UNSPECIFIED BENDING RADIUS OF PIPE IS". Admitting that shape needs a
@@ -182,7 +188,7 @@ _NOTE_POINT_PROSE_RE = re.compile(r"^\s*(\d{1,2})\s+[^\W\d_]{3,}\s+\S")
 # A marker recognised as its own box, with the note's text in a separate box
 # beside it. Wide-set CJK note blocks come back this way, the detector having
 # nothing to bridge the gap between the number and the first character.
-_NOTE_MARKER_ONLY_RE = re.compile(r"^\s*(\d{1,2})\s*[.)]?\s*$")
+_NOTE_MARKER_ONLY_RE = re.compile(r"^\s*(\d{1,2})\s*[.,)]?\s*$")
 
 # How many climbing markers each shape has to produce before the block is
 # believed. The punctuated shape is distinctive enough on its own; the two
@@ -206,6 +212,49 @@ _NotePoint = tuple[int, dict[str, Any], int, dict[str, Any]]
 # The block's own heading. PaddleOCR reads the CAD "O" as a zero often enough
 # on these sheets that both spellings are accepted.
 _NOTES_HEADING_RE = re.compile(r"^\s*N[O0]TES?\s*[:.\-]?\s*$", re.I)
+
+# Note re-reads are taken with a line about this many pixels tall: two sizes,
+# because sheets differ in which one the recogniser reads best.
+NOTE_REREAD_LINE_PX = (28.0, 40.0)
+
+# A detection box below this confidence is too unsure to steer how lines and
+# paragraphs are grouped; it would bridge two notes or split one.
+NOTE_MIN_FRAGMENT_CONFIDENCE = 0.5
+
+# Vertical text: boxes at least this many times taller than wide, in clusters
+# of at least this many, are re-read turned. The turned read must beat the
+# upright scraps by this factor to replace them.
+ROTATED_TEXT_MIN_ASPECT = 1.8
+ROTATED_TEXT_REACH = 3.0
+
+# A wide detection box whose text is this sparse for its width (characters per
+# box-height of width) is a misread: "THNDIA" across a 1209px line. Real text
+# runs at 1.5 to 2.
+GARBLED_TEXT_DENSITY = 0.6
+GARBLED_MIN_CONFIDENCE = 0.75
+# Targeted re-reads per page, so a sheet of garbage cannot cost minutes.
+NOTE_BOX_REPAIR_LIMIT = 24
+ROTATED_TEXT_MIN_BOXES = 3
+ROTATED_TEXT_GAIN = 1.5
+
+
+def strip_note_debris(text: str) -> str:
+    """
+    A detection box's text with the recogniser's stray foreign glyphs removed.
+
+    Only from text that is otherwise Latin: the recogniser emits a CJK glyph
+    for a stroke it cannot resolve, but a Japanese note block is CJK
+    throughout, and stripping it the way a dimension read is stripped
+    (``strip_foreign_glyphs``) would erase the whole note.
+    """
+    from segment_quality import strip_foreign_glyphs
+
+    text = (text or "").strip()
+    letters = [c for c in text if c.isalpha()]
+    foreign = sum(1 for c in letters if ord(c) >= 0x2E80)
+    if letters and foreign < 0.3 * len(letters):
+        return strip_foreign_glyphs(text).strip()
+    return text
 
 # Words that belong to the title block or the revision table, never to the prose
 # of a general note. On a real sheet the title block starts TEN PIXELS under the
@@ -1833,9 +1882,35 @@ class OcrPipeline:
         filter drop the phantom (cropping its wrong location reads nothing) while
         keeping the real box. Only boxes at the *same* location are deduped, so a
         value detected twice in the same place isn't proposed twice.
+
+        Overlap is measured against the SMALLER of the two boxes, so a fragment
+        sitting inside a line counts as a duplicate of that line. Which of the
+        two survives is therefore decided by the visiting order, and that order
+        has to put the box that covers the location first. It did not: the
+        morphology proposals were visited before the detector's, and the
+        detector's own boxes in whatever order the model emitted them, so a
+        55x38 morphology fragment over the "48" of ``Ø0.148 [3.76] REF.``
+        displaced the 402x62 detector line around the whole callout, and a
+        12x12 speck displaced the line over ``0.20 [5.08]``. Measured on a real
+        sheet that cost every small-text callout on it: six of nineteen values
+        reached recognition as a bare "4.99", "33", "08" or "48".
+
+        So the order is: the ink-fill the quick path scores, then learned
+        detector boxes before morphology blobs (the detector was handed the
+        page to find text lines; morphology is the backstop for what it
+        missed), then larger before smaller. A fragment inside a kept line is
+        then the one dropped, and nothing that only the smaller box covered is
+        lost, because the kept box covers it too.
         """
-        ordered = sorted(boxes, key=lambda b: b.get(
-            "_fill", 1.0), reverse=True)
+        ordered = sorted(
+            boxes,
+            key=lambda b: (
+                b.get("_fill", 1.0),
+                1 if float(b.get("conf", 0.0) or 0.0) > 0.0 else 0,
+                b["w"] * b["h"],
+            ),
+            reverse=True,
+        )
         kept: list[dict[str, Any]] = []
         for b in ordered:
             barea = max(b["w"] * b["h"], 1.0)
@@ -2360,113 +2435,363 @@ class OcrPipeline:
                 lines.append(" ".join(parts))
         return lines
 
-    def _reread_notes_block(
+    def _reread_note_block(
         self,
         image: Image.Image,
         bounds: tuple[float, float, float, float],
         line_h: float,
-    ) -> list[str]:
+        *,
+        reach_up: float,
+        ink: Any | None = None,
+    ) -> list[tuple[str, list[Any]]]:
         """
-        Re-read the notes paragraph from an enlarged crop.
+        Re-read one notes paragraph from its own crop, at two text sizes.
 
-        A drawing is rendered for the viewer, not for OCR (the client uses a
-        1.5× page scale), and at that size the detector loses whole note lines —
-        on a real sheet it missed note 1 and the "NOTES" heading entirely. The
-        block is small, so re-reading just that rectangle enlarged recovers them
-        at negligible cost.
+        The page pass reads every line in the context of the whole sheet, and
+        on some sheets that is poor: LP58's notes came back as "OFTTEAD" and
+        "SPOLLEOM" from the page, and read perfectly from their own crop. The
+        best size differs by sheet too — 47630's small notes need enlarging,
+        LP58's large ones read best SHRUNK to half size — so the crop is read
+        with a line about 28px and about 40px tall, and the caller keeps
+        whichever reading it believes most (``note_blocks.reading_quality``).
+        The old re-read only ever enlarged, so it could not fix the second
+        kind at all.
 
-        The crop reaches well above the detected top on purpose: the block's top
-        is only as high as the FIRST marker that was read, and the lines above it
-        are exactly the ones that were missed. Anything picked up above the
-        paragraph is discarded afterwards by trimming to the first marker.
+        The crop reaches above the block by ``reach_up``: a numbered block's
+        top is only as high as the first marker that was read, and the lines
+        above it are exactly the ones that were missed. Only lines that
+        belong to a paragraph with a line inside ``bounds`` are kept, so
+        whatever else the crop picked up above or beside it is dropped.
 
-        Returns [] when the re-read finds nothing better, so the caller keeps the
-        text it already had.
+        Returns ``(label, lines)`` per size that read anything, in page
+        pixels. A failed re-read returns nothing, never raises: the notes
+        already in hand must not be lost to it.
+
+        NOTE: the section route's is_segment_worthy / has_dimension_value
+        gates were tried on a re-read twice and measurably hurt both times
+        (56103-0182B 16/24 -> 11/24, BS1801006.020 9/12 -> 7/12). Notes are
+        prose; the value grammar does not belong on them.
         """
+        from note_blocks import Fragment, build_blocks, build_lines
+
         x0, y0, x1, y1 = bounds
-        height = max(y1 - y0, 1.0)
         pad_x = max(0.05 * (x1 - x0), 4.0)
-        # Reach up by most of the block's own height, and a little below.
         crop_box = (
             max(0, int(x0 - pad_x)),
-            max(0, int(y0 - 0.7 * height)),
+            max(0, int(y0 - reach_up)),
             min(image.width, int(x1 + pad_x)),
-            min(image.height, int(y1 + 0.15 * height)),
+            min(image.height, int(y1 + 0.6 * max(line_h, 1.0))),
         )
         if crop_box[2] - crop_box[0] < 8 or crop_box[3] - crop_box[1] < 8:
             return []
-
         crop = image.crop(crop_box)
-        # Enlarge until a line is around 36px tall, which is where the
-        # recogniser reads this text reliably. Capped to stay inside the
-        # detector's 4000px side limit.
-        factor = 3.0 if line_h <= 0 else max(1.0, min(4.0, 36.0 / line_h))
-        limit = 4000 / max(crop.width, crop.height, 1)
-        factor = min(factor, max(limit, 1.0))
-        if factor > 1.01:
-            crop = crop.resize(
-                (int(crop.width * factor), int(crop.height * factor)),
-                Image.LANCZOS,
+        basis = line_h if line_h > 0 else 30.0
+
+        readings: list[tuple[str, list[Any]]] = []
+        for target in NOTE_REREAD_LINE_PX:
+            factor = max(0.4, min(4.0, target / basis))
+            factor = min(factor, 4000 / max(crop.width, crop.height, 1))
+            scaled = (
+                crop.resize(
+                    (max(1, int(crop.width * factor)), max(1, int(crop.height * factor))),
+                    Image.LANCZOS,
+                )
+                if abs(factor - 1.0) > 0.01
+                else crop
+            )
+            try:
+                found = self._detect_regions_ocr(scaled.convert("RGB"))
+            except Exception:
+                continue
+            fragments = [
+                Fragment(
+                    text=strip_note_debris(str(b.get("text") or "")),
+                    x=crop_box[0] + float(b["x"]) / factor,
+                    y=crop_box[1] + float(b["y"]) / factor,
+                    w=float(b["w"]) / factor,
+                    h=float(b["h"]) / factor,
+                    source="ocr",
+                    confidence=float(b.get("conf") or 0.0),
+                )
+                for b in found
+                if float(b.get("conf") or 0.0) >= NOTE_MIN_FRAGMENT_CONFIDENCE
+            ]
+            fragments = [f for f in fragments if f.text]
+            # A reading that runs one box across a table's vertical rule has
+            # fused two cells, which the page reading already took apart; it
+            # is not a better reading of the note, whatever its score.
+            if ink is not None and any(
+                self._interior_rules(ink, f.x, f.y, f.w, f.h)
+                for f in fragments
+                if f.w >= 3.0 * f.h
+            ):
+                continue
+            kept: list[Any] = []
+            for block in build_blocks(build_lines(fragments, ink), ink):
+                lines = block.all_lines
+                inside = any(
+                    x0 <= line.centre <= x1 and y0 <= line.ly + line.lh / 2 <= y1
+                    for line in lines
+                )
+                if not inside:
+                    continue
+                kept.extend(
+                    line
+                    for line in block.lines
+                    if line.ly + line.lh / 2 >= y0 - reach_up
+                    and line.ly + line.lh / 2 <= y1 + 0.6 * basis
+                    # Single-glyph debris between real lines ("E", "RS");
+                    # a point marker is kept whatever follows it.
+                    and (
+                        _NOTE_POINT_RE.match(line.text)
+                        or sum(c.isalpha() for c in line.text) >= 4
+                    )
+                )
+            if kept:
+                kept.sort(key=lambda line: (line.ly, line.lx))
+                readings.append((f"reread@{factor:.2f}", kept))
+        return readings
+
+    def _repair_note_boxes(
+        self,
+        image: Image.Image,
+        boxes: list[dict[str, Any]],
+        ink: Any,
+    ) -> list[dict[str, Any]]:
+        """
+        Re-read the line boxes the page pass got wrong, from their own crops.
+
+        Two kinds, both measured on real sheets. A box that runs across a
+        table's vertical rule holds two cells' text fused into one ("ALL
+        DIMENSIONS ARE IN M.M.DIMENSIONAL TOLERANCES UNLESS"): it is cut at
+        the rule and each side read alone. A wide box whose text is far too
+        short for its width is a misread ("THNDIA" for a 1209px line of
+        REMARKS): it is read again. A re-read replaces the box only when it
+        is believed more (``note_blocks.reading_quality`` on the same scale).
+        """
+        out: list[dict[str, Any]] = []
+        budget = NOTE_BOX_REPAIR_LIMIT
+        for box in boxes:
+            x, y, w, h = (float(box[k]) for k in ("x", "y", "w", "h"))
+            text = str(box.get("text") or "").strip()
+            conf = float(box.get("conf") or 0.0)
+            if budget <= 0 or w < 3.0 * h or h < 8:
+                out.append(box)
+                continue
+            cuts = self._interior_rules(ink, x, y, w, h)
+            density = len(text) / max(w / h, 1.0)
+            garbled = density < GARBLED_TEXT_DENSITY or conf < GARBLED_MIN_CONFIDENCE
+            if not cuts and not garbled:
+                out.append(box)
+                continue
+            edges = [x] + cuts + [x + w]
+            replacement: list[dict[str, Any]] = []
+            for left, right in zip(edges, edges[1:]):
+                if right - left < 0.8 * h:
+                    continue
+                budget -= 1
+                replacement.extend(self._reread_box(image, left, y, right - left, h))
+            def believed(items: list[dict[str, Any]]) -> float:
+                return sum(
+                    sum(c.isalpha() for c in str(b.get("text") or ""))
+                    * float(b.get("conf") or 0.0) ** 2
+                    for b in items
+                )
+            # Cut at a rule, the two cells are kept apart even when the
+            # re-read is no better: the fused text is wrong either way.
+            if replacement and (cuts or believed(replacement) > believed([box])):
+                out.extend(replacement)
+            else:
+                out.append(box)
+        return out
+
+    @staticmethod
+    def _interior_rules(ink: Any, x: float, y: float, w: float, h: float) -> list[float]:
+        """x positions of vertical rules crossing a box's interior."""
+        pad = 0.15 * h
+        cuts: list[float] = []
+        column = x + 0.08 * w
+        step = max(1.0, 0.1 * h)
+        while column < x + 0.92 * w:
+            if ink.vertical_rule(column, column + step, y - pad, y + h + pad):
+                if not cuts or column - cuts[-1] > h:
+                    cuts.append(column + step / 2)
+            column += step
+        return cuts
+
+    def _reread_box(
+        self, image: Image.Image, x: float, y: float, w: float, h: float
+    ) -> list[dict[str, Any]]:
+        """Read one line box from its own crop, at the better of two sizes."""
+        pad = 0.25 * h
+        crop_box = (
+            max(0, int(x - pad)),
+            max(0, int(y - pad)),
+            min(image.width, int(x + w + pad)),
+            min(image.height, int(y + h + pad)),
+        )
+        if crop_box[2] - crop_box[0] < 8 or crop_box[3] - crop_box[1] < 8:
+            return []
+        crop = image.crop(crop_box)
+        best: tuple[float, list[dict[str, Any]]] | None = None
+        for target in NOTE_REREAD_LINE_PX:
+            factor = max(0.4, min(4.0, target / max(h, 1.0)))
+            factor = min(factor, 4000 / max(crop.width, crop.height, 1))
+            scaled = (
+                crop.resize(
+                    (max(1, int(crop.width * factor)), max(1, int(crop.height * factor))),
+                    Image.LANCZOS,
+                )
+                if abs(factor - 1.0) > 0.01
+                else crop
+            )
+            try:
+                found = self._detect_regions_ocr(scaled.convert("RGB"))
+            except Exception:
+                continue
+            mapped = [
+                {
+                    "x": round(crop_box[0] + float(b["x"]) / factor, 1),
+                    "y": round(crop_box[1] + float(b["y"]) / factor, 1),
+                    "w": round(float(b["w"]) / factor, 1),
+                    "h": round(float(b["h"]) / factor, 1),
+                    "text": b.get("text", ""),
+                    "conf": float(b.get("conf") or 0.0),
+                }
+                for b in found
+            ]
+            # Only the line that was asked about: the crop's padding catches
+            # slivers of the lines above and below ("117", "or", "J").
+            mapped = [
+                b for b in mapped if y <= b["y"] + b["h"] / 2 <= y + h and b["h"] >= 0.5 * h
+            ]
+            score = sum(
+                sum(c.isalpha() for c in str(b["text"])) * b["conf"] ** 2 for b in mapped
+            )
+            if mapped and (best is None or score > best[0]):
+                best = (score, mapped)
+        return best[1] if best else []
+
+    def _rotated_text_boxes(
+        self,
+        image: Image.Image,
+        boxes: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], set[int]]:
+        """
+        Read vertical text upright: margin notes, side columns, labels on end.
+
+        The page pass reads upright text only. Text set on end comes back as
+        a column of tall boxes each holding a scrap of a word ("oughess",
+        "imens"), and a sheet's "Do not scale / Remove burrs…" note printed
+        up its left edge was lost that way. Tall boxes are clustered, each
+        cluster's area is read turned both ways, and the turn that reads
+        better is kept — only if it beats the scraps by a clear margin.
+
+        Returns ``(boxes, replaced)``: the new boxes in page pixels, each
+        carrying the ``angle`` its text runs at, and the indices of the tall
+        boxes they replace.
+        """
+        tall = [
+            i
+            for i, b in enumerate(boxes)
+            if float(b["h"]) >= ROTATED_TEXT_MIN_ASPECT * float(b["w"])
+            and float(b["h"]) >= 20.0
+        ]
+        if len(tall) < ROTATED_TEXT_MIN_BOXES:
+            return [], set()
+        widths = sorted(float(boxes[i]["w"]) for i in tall)
+        # Generous: the scraps of one vertical paragraph sit a line pitch
+        # apart across and a word gap apart along, and a cluster cut in two
+        # is read as two garbled halves. The whole cluster is re-read and
+        # regrouped, so taking in too much costs nothing but pixels.
+        reach = ROTATED_TEXT_REACH * widths[len(widths) // 2]
+
+        # Union-find over tall boxes that touch once grown by ``reach``.
+        parent = {i: i for i in tall}
+
+        def root(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for a_index, a in enumerate(tall):
+            ba = boxes[a]
+            for b in tall[a_index + 1:]:
+                bb = boxes[b]
+                if (
+                    ba["x"] - reach <= bb["x"] + bb["w"]
+                    and bb["x"] - reach <= ba["x"] + ba["w"]
+                    and ba["y"] - reach <= bb["y"] + bb["h"]
+                    and bb["y"] - reach <= ba["y"] + ba["h"]
+                ):
+                    parent[root(a)] = root(b)
+        clusters: dict[int, list[int]] = {}
+        for i in tall:
+            clusters.setdefault(root(i), []).append(i)
+
+        def quality(items: Iterable[tuple[str, float]]) -> float:
+            return sum(
+                sum(c.isalpha() for c in text) * conf * conf for text, conf in items
             )
 
-        try:
-            boxes = self.detect_regions(crop.convert("RGB"))
-        except Exception:
-            # A failed re-read must never lose the notes already in hand.
-            return []
-        if not boxes:
-            return []
-
-        scaled_line_h = line_h * factor if line_h > 0 else 0.0
-        if scaled_line_h <= 0:
-            heights = sorted(b["h"] for b in boxes)
-            scaled_line_h = heights[len(heights) // 2]
-
-        lines = OcrPipeline._lines_from_boxes(boxes, scaled_line_h)
-
-        # Trim to the paragraph: drop everything above its heading, or above the
-        # first numbered point when no heading was read.
-        start = next(
-            (i for i, ln in enumerate(lines) if _NOTES_HEADING_RE.match(ln)), None
-        )
-        if start is None:
-            start = next(
-                (i for i, ln in enumerate(lines) if _NOTE_POINT_RE.match(ln)), None
+        out: list[dict[str, Any]] = []
+        replaced: set[int] = set()
+        for members in clusters.values():
+            if len(members) < ROTATED_TEXT_MIN_BOXES:
+                continue
+            left = max(0, int(min(boxes[i]["x"] for i in members) - reach))
+            top = max(0, int(min(boxes[i]["y"] for i in members) - reach))
+            right = min(image.width, int(max(boxes[i]["x"] + boxes[i]["w"] for i in members) + reach))
+            bottom = min(image.height, int(max(boxes[i]["y"] + boxes[i]["h"] for i in members) + reach))
+            if right - left < 8 or bottom - top < 8:
+                continue
+            crop = image.crop((left, top, right, bottom))
+            width, height = crop.size
+            upright = quality(
+                (str(boxes[i].get("text") or ""), float(boxes[i].get("conf") or 0.0))
+                for i in members
             )
-        if start is None:
-            return []
-        lines = lines[start:]
-
-        # The sheet writes its own NOTES row, and a low-res re-read leaves
-        # single-glyph debris between the real lines ("E", "RS", a stray CJK
-        # character the recogniser emits for a stroke it cannot resolve). A
-        # line of a paragraph always carries several letters; a point marker is
-        # kept whatever follows it.
-        # NOTE: the section route's is_segment_worthy / has_dimension_value
-        # gates were tried here twice and measurably hurt both times, before
-        # and after the review-policy fix (56103-0182B 16/24 -> 11/24,
-        # BS1801006.020 9/12 -> 7/12). The page route has its own value
-        # grammar in page_value_filters; these two do not belong on top of it.
-        from segment_quality import (
-            count_dimension_values,
-            dedupe_regions,
-            strip_foreign_glyphs,
-        )
-
-        cleaned: list[str] = []
-        for line in lines:
-            line = strip_foreign_glyphs(line).strip()
-            if not line or _NOTES_HEADING_RE.match(line):
+            best: tuple[float, int, list[dict[str, Any]]] | None = None
+            # PIL turns counter-clockwise; text angles are clockwise, as
+            # pdfium reports them. Turning 270 levels text that runs up the
+            # page (angle 270), turning 90 levels text running down (90).
+            for turn in (270, 90):
+                try:
+                    found = self._detect_regions_ocr(crop.rotate(turn, expand=True))
+                except Exception:
+                    continue
+                score = quality(
+                    (str(b.get("text") or ""), float(b.get("conf") or 0.0)) for b in found
+                )
+                if best is None or score > best[0]:
+                    best = (score, turn, found)
+            if best is None or best[0] < ROTATED_TEXT_GAIN * upright:
                 continue
-            if not _NOTE_POINT_RE.match(line) and sum(
-                c.isalpha() for c in line
-            ) < 4:
-                continue
-            cleaned.append(line)
-
-        markers = [ln for ln in cleaned if _NOTE_POINT_RE.match(ln)]
-        # Only accept the re-read when it actually resolved a list.
-        return cleaned if len(markers) >= 2 else []
+            _, turn, found = best
+            for b in found:
+                bx, by, bw, bh = (float(b[k]) for k in ("x", "y", "w", "h"))
+                if turn == 270:
+                    px0, px1 = by, by + bh
+                    py0, py1 = height - (bx + bw), height - bx
+                    angle = 270.0
+                else:
+                    px0, px1 = width - (by + bh), width - by
+                    py0, py1 = bx, bx + bw
+                    angle = 90.0
+                out.append(
+                    {
+                        "x": round(left + px0, 1),
+                        "y": round(top + py0, 1),
+                        "w": round(px1 - px0, 1),
+                        "h": round(py1 - py0, 1),
+                        "text": b.get("text", ""),
+                        "conf": float(b.get("conf") or 0.0),
+                        "angle": angle,
+                    }
+                )
+            replaced.update(members)
+        return out, replaced
 
     @staticmethod
     def _note_marker_points(
@@ -2677,9 +3002,18 @@ class OcrPipeline:
 
         # The paragraph can never continue past the top of the title block, so
         # the first title-block word below the notes becomes the hard floor.
+        # Only a word under the notes' own column counts: a sheet that puts
+        # its notes in the bottom-left corner has the title block BESIDE
+        # them, and its cells capped the block at the height of the first
+        # one, cutting off every note printed lower down.
         for b in boxes:
-            if b["y"] >= bottom and _TITLE_BLOCK_WORDS_RE.search(
-                (b.get("text") or "")
+            beside = (
+                b["x"] >= span_right + line_h or b["x"] + b["w"] <= span_left - line_h
+            )
+            if (
+                not beside
+                and b["y"] >= bottom
+                and _TITLE_BLOCK_WORDS_RE.search((b.get("text") or ""))
             ):
                 floor = min(floor, b["y"])
 
@@ -2721,6 +3055,11 @@ class OcrPipeline:
             return None
 
         confs = [float(b.get("conf") or 0.0) for b in members]
+        # The box encloses every line the block took, not only the markers:
+        # a wrapped line routinely runs past the widest numbered one, and a
+        # box cut short there leaves its tail to be ballooned on its own.
+        left = min(left, min(float(b["x"]) for b in members))
+        right = max(right, max(float(b["x"]) + float(b["w"]) for b in members))
         region = {
             "bbox": {
                 "x": round(left, 1),
@@ -2769,6 +3108,10 @@ class OcrPipeline:
         return {
             "bbox": bbox,
             "text": text,
+            # What the recogniser actually returned, before any repair,
+            # symbol injection or normalisation. ``text`` is the normalised
+            # value; this is the audit trail for it.
+            "raw_text": str(res.get("raw_ocr") or ""),
             "confidence": res.get("confidence", 0.0),
             "type": res.get("type"),
             "category": res.get("category"),
@@ -2813,6 +3156,10 @@ class OcrPipeline:
         return {
             "bbox": bbox,
             "text": text,
+            # What the recogniser actually returned, before any repair,
+            # symbol injection or normalisation. ``text`` is the normalised
+            # value; this is the audit trail for it.
+            "raw_text": str(res.get("raw_ocr") or ""),
             "confidence": res.get("confidence", 0.0),
             "type": res.get("type"),
             "category": res.get("category"),
@@ -2890,6 +3237,7 @@ class OcrPipeline:
         *,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
+        min_values: int = 2,
     ) -> list[dict[str, Any]] | None:
         """
         Re-segment one cluster that read back as multiple stacked values.
@@ -2898,7 +3246,11 @@ class OcrPipeline:
         the stacked callouts separate, then runs the full `recognize` pipeline
         per row (so each gets its own dual-unit repair and balloon box). Returns
         the per-row regions, or ``None`` when the crop doesn't actually split
-        into 2+ worthy values (leaving the original single region untouched).
+        into at least ``min_values`` worthy values (leaving the original single
+        region untouched). The default of two is for a cluster whose fused read
+        was itself a value; a caller that already knows the fused read is NOT
+        one value passes one, because peeling a single callout out of the
+        label it was glued to is the whole point of splitting it.
         """
         from region_cluster import (
             cluster_boxes,
@@ -2964,7 +3316,7 @@ class OcrPipeline:
             }
             out.append(self._region_from_result(res, bbox, t))
 
-        return out if len(out) >= 2 else None
+        return out if len(out) >= max(1, min_values) else None
 
     @staticmethod
     def _oriented_box_from_rot(
@@ -3904,36 +4256,6 @@ class OcrPipeline:
             return 0.0
         return float(shorts[len(shorts) // 2])
 
-    def _notes_region(
-        self,
-        image: Image.Image,
-        *,
-        debug_dump: bool = False,
-        debug_dump_force: bool = False,
-    ) -> dict[str, Any] | None:
-        """
-        Detect the NOTES paragraph and read it as one region.
-
-        Deliberately runs its own recognition pass: detect_regions on this
-        pipeline is DETECTOR-ONLY and returns geometry with empty text, so the
-        numbered-point markers this looks for are simply not there. With
-        recognised boxes the same detector reads all five notes on a real
-        sheet; without them it finds nothing and the note lines leak into
-        neighbouring dimension clusters, which is how a balloon came out as
-        "AN.2WTOOPING.".
-        """
-        regions = self._notes_regions(
-            image,
-            debug_dump=debug_dump,
-            debug_dump_force=debug_dump_force,
-        )
-        if not regions:
-            return None
-        return max(
-            regions,
-            key=lambda region: region["bbox"]["width"] * region["bbox"]["height"],
-        )
-
     def _frame_regions(self, image: Image.Image) -> list[dict[str, Any]]:
         """Every feature control frame on the page, as scan regions.
 
@@ -3970,7 +4292,7 @@ class OcrPipeline:
         debug_dump: bool = False,
         debug_dump_force: bool = False,
     ) -> list[dict[str, Any]]:
-        """Every NOTES paragraph on the sheet, each read as one region.
+        """Every note on the sheet, each read as one region.
 
         The dedicated recognition pass is not redundant with the page scan's
         own, and reusing the scan's candidates here was tried and reverted:
@@ -3979,22 +4301,255 @@ class OcrPipeline:
         and a row of them across the drawing reads as a numbered list. One
         sheet produced a single bogus "note" 1730 pixels wide that way. This
         detector needs boxes that are whole lines.
+
+        Two detectors share the boxes. Numbered lists go first, through
+        ``_detect_notes_blocks`` and its title-block rules. Everything they
+        leave goes to ``note_blocks``, which rebuilds paragraphs from
+        geometry alone: an unnumbered note ("UNLESS OTHERWISE SPECIFIED…"),
+        a single numbered point ("NOTE: 1. MATERIAL MUST BE FREE FROM
+        CRACK."), or a list whose first markers were misread all used to be
+        lost, because only a list of two or more climbing markers was ever
+        looked for. Vertical text is read upright first.
         """
+        from note_blocks import (
+            Fragment,
+            InkMap,
+            TextBlock,
+            block_lines_payload,
+            build_lines,
+            normalized_note_text,
+            note_blocks,
+            reading_quality,
+        )
 
         try:
             boxes = self._detect_regions_ocr(image)
         except Exception:
             return []
+        # Where the sheet is ruled: table rows and cells must not be read as
+        # the lines of a paragraph.
+        ink = InkMap(image)
+        try:
+            boxes = self._repair_note_boxes(image, boxes, ink)
+        except Exception:  # noqa: BLE001 - the page pass is still usable
+            logger.exception("note box repair failed; notes continue")
+
+        def to_fragment(b: dict[str, Any]) -> Fragment:
+            return Fragment(
+                text=strip_note_debris(str(b.get("text") or "")),
+                x=float(b["x"]),
+                y=float(b["y"]),
+                w=float(b["w"]),
+                h=float(b["h"]),
+                angle=float(b.get("angle") or 0.0),
+                source="ocr",
+                confidence=float(b.get("conf") or 0.0),
+            )
+
+        def finish(
+            region: dict[str, Any],
+            lines: list[Any],
+            bounds: tuple[float, float, float, float],
+            line_h: float,
+            reach_up: float,
+            upright: bool,
+        ) -> dict[str, Any]:
+            """Pick the best reading, then fill in text, box and provenance."""
+            candidates: list[tuple[str, list[Any]]] = [("page", lines)]
+            if upright:
+                candidates += self._reread_note_block(
+                    image, bounds, line_h, reach_up=reach_up, ink=ink
+                )
+            scored = [(reading_quality(ls), label, ls) for label, ls in candidates if ls]
+            quality, label, chosen = max(scored, key=lambda item: item[0])
+            block = TextBlock(lines=list(chosen))
+            if label != "page":
+                region["text"] = normalized_note_text(block)
+                x0, y0, x1, y1 = block.levelled_bounds()
+                bx = region["bbox"]
+                nx0, ny0 = min(bx["x"], x0), min(bx["y"], y0)
+                nx1 = max(bx["x"] + bx["width"], x1)
+                ny1 = max(bx["y"] + bx["height"], y1)
+                region["bbox"] = {
+                    "x": round(nx0, 1),
+                    "y": round(ny0, 1),
+                    "width": round(nx1 - nx0, 1),
+                    "height": round(ny1 - ny0, 1),
+                }
+            region["raw_text"] = "\n".join(line.text for line in lines)
+            region["lines"] = block_lines_payload(block)
+            region["provenance"] = [
+                {"engine": "paddleocr", "pass": lab, "quality": round(q, 1),
+                 "text": "\n".join(line.text for line in ls), "chosen": lab == label}
+                for q, lab, ls in scored
+            ]
+            return region
+
         found: list[dict[str, Any]] = []
-        for region, _ in self._detect_notes_blocks(boxes):
+        consumed: set[int] = set()
+        for region, indices in self._detect_notes_blocks(boxes):
             bounds = region.pop("_bounds", None)
             line_h = region.pop("_line_h", 0.0)
-            if bounds is not None:
-                better = self._reread_notes_block(image, bounds, line_h)
-                if better:
-                    region["text"] = "\n".join(better)
+            consumed.update(indices)
+            members = [to_fragment(boxes[i]) for i in indices]
+            lines = sorted(
+                build_lines(f for f in members if f.text), key=lambda l: (l.ly, l.lx)
+            )
+            region["note_reason"] = "numbered list"
+            if bounds is not None and lines:
+                height = bounds[3] - bounds[1]
+                region = finish(region, lines, bounds, line_h, 0.7 * height, True)
             found.append(region)
-        return found
+
+        def inside_found(b: dict[str, Any]) -> bool:
+            box = {"x": b["x"], "y": b["y"], "width": b["w"], "height": b["h"]}
+            return any(_centre_inside(box, region["bbox"]) for region in found)
+
+        rest_index = [
+            i for i, b in enumerate(boxes) if i not in consumed and not inside_found(b)
+        ]
+        rest = [boxes[i] for i in rest_index]
+        try:
+            turned, replaced = self._rotated_text_boxes(image, rest)
+        except Exception:  # noqa: BLE001 - upright notes must survive it
+            logger.exception("vertical text pass failed; notes continue")
+            turned, replaced = [], set()
+        pool = [b for i, b in enumerate(rest) if i not in replaced] + turned
+        fragments = [
+            to_fragment(b)
+            for b in pool
+            if float(b.get("conf") or 0.0) >= NOTE_MIN_FRAGMENT_CONFIDENCE
+        ]
+        for block in note_blocks((f for f in fragments if f.text), ink):
+            if block.category != "note":
+                continue
+            box = block.page_box()
+            upright = abs(block.angle) < 1.0
+            region = {
+                "bbox": {k: round(v, 1) for k, v in box.items()},
+                "text": normalized_note_text(block),
+                "confidence": round(block.confidence, 4),
+                "type": "General Note",
+                "category": "General Note",
+                "subtype": None,
+                "label": "General Notes",
+                "orientation": "horizontal" if upright else "vertical",
+                "rotation": 0 if upright else ((block.angle + 180.0) % 360.0) - 180.0,
+                "needs_review": False,
+                "agreement": 0.0,
+                "engine": "paddleocr",
+                "symbols_detected": None,
+                "note_reason": block.reason,
+                "heading": block.heading.text if block.heading else None,
+            }
+            x0, y0, x1, y1 = block.levelled_bounds()
+            line_h = sorted(line.lh for line in block.lines)[len(block.lines) // 2]
+            region = finish(
+                region,
+                block.lines,
+                (x0, y0, x1, y1),
+                line_h,
+                0.6 * line_h,
+                upright,
+            )
+            region["_line_h"] = line_h
+            found.append(region)
+        return self._reconcile_notes(found, ink)
+
+    @staticmethod
+    def _reconcile_notes(found: list[dict[str, Any]], ink: Any | None) -> list[dict[str, Any]]:
+        """
+        Join note regions that are one note, and drop one read twice.
+
+        The two detectors and the re-reads work block by block, so one note
+        can arrive in pieces: a numbered list whose last point's tail the
+        list detector stopped short of and the paragraph pass then took as a
+        paragraph of its own (LP58), or a centred paragraph whose re-read
+        took in a line that also stood as its own block (56103). A region
+        sitting directly under another, overlapping it horizontally and with
+        no rule between them, continues it; a region whose box lies mostly
+        inside another's, with its text already there, is a second reading.
+        """
+
+        def bounds(region: dict[str, Any]) -> tuple[float, float, float, float]:
+            b = region["bbox"]
+            return b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"]
+
+        def line_height(region: dict[str, Any]) -> float:
+            lines = region.get("lines") or []
+            heights = sorted(float(line["bbox"]["height"]) for line in lines if not line.get("heading"))
+            if heights:
+                return heights[len(heights) // 2]
+            return float(region.get("_line_h") or 0.0) or 20.0
+
+        def upright(region: dict[str, Any]) -> bool:
+            return region.get("orientation", "horizontal") == "horizontal"
+
+        def words(text: str) -> set[str]:
+            return {w for w in re.findall(r"[0-9A-Za-z]+", text.upper()) if len(w) >= 2}
+
+        def repeats(lower: dict[str, Any], upper: dict[str, Any]) -> bool:
+            """Most of the lower region's words are already in the upper one."""
+            mine = words(lower["text"])
+            return bool(mine) and len(mine & words(upper["text"])) >= 0.7 * len(mine)
+
+        regions = sorted(found, key=lambda r: (r["bbox"]["y"], r["bbox"]["x"]))
+        merged = True
+        while merged:
+            merged = False
+            for i, upper in enumerate(regions):
+                ux0, uy0, ux1, uy1 = bounds(upper)
+                for j, lower in enumerate(regions):
+                    if i == j:
+                        continue
+                    lx0, ly0, lx1, ly1 = bounds(lower)
+                    # A second reading of the same lines, at any angle.
+                    inter = max(0.0, min(ux1, lx1) - max(ux0, lx0)) * max(0.0, min(uy1, ly1) - max(uy0, ly0))
+                    area = max((lx1 - lx0) * (ly1 - ly0), 1.0)
+                    upper_area = max((ux1 - ux0) * (uy1 - uy0), 1.0)
+                    if inter >= 0.6 * area and area <= upper_area and repeats(lower, upper):
+                        regions.pop(j)
+                        merged = True
+                        break
+                    if not (upright(upper) and upright(lower)):
+                        continue
+                    # A continuation: directly under, sharing its column.
+                    if lower.get("heading"):
+                        continue
+                    h = max(line_height(upper), line_height(lower))
+                    gap = ly0 - uy1
+                    if not -0.5 * h <= gap <= 1.2 * h:
+                        continue
+                    if min(ux1, lx1) - max(ux0, lx0) <= 0:
+                        continue
+                    if not (ux0 - h <= lx0 <= ux0 + 5 * h):
+                        continue
+                    if ink is not None and ink.table_rule(
+                        max(ux0, lx0), min(ux1, lx1), uy1 - 0.2 * h, ly0 + 0.2 * h, reach=0.6 * h
+                    ):
+                        continue
+                    upper["text"] = upper["text"].rstrip("\n") + "\n" + lower["text"]
+                    upper["raw_text"] = (
+                        str(upper.get("raw_text") or "") + "\n" + str(lower.get("raw_text") or lower["text"])
+                    ).strip("\n")
+                    upper["lines"] = list(upper.get("lines") or []) + list(lower.get("lines") or [])
+                    upper["provenance"] = list(upper.get("provenance") or []) + list(lower.get("provenance") or [])
+                    nx0, ny0 = min(ux0, lx0), min(uy0, ly0)
+                    nx1, ny1 = max(ux1, lx1), max(uy1, ly1)
+                    upper["bbox"] = {
+                        "x": round(nx0, 1),
+                        "y": round(ny0, 1),
+                        "width": round(nx1 - nx0, 1),
+                        "height": round(ny1 - ny0, 1),
+                    }
+                    regions.pop(j)
+                    merged = True
+                    break
+                if merged:
+                    break
+        for region in regions:
+            region.pop("_line_h", None)
+        return regions
 
     def segment(
         self,
@@ -4039,6 +4594,7 @@ class OcrPipeline:
         from page_scan import overlaps_existing_value
         from page_value_filters import (
             PageValueCandidate,
+            PageValueFilterDecision,
             is_complete_engineering_value,
             evaluate_scan_value,
             normalize_page_value_text,
@@ -4155,10 +4711,12 @@ class OcrPipeline:
         # region is added back untouched just before returning. Boxes are
         # excluded by geometry because the notes pass runs its own recognition
         # and its box list does not index into this one.
-        notes_region = self._notes_region(
+        # Every note in the selection, not only the largest: a selection
+        # routinely holds a notes list and an unnumbered note beside it.
+        notes_found = self._notes_regions(
             image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
         )
-        if notes_region is not None:
+        for notes_region in notes_found:
             nb = notes_region["bbox"]
             nx0, ny0 = nb["x"], nb["y"]
             nx1, ny1 = nx0 + nb["width"], ny0 + nb["height"]
@@ -4414,6 +4972,40 @@ class OcrPipeline:
             if not text:
                 continue
 
+            # Content-aware split: close-proximity callouts that fused into one
+            # cluster. Trigger when the fused read still shows 2+ complete values
+            # OR the cluster's boxes span 2+ horizontal rows (the fused single
+            # read often collapses to one value, hiding the multiplicity). The
+            # split only replaces this region when it actually yields 2+ worthy
+            # values, so a false trigger falls back to the single region.
+            #
+            # A third trigger, and the reason this runs BEFORE the gates below:
+            # a cluster of several boxes whose read is not one complete value
+            # is a fusion by definition -- "R10.0" glued to the "8.0 TO INT"
+            # beside it, "Ø0.210 [Ø5.33]" over its "CHAMFER BOTH SIDES" note,
+            # "R1.4" above an "SC-2" tag and two note lines. Gated as a whole
+            # those reads failed the grammar or the prose test and the callout
+            # inside them was lost; split, every part is judged on its own,
+            # and ONE surviving value is enough, since the alternative is
+            # publishing nothing for a callout the detector plainly found.
+            multivalue = count_dimension_values(text) >= 2
+            multirow = (
+                self._cluster_row_count(cluster) >= 2
+                and ub["width"] >= ub["height"]
+            )
+            fused_invalid = len(cluster) >= 2 and not is_complete_engineering_value(
+                normalize_page_value_text(text)
+            )
+            if multivalue or multirow or fused_invalid:
+                split_regions = self._split_stacked_cluster(
+                    image, (cx0, cy0, cx1, cy1),
+                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
+                    min_values=1 if fused_invalid else 2,
+                )
+                if split_regions:
+                    regions.extend(split_regions)
+                    continue
+
             # A balloon is for something a person measures. These three gates
             # drop what merely looks numeric: zone letters and balloon numbers
             # ("4", "33"), revision dates ("DATE3/17/2011..."), and leader or
@@ -4424,26 +5016,6 @@ class OcrPipeline:
                 continue
             if is_stray_line(sub, text):
                 continue
-
-            # Content-aware split: close-proximity callouts that fused into one
-            # cluster. Trigger when the fused read still shows 2+ complete values
-            # OR the cluster's boxes span 2+ horizontal rows (the fused single
-            # read often collapses to one value, hiding the multiplicity). The
-            # split only replaces this region when it actually yields 2+ worthy
-            # values, so a false trigger falls back to the single region.
-            multivalue = count_dimension_values(text) >= 2
-            multirow = (
-                self._cluster_row_count(cluster) >= 2
-                and ub["width"] >= ub["height"]
-            )
-            if multivalue or multirow:
-                split_regions = self._split_stacked_cluster(
-                    image, (cx0, cy0, cx1, cy1),
-                    debug_dump=debug_dump, debug_dump_force=debug_dump_force,
-                )
-                if split_regions:
-                    regions.extend(split_regions)
-                    continue
 
             # Snap balloon to the full detected cluster, not a tight OCR sliver.
             bbox = {
@@ -4457,6 +5029,7 @@ class OcrPipeline:
                 {
                     "bbox": bbox,
                     "text": text,
+                    "raw_text": str(res.get("raw_ocr") or ""),
                     "confidence": res.get("confidence", 0.0),
                     "type": res.get("type"),
                     # Rule-engine output, so the balloon can show the feature
@@ -4521,6 +5094,24 @@ class OcrPipeline:
                 table_masks=(),
                 page_size=image.size,
             )
+            # The syntax gate judges the string, not the read. A recogniser
+            # that is unsure produces strings that happen to parse: "8/5.5"
+            # at 0.54 out of a 5/8" fraction in a title, "X577" at 0.59 out
+            # of a part-list cell. Measured over three benchmark sheets every
+            # genuine callout read at 0.87 or better, so a read this uncertain
+            # is not a value a balloon should be put on.
+            if (
+                decision.accepted
+                and float(region.get("confidence") or 0.0) < SECTION_MIN_CONFIDENCE
+            ):
+                decision = PageValueFilterDecision(
+                    accepted=False,
+                    rule_name="section_low_confidence",
+                    reason=(
+                        "Recogniser confidence below "
+                        f"{SECTION_MIN_CONFIDENCE:.2f} for a section value"
+                    ),
+                )
             filter_rule_counts[decision.rule_name] = (
                 filter_rule_counts.get(decision.rule_name, 0) + 1
             )
@@ -4577,8 +5168,7 @@ class OcrPipeline:
         # Appended last so the dimension-oriented filters, which reason about
         # values, never discard or reshape the notes block. Re-read from an
         # enlarged crop when that resolves the paragraph more cleanly.
-        if notes_region is not None:
-            regions.append(notes_region)
+        regions.extend(notes_found)
 
         excluded_count = recognized_count - len(regions)
         return {
@@ -5863,12 +6453,26 @@ class OcrPipeline:
             ):
                 published_text = ""
 
+            # The labelling rules, on the text actually published. This region
+            # was the one place a scan built without them: on every scanned
+            # drawing read by the whole-page route the values arrived with no
+            # category and no label, while the section and text-layer routes
+            # labelled the same values. The read's own symbols go with it, as
+            # recognize() passes them.
+            symbols = result.get("symbols_detected")
+            feature = classify_feature(
+                published_text,
+                symbols=symbols if isinstance(symbols, dict) else None,
+            )
             common_region = {
                 "candidate_id": record["candidate_id"],
                 "bbox": record["bbox"],
                 "text": published_text,
                 "confidence": result.get("confidence", 0.0),
                 "type": result.get("type"),
+                "category": feature.category,
+                "subtype": feature.subtype,
+                "label": feature.label,
                 "orientation": result.get("orientation", "horizontal"),
                 "rotation": result.get("rotation", 0),
                 "needs_review": final_state == "review",
@@ -6107,8 +6711,19 @@ class OcrPipeline:
             if not overlaps_existing_value(region["bbox"], existing_value_boxes)
         ]
         if frame_regions:
-            from gdt_pipeline import absorb_frames
+            from gdt_pipeline import absorb_frames, attach_adjacent_text
 
+            # Words printed against a frame ("OUTWARDS" under a profile frame)
+            # carry no number, so the value filters excluded them and they
+            # went nowhere. They are kept with the frame they annotate.
+            attach_adjacent_text(
+                frame_regions,
+                [
+                    (str(outcome.get("text") or ""), outcome["bbox"])
+                    for outcome in candidate_outcomes
+                    if outcome.get("text") and outcome.get("bbox")
+                ],
+            )
             regions, review_candidates, delta = absorb_frames(
                 regions, review_candidates, frame_regions
             )

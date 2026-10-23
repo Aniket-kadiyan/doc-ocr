@@ -43,6 +43,8 @@ import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 import { balloonArtworkPngDataUrl } from "@/lib/balloonStyle";
+import { describeLabelGaps, findLabelGaps } from "@/lib/labelRules";
+import { getTitleKeywords } from "@/lib/titleKeywords";
 
 interface ExportPanelProps {
   disabled?: boolean;
@@ -96,6 +98,11 @@ export function ExportPanel({
 
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
   const empty = annotations.length === 0 && referenceTables.length === 0;
+  // Labels the existing rules call for that the drawing does not carry. Every
+  // export still writes them (blank), so this says so where it matters.
+  const labelGapNote = menuOpen
+    ? describeLabelGaps(findLabelGaps(annotations, getTitleKeywords()))
+    : "";
   const busy =
     actionStatus.kind === "saving" ||
     actionStatus.kind === "exporting" ||
@@ -488,6 +495,14 @@ export function ExportPanel({
 
       {menuOpen && (
         <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+          {labelGapNote && (
+            <p
+              role="status"
+              className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800"
+            >
+              {labelGapNote}
+            </p>
+          )}
           <button
             type="button"
             onClick={handleWebView}

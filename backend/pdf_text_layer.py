@@ -87,6 +87,36 @@ def _decode_symbols(char: str, font: str) -> str:
     return CONTROL_GLYPHS.get(char, char)
 
 
+# Sub-pixel precision for FPDF_PageToDevice, which only returns integers:
+# the transform is evaluated on a device this many times larger.
+_DEVICE_OVERSAMPLE = 16
+
+
+def page_to_render(page: Any, scale: float):
+    """
+    Map PDF user-space points to the pixels of ``page.render(scale=scale)``.
+
+    Not ``y = page_height - top``: that is only right for a page whose
+    CropBox starts at the origin and which has no /Rotate. A CropBox offset
+    or a MediaBox below zero shifted every box off its ink, the lower ones
+    right off the page, where the client drops them; a rotated page put
+    every box in the unrotated frame. pdfium's own page-to-device transform
+    is the one ``render`` uses, so the two cannot disagree.
+    """
+    width = int(round(page.get_width() * scale * _DEVICE_OVERSAMPLE))
+    height = int(round(page.get_height() * scale * _DEVICE_OVERSAMPLE))
+    device_x, device_y = ctypes.c_int(), ctypes.c_int()
+
+    def to_render(x: float, y: float) -> tuple[float, float]:
+        pdfium_raw.FPDF_PageToDevice(
+            page.raw, 0, 0, width, height, 0, x, y,
+            ctypes.byref(device_x), ctypes.byref(device_y),
+        )
+        return device_x.value / _DEVICE_OVERSAMPLE, device_y.value / _DEVICE_OVERSAMPLE
+
+    return to_render
+
+
 def page_text_runs(
     pdf: Any,
     page_index: int = 0,
@@ -98,7 +128,8 @@ def page_text_runs(
 
     ``pdf`` is a path, bytes, or an open :class:`pypdfium2.PdfDocument`. A run
     ends at a line break in the text layer or wherever the text changes angle.
-    Returns ``(runs, (width, height), fonts)``.
+    Returns ``(runs, (width, height), fonts)``. Boxes and angles are in the
+    rendered page, so CropBox offsets and /Rotate are already applied.
     """
     document = pdf if isinstance(pdf, pdfium.PdfDocument) else pdfium.PdfDocument(pdf)
     page = document[page_index]
@@ -109,7 +140,7 @@ def page_text_runs(
     if count == 0:
         return [], size, set()
 
-    page_height = page.get_height()
+    to_render = page_to_render(page, scale)
     name_buffer = ctypes.create_string_buffer(256)
     fonts: set[str] = set()
     runs: list[TextRun] = []
@@ -148,6 +179,21 @@ def page_text_runs(
         if char in "\r\n":
             flush()
             continue
+        is_space = char.isspace()
+        if is_space:
+            # A space is kept exactly as it behaved before the device
+            # transform. A producer that writes it with a box of exactly zero
+            # height ended the run there (the overlap test below failed on
+            # it), and the callout grouping is tuned to that: "Form.:" stays
+            # apart from the larger "A4". A sliver of a box, as other
+            # producers write, kept the run going and still widened it. The
+            # transform rounds a sliver to nothing, so its overlap test gives
+            # it back a hair of height. note_blocks restores the spaces
+            # from the gaps wherever runs were split.
+            _, space_bottom, _, space_top = text_page.get_charbox(index)
+            if space_top - space_bottom <= 0.0:
+                flush()
+                continue
         flags = ctypes.c_int()
         written = pdfium_raw.FPDFText_GetFontInfo(
             text_page.raw, index, name_buffer, 256, ctypes.byref(flags)
@@ -160,12 +206,23 @@ def page_text_runs(
         fonts.add(font)
         char = _decode_symbols(char, font)
         left, bottom, right, top = text_page.get_charbox(index)
-        angle = round(
-            math.degrees(pdfium_raw.FPDFText_GetCharAngle(text_page.raw, index)), 1
+        page_angle = pdfium_raw.FPDFText_GetCharAngle(text_page.raw, index)
+        corners = [to_render(px, py) for px, py in ((left, bottom), (right, bottom), (right, top), (left, top))]
+        x0, y0 = min(c[0] for c in corners), min(c[1] for c in corners)
+        x1, y1 = max(c[0] for c in corners), max(c[1] for c in corners)
+        # pdfium measures the angle CLOCKWISE on the unrotated page (text
+        # drawn running up the sheet reports 270). It is carried onto the
+        # rendered page the same way, so a /Rotate 90 sheet reports its
+        # upright text at 90, as pdfium would for text drawn running down an
+        # unrotated one.
+        ax, ay = to_render(left, bottom)
+        bx, by = to_render(
+            left + 1000.0 * math.cos(page_angle), bottom - 1000.0 * math.sin(page_angle)
         )
+        angle = round(math.degrees(math.atan2(by - ay, bx - ax)) % 360.0, 1)
+        if angle >= 359.95:
+            angle = 0.0
         font_size = pdfium_raw.FPDFText_GetFontSize(text_page.raw, index) * scale
-        x0, y0 = left * scale, (page_height - top) * scale
-        x1, y1 = right * scale, (page_height - bottom) * scale
         lx, ly, lw, lh = _level_box(x0, y0, x1 - x0, y1 - y0, math.radians(angle))
 
         if current is not None:
@@ -183,7 +240,12 @@ def page_text_runs(
                     # distance between top edges: a decimal point is a tiny
                     # box sitting at the baseline, and comparing edges tears
                     # it off its own number.
-                    overlap = min(current["ly1"], ly + lh) - max(current["ly"], ly)
+                    # A sliver space sits exactly on the baseline; rounded to
+                    # device pixels it can land a hair below the run's bottom
+                    # edge, so it is tested as a half-pixel band around itself.
+                    test_y = ly - 0.25 if is_space else ly
+                    test_h = max(lh, 0.5) if is_space else lh
+                    overlap = min(current["ly1"], test_y + test_h) - max(current["ly"], test_y)
                     if overlap <= 0:
                         broken = True
             if broken:
@@ -756,13 +818,33 @@ def text_layer_regions(
     regions: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     page_image: Any | None = None
-    for group in group_runs(runs, size):
+
+    # Notes first, from every run on the page wherever it sits. They were
+    # never published before: the callout grouping below keeps prose out of
+    # balloons, so a note line was either excluded outright or, when it
+    # carried a value ("BREAK ALL EDGES 0.2 MAX"), ballooned as a fragment.
+    # The runs a note owns are taken out of the callout pool, so nothing
+    # inside a paragraph is published twice.
+    note_regions, text_blocks, consumed, page_image = _native_note_regions(
+        pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
+    )
+    regions.extend(note_regions)
+    callout_runs = [run for index, run in enumerate(runs) if index not in consumed]
+
+    for group in group_runs(callout_runs, size):
         raw = group["text"]
         composed = compose_engineering_dimension(raw, None, DetectedSymbols())
         text = (composed.text or "").strip() or raw.strip()
         bbox, oriented = _boxes_from_corners(group["corners"])
         if not any(character.isdigit() for character in text):
-            excluded.append({"text": text, "bbox": bbox})
+            excluded.append(
+                {
+                    "text": text,
+                    "bbox": bbox,
+                    "rule": "pdf_text_no_numeric_value",
+                    "reason": "Native PDF text contains no numeric inspection value",
+                }
+            )
             continue
         # Recovery runs BEFORE the gate: a position tolerance reads "2 A B C"
         # until its Ø is found, and a lone digit does not earn a balloon.
@@ -801,7 +883,14 @@ def text_layer_regions(
                         ]
                     )
         if not is_callout(text):
-            excluded.append({"text": text, "bbox": bbox})
+            excluded.append(
+                {
+                    "text": text,
+                    "bbox": bbox,
+                    "rule": "pdf_text_non_callout",
+                    "reason": "Native PDF text does not match an engineering callout",
+                }
+            )
             continue
         review = is_bare_number(text)
         if review and recover_symbols:
@@ -865,14 +954,368 @@ def text_layer_regions(
             region["oriented_box"] = oriented
         regions.append(region)
 
+    # Feature control frames. A frame's symbols and modifiers are drawn, not
+    # written: the text layer of a profile frame "⌓ | 0.2 Ⓤ" holds only
+    # "0.2", which was published as a plain linear dimension. Frames are found
+    # on the rendered page and read the way a scan reads them, and absorb the
+    # bare values inside them.
+    if recover_symbols:
+        regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
+
+    # A mixed page: vector text over an embedded picture that carries text of
+    # its own (a pasted scan of a notes block, a raster title block). The
+    # text layer cannot see inside the picture, so only those areas are read.
+    if recover_symbols:
+        image_notes = _image_area_notes(pdf, page_index, runs, dpi)
+        regions.extend(image_notes)
+
     return {
         "usable": True,
         "page_size": size,
         "regions": regions,
         "excluded": excluded,
+        "text_blocks": text_blocks,
         "fonts": sorted(fonts),
         "raster_coverage": round(coverage, 3),
     }
+
+
+# Frames are read from a render at least this fine. A vector frame's rules and
+# symbol outlines are hairlines; at the client's 108 dpi a frame is ~17px tall,
+# below what the frame finder and the symbol templates resolve.
+FRAME_DPI = 250.0
+
+
+def _scale_boxes(value: Any, factor: float) -> Any:
+    """Every {x, y, width, height} box inside a structure, scaled."""
+    if isinstance(value, dict):
+        if {"x", "y", "width", "height"} <= value.keys():
+            return {
+                **value,
+                **{k: round(float(value[k]) * factor, 1) for k in ("x", "y", "width", "height")},
+            }
+        return {k: _scale_boxes(v, factor) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scale_boxes(v, factor) for v in value]
+    return value
+
+
+def _native_frames(
+    pdf: Any,
+    page_index: int,
+    runs: list[TextRun],
+    dpi: float,
+    regions: list[dict[str, Any]],
+    text_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Feature control frames on a vector page, read from its render."""
+    import fcf_parse
+    import gdt_pipeline
+    from gdt_config import get_config
+
+    if not get_config().enabled:
+        return regions
+    frame_dpi = max(dpi, FRAME_DPI)
+    image = _render_page(pdf, page_index, frame_dpi)
+    # The finder is morphology only; the OCR-backed read runs only when a
+    # page has something frame-shaped on it.
+    if not fcf_parse.find_frames(image, reference_edge=min(image.size)):
+        return regions
+    from ocr_pipeline import get_pipeline
+
+    pipeline = get_pipeline()
+
+    def ocr_fn(crop: Any) -> tuple[str, float]:
+        try:
+            result = pipeline.recognize(crop)
+            return str(result.get("text") or ""), float(result.get("confidence") or 0.0)
+        except Exception:  # noqa: BLE001 - one unreadable cell
+            return "", 0.0
+
+    try:
+        frames = gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn)
+    except Exception:  # noqa: BLE001 - the page's text is still worth having
+        return regions
+    if not frames:
+        return regions
+    factor = dpi / frame_dpi
+    frames = [_scale_boxes(frame, factor) for frame in frames]
+    for frame in frames:
+        _reconcile_native_tolerance(frame, runs)
+    gdt_pipeline.attach_adjacent_text(
+        frames, [(block["text"], block["bbox"]) for block in text_blocks]
+    )
+    regions, _, _ = gdt_pipeline.absorb_frames(regions, [], frames)
+    return regions
+
+
+def _reconcile_native_tolerance(frame: dict[str, Any], runs: list[TextRun]) -> None:
+    """
+    Prefer the PDF's own digits for a frame's tolerance.
+
+    The frame was read with OCR, but on a vector page its tolerance is also
+    in the text layer, exactly. When the two disagree the text layer wins and
+    the OCR reading is kept as a warning; symbols and modifiers, which have
+    no text form, stay as the picture read them.
+    """
+    import fcf_parse
+
+    parsed_frames = (frame.get("gdt") or {}).get("frames") or []
+    if len(parsed_frames) != 1:
+        return
+    parsed = parsed_frames[0]
+    compartments = parsed.get("compartments") or []
+    if len(compartments) < 2:
+        return
+    cell = compartments[1].get("bounding_box") or {}
+    if not cell:
+        return
+    inside = [
+        run
+        for run in runs
+        if cell["x"] <= run.x + run.width / 2 <= cell["x"] + cell["width"]
+        and cell["y"] <= run.y + run.height / 2 <= cell["y"] + cell["height"]
+    ]
+    native = " ".join(run.text for run in sorted(inside, key=lambda r: r.x)).strip()
+    value = fcf_parse.parse_tolerance_compartment(native, 1.0)["value"] if native else None
+    tolerance = parsed.get("tolerance") or {}
+    if value is None:
+        return
+    ocr_value = tolerance.get("value")
+    tolerance.update({"value": value, "state": "present", "confidence": 1.0, "raw": native})
+    parsed["tolerance"] = tolerance
+    frame["tolerance_source"] = "pdf-text-layer"
+    if ocr_value is not None and float(ocr_value) != float(value):
+        parsed.setdefault("warnings", []).append(
+            f"tolerance read by OCR as {ocr_value:g}; the PDF text says {native!r}"
+        )
+        frame["text"] = re.sub(
+            rf"(?<![\d.]){re.escape(f'{float(ocr_value):g}')}(?![\d.])",
+            f"{value:g}",
+            frame["text"],
+            count=1,
+        )
+
+
+# An embedded picture smaller than this share of the page is a logo or a
+# stamp, not a picture of text worth reading.
+IMAGE_AREA_MIN_FRACTION = 0.02
+
+
+def _clamped_box(box: dict[str, float], page_size: tuple[int, int]) -> dict[str, float]:
+    """A box cut back to the page, so padding at an edge never leaves it."""
+    x0 = max(0.0, box["x"])
+    y0 = max(0.0, box["y"])
+    x1 = min(float(page_size[0]), box["x"] + box["width"])
+    y1 = min(float(page_size[1]), box["y"] + box["height"])
+    return {
+        "x": round(x0, 1),
+        "y": round(y0, 1),
+        "width": round(max(0.0, x1 - x0), 1),
+        "height": round(max(0.0, y1 - y0), 1),
+    }
+
+
+def _ocr_line_text(page_image: Any, box: dict[str, float], angle: float, size: float) -> tuple[str, float]:
+    """OCR one native line from the render, for text the PDF could not decode."""
+    from note_blocks import level_box
+
+    x0, y0, w, h = level_box(box["x"], box["y"], box["width"], box["height"], math.radians(angle))
+    crop = _levelled_crop(
+        page_image, (x0, y0, x0 + w, y0 + h), angle,
+        pad_left=0.6 * size, pad_right=0.6 * size, pad_cross=0.4 * size,
+    )
+    if crop is None:
+        return "", 0.0
+    from ocr_pipeline import get_pipeline
+
+    boxes = get_pipeline()._detect_regions_ocr(crop)
+    boxes.sort(key=lambda b: b["x"])
+    text = " ".join(str(b.get("text") or "").strip() for b in boxes).strip()
+    confs = [float(b.get("conf") or 0.0) for b in boxes]
+    return text, (sum(confs) / len(confs) if confs else 0.0)
+
+
+def _native_note_regions(
+    pdf: Any,
+    page_index: int,
+    runs: list[TextRun],
+    size: tuple[int, int],
+    dpi: float,
+    page_image: Any | None,
+    *,
+    recover_with_ocr: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[int], Any | None]:
+    """
+    The page's notes, rebuilt from its runs, as General Note regions.
+
+    Returns ``(regions, text_blocks, consumed_run_indices, page_image)``.
+    ``text_blocks`` is every other paragraph (labels, table text, title-block
+    fields, proprietary notices) with the reason it is not a note, so text
+    that is not ballooned is still accounted for.
+    """
+    from note_blocks import (
+        Fragment,
+        TextBlock,
+        block_lines_payload,
+        normalized_note_text,
+        note_blocks,
+    )
+
+    fragments = [
+        Fragment(
+            text=run.text, x=run.x, y=run.y, w=run.width, h=run.height,
+            angle=run.angle, size=run.size, source="pdf-text", ref=index,
+        )
+        for index, run in enumerate(runs)
+    ]
+    regions: list[dict[str, Any]] = []
+    others: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    for block in note_blocks(fragments):
+        box = block.page_box(include_heading=False)
+        if block.category != "note":
+            # Text with no word in it is a callout, and the callout pass
+            # below accounts for it; only prose is listed here.
+            if not any(len(w) >= 3 for w in re.findall(r"[^\W\d_]+", block.text)):
+                continue
+            others.append(
+                {
+                    "text": "\n".join(line.text for line in block.all_lines),
+                    "category": block.category,
+                    "reason": block.reason,
+                    "bbox": _clamped_box(box, size),
+                }
+            )
+            continue
+        lead = max(line.size for line in block.lines)
+        pad = BOX_PADDING * lead
+        padded = {
+            "x": box["x"] - pad, "y": box["y"] - pad,
+            "width": box["width"] + 2 * pad, "height": box["height"] + 2 * pad,
+        }
+        native_text = block.text
+        text = normalized_note_text(block)
+        provenance = [{"engine": "pdf-text-layer", "text": native_text, "confidence": 1.0}]
+        review = False
+        # Glyphs the font could not map to Unicode: the PDF says something is
+        # there but not what. The picture says what, so each such line is
+        # read back from the render; both readings are kept.
+        if recover_with_ocr and any(f.suspect for f in block.fragments):
+            if page_image is None:
+                page_image = _render_page(pdf, page_index, dpi)
+            fixed_lines = []
+            for line in block.lines:
+                if not any(f.suspect for f in line.fragments):
+                    fixed_lines.append(line.text)
+                    continue
+                read, conf = _ocr_line_text(page_image, line.page_box(), line.angle, line.size)
+                fixed_lines.append(read if read and conf >= 0.8 else line.text)
+                review = review or not read or conf < 0.8
+            for line, fixed in zip(block.lines, fixed_lines):
+                line.text = fixed
+            text = normalized_note_text(TextBlock(lines=block.lines))
+            provenance.append({"engine": "paddleocr", "text": "\n".join(fixed_lines), "confidence": None})
+        upright = abs(block.angle) < 1.0 or abs(block.angle - 180.0) < 1.0
+        region = {
+            "bbox": _clamped_box(padded, size),
+            "text": text,
+            "raw_text": native_text,
+            "confidence": 1.0 if not review else 0.5,
+            "type": "General Note",
+            "category": "General Note",
+            "subtype": None,
+            "label": "General Notes",
+            "orientation": "horizontal" if upright else "vertical",
+            "rotation": 0 if upright else ((block.angle + 180.0) % 360.0) - 180.0,
+            "needs_review": review,
+            "agreement": 1.0,
+            "engine": "pdf-text-layer",
+            "symbols_detected": None,
+            "recognized": True,
+            "note_reason": block.reason,
+            "heading": block.heading.text if block.heading else None,
+            "lines": block_lines_payload(block),
+            "provenance": provenance,
+        }
+        regions.append(region)
+        consumed.update(f.ref for f in block.fragments)
+    return regions, others, consumed, page_image
+
+
+def page_image_boxes(pdf: Any, page_index: int, dpi: float) -> list[dict[str, float]]:
+    """Every embedded picture's box, in the pixels of a ``dpi`` render."""
+    document = pdf if isinstance(pdf, pdfium.PdfDocument) else pdfium.PdfDocument(pdf)
+    page = document[page_index]
+    to_render = page_to_render(page, dpi / 72.0)
+    boxes = []
+    for obj in page.get_objects(max_depth=15):
+        if obj.type != pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+            continue
+        try:
+            left, bottom, right, top = obj.get_bounds()
+        except Exception:
+            continue
+        corners = [to_render(x, y) for x, y in ((left, bottom), (right, top))]
+        x0, x1 = sorted(c[0] for c in corners)
+        y0, y1 = sorted(c[1] for c in corners)
+        boxes.append({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0})
+    return boxes
+
+
+def _image_area_notes(
+    pdf: Any, page_index: int, runs: list[TextRun], dpi: float
+) -> list[dict[str, Any]]:
+    """OCR notes inside embedded pictures that hold no native text of their own."""
+    document = pdf if isinstance(pdf, pdfium.PdfDocument) else pdfium.PdfDocument(pdf)
+    page = document[page_index]
+    scale = dpi / 72.0
+    page_area = page.get_width() * scale * page.get_height() * scale
+    candidates = []
+    for box in page_image_boxes(document, page_index, dpi):
+        if box["width"] * box["height"] < IMAGE_AREA_MIN_FRACTION * page_area:
+            continue
+        inside = any(
+            box["x"] <= run.x + run.width / 2 <= box["x"] + box["width"]
+            and box["y"] <= run.y + run.height / 2 <= box["y"] + box["height"]
+            for run in runs
+        )
+        # Native text on top of the picture already says what it says.
+        if not inside:
+            candidates.append(box)
+    if not candidates:
+        return []
+
+    from ocr_pipeline import get_pipeline
+
+    page_image = _render_page(document, page_index, dpi)
+    found: list[dict[str, Any]] = []
+    for box in candidates:
+        left, top = max(0, int(box["x"])), max(0, int(box["y"]))
+        right = min(page_image.width, int(box["x"] + box["width"]))
+        bottom = min(page_image.height, int(box["y"] + box["height"]))
+        if right - left < 16 or bottom - top < 16:
+            continue
+        try:
+            notes = get_pipeline()._notes_regions(page_image.crop((left, top, right, bottom)))
+        except Exception:  # an unreadable picture must not cost the page its text
+            continue
+        for note in notes:
+            note["bbox"] = {
+                **note["bbox"],
+                "x": round(note["bbox"]["x"] + left, 1),
+                "y": round(note["bbox"]["y"] + top, 1),
+            }
+            for line in note.get("lines", []):
+                line["bbox"] = {
+                    **line["bbox"],
+                    "x": round(line["bbox"]["x"] + left, 1),
+                    "y": round(line["bbox"]["y"] + top, 1),
+                }
+            note["recognized"] = True
+            note["provenance"] = [{"engine": "paddleocr", "text": note["text"], "confidence": note.get("confidence")}]
+            found.append(note)
+    return found
 
 
 # What a rescued read must gain over the text layer's own: a mark the drawing

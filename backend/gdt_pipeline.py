@@ -44,6 +44,8 @@ overlap duplicates are merged afterwards by ``gdt_detect.merge_detections``.
 
 from __future__ import annotations
 
+import re
+
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -708,6 +710,9 @@ def frame_text(frame: FeatureControlFrame) -> str:
     if frame.symbol is not None and frame.symbol.symbol_id:
         sym = reg.find(frame.symbol.symbol_id)
         parts.append((sym.unicode if sym and sym.unicode else None) or frame.symbol.name)
+    elif frame.symbol is not None:
+        # Kept unresolved: shown as unread, never guessed.
+        parts.append("?")
     tolerance = ""
     if frame.diameter_zone.value is True:
         tolerance += "Ø"
@@ -722,6 +727,15 @@ def frame_text(frame: FeatureControlFrame) -> str:
         glyph = reg.find(str(mc.value))
         if glyph and glyph.unicode:
             parts.append(glyph.unicode)
+    elif mc.state == fcf_parse.UNREADABLE:
+        # A modifier is there and was not read: shown, not dropped.
+        parts.append("?")
+    # The other modifiers (Ⓤ, Ⓟ, Ⓕ, Ⓣ …) were detected and kept on the frame
+    # but never written into the text, so a profile frame "⌓ 0.2 Ⓤ" reached
+    # the drawing and every export as "⌓ 0.2".
+    for modifier in frame.modifiers:
+        glyph = reg.find(str(modifier))
+        parts.append(glyph.unicode if glyph and glyph.unicode else str(modifier))
     for datum in frame.datums:
         parts.append(datum.label)
     return " ".join(parts)
@@ -821,7 +835,11 @@ def scan_regions(
         x1 = max(f.bbox[0] + f.bbox[2] for f in frames)
         y1 = max(f.bbox[1] + f.bbox[3] for f in frames)
         lead = frames[0]
-        name = lead.symbol.name if lead.symbol is not None else "Feature Control Frame"
+        name = (
+            lead.symbol.name
+            if lead.symbol is not None and lead.symbol.symbol_id
+            else "Feature Control Frame"
+        )
         reasons = [r for r in (_frame_needs_review(f) for f in frames) if r]
         regions.append(
             {
@@ -942,3 +960,46 @@ def analyze_document(
             )
             out.append(failed)
     return out
+
+
+#: Prose this close to a frame (in frame heights, above or below) and sharing
+#: its column is taken to annotate it: "OUTWARDS" under a profile frame.
+ADJACENT_TEXT_GAP_FRAMES = 1.0
+
+
+def attach_adjacent_text(
+    frame_regions: list[dict[str, Any]],
+    texts: Sequence[tuple[str, dict[str, Any]]],
+) -> None:
+    """
+    Record the words printed against each frame, as ``associated_text``.
+
+    The text is kept, not interpreted: whether "OUTWARDS" states the side of
+    an unequally disposed zone or something else is for the reader. It is
+    also carried into the frame's label, so the drawing view and every export
+    show it beside the frame instead of losing it as an unattached label.
+    ``texts`` are (text, bbox) in the frames' coordinates; only words count —
+    a value beside a frame is its own callout.
+    """
+    for region in frame_regions:
+        box = region["bbox"]
+        fx0, fy0 = float(box["x"]), float(box["y"])
+        fx1, fy1 = fx0 + float(box["width"]), fy0 + float(box["height"])
+        reach = ADJACENT_TEXT_GAP_FRAMES * (fy1 - fy0)
+        found: list[tuple[float, str]] = []
+        for text, tb in texts:
+            words = re.findall(r"[A-Za-z]{3,}", text or "")
+            if not words or any(ch.isdigit() for ch in text):
+                continue
+            tx0, ty0 = float(tb["x"]), float(tb["y"])
+            tx1, ty1 = tx0 + float(tb["width"]), ty0 + float(tb["height"])
+            if _centre_inside(tb, box):
+                continue
+            gap = max(ty0 - fy1, fy0 - ty1)
+            overlap = min(fx1, tx1) - max(fx0, tx0)
+            if gap <= reach and overlap > 0.3 * min(tx1 - tx0, fx1 - fx0):
+                found.append((ty0, " ".join(text.split())))
+        if found:
+            associated = " ".join(t for _, t in sorted(found))
+            region["associated_text"] = associated
+            region["label"] = f"{region.get('label') or 'GD&T'} · {associated}"
