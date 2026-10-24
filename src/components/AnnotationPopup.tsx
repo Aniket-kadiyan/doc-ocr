@@ -39,6 +39,28 @@ export function AnnotationPopup({
     setRange(deriveRange(text));
   }, [pending]);
 
+  // Escape behaves exactly like Cancel, so a scan candidate goes back to the
+  // review queue rather than being ignored.
+  useEffect(() => {
+    if (!pending) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      if (
+        (pending.source === "scan_review" ||
+          pending.source === "scan_candidate") &&
+        pending.reviewCandidateId
+      ) {
+        onReviewCancelled?.(pending.reviewCandidateId);
+      }
+      setPending(null);
+      setValue("");
+      setRange("");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pending, onReviewCancelled, setPending]);
+
   if (!pending) return null;
 
   const confidence = pending.ocrResult.confidence;
