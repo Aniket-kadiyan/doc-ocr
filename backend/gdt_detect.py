@@ -254,10 +254,12 @@ def despeckle(binary: np.ndarray, *, max_floor: float | None = None) -> np.ndarr
     floor = max(2.0, float(areas.max()) * SPECKLE_FRACTION)
     if max_floor is not None:
         floor = min(floor, float(max_floor))
+    # One lookup over the label image. Clearing each speck with its own
+    # ``labels == i`` mask was components x pixels: 9s on a 250dpi page.
+    keep = stats[:, cv2.CC_STAT_AREA] >= floor
+    keep[0] = True
     out = binary.copy()
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] < floor:
-            out[labels == i] = 0
+    out[~keep[labels]] = 0
     return out
 
 

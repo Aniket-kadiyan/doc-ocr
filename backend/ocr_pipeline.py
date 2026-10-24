@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
 import logging
 import re
+import threading
 
 import numpy as np
 from PIL import Image
@@ -293,6 +294,13 @@ def _covers_digits(whole: str, part: str) -> bool:
 
 
 class OcrPipeline:
+    # Paddle predictors are not safe to run from two threads at once, and
+    # requests overlap: routes run in the threadpool and scan jobs on their
+    # own threads. Inference takes turns; the image work around it does not.
+    # Class-level, so it holds for the one shared pipeline however it was
+    # constructed.
+    _inference_lock = threading.Lock()
+
     def __init__(self) -> None:
         self._configured_device = configured_ocr_device()
         self._paddle_runtime = PaddleRuntimeInfo()
@@ -510,7 +518,8 @@ class OcrPipeline:
 
     def _predict_3x(self, arr: np.ndarray) -> Any:
         """Run PaddleOCR 3.x; paddle_parse normalizes its Result objects."""
-        return self._paddle.predict(arr)
+        with self._inference_lock:
+            return self._paddle.predict(arr)
 
     def _predict_text_detector(self, arr: np.ndarray) -> Any:
         """Run the standalone PaddleOCR detector without recognition."""
@@ -518,12 +527,13 @@ class OcrPipeline:
         # The image has already been deliberately bounded/upscaled by the
         # adaptive caller. Override the model's generic document limit so it
         # does not silently downscale a 2400px engineering drawing again.
-        return self._text_detector.predict(
-            arr,
-            batch_size=1,
-            limit_side_len=max(arr.shape[:2]),
-            limit_type="max",
-        )
+        with self._inference_lock:
+            return self._text_detector.predict(
+                arr,
+                batch_size=1,
+                limit_side_len=max(arr.shape[:2]),
+                limit_type="max",
+            )
 
     def _run_text_detector(
         self,
@@ -576,12 +586,13 @@ class OcrPipeline:
                 "text-line orientation model"
             )
         try:
-            output = list(
-                self._text_orientation.predict(
-                    input=self._module_inputs(images),
-                    batch_size=batch_size,
+            with self._inference_lock:
+                output = list(
+                    self._text_orientation.predict(
+                        input=self._module_inputs(images),
+                        batch_size=batch_size,
+                    )
                 )
-            )
         except Exception as exc:
             raise RuntimeError(
                 "PaddleOCR standalone text-line orientation inference failed: "
@@ -609,12 +620,13 @@ class OcrPipeline:
                 "text recognition model"
             )
         try:
-            output = list(
-                self._text_recognizer.predict(
-                    input=self._module_inputs(images),
-                    batch_size=batch_size,
+            with self._inference_lock:
+                output = list(
+                    self._text_recognizer.predict(
+                        input=self._module_inputs(images),
+                        batch_size=batch_size,
+                    )
                 )
-            )
         except Exception as exc:
             raise RuntimeError(
                 "PaddleOCR standalone text recognition inference failed: "
@@ -826,15 +838,17 @@ class OcrPipeline:
                     ) from exc
             else:
                 try:
-                    result = (
-                        self._paddle.ocr(arr, cls=True)
-                        if det
-                        else self._paddle.ocr(arr, det=False, cls=True)
-                    )
+                    with self._inference_lock:
+                        result = (
+                            self._paddle.ocr(arr, cls=True)
+                            if det
+                            else self._paddle.ocr(arr, det=False, cls=True)
+                        )
                 except TypeError:
                     try:
                         # Older 2.x builds do not accept every optional keyword.
-                        result = self._paddle.ocr(arr)
+                        with self._inference_lock:
+                            result = self._paddle.ocr(arr)
                     except Exception as exc:
                         raise RuntimeError(
                             f"PaddleOCR {self._paddle_version} inference failed "

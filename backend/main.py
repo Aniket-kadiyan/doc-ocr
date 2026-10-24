@@ -1128,7 +1128,12 @@ async def read_pdf_text_layer(
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
 
     try:
-        result = text_layer_regions(data, page - 1, dpi=72.0 * render_scale)
+        # Off the event loop: frame and symbol recovery run OCR for seconds,
+        # and inline they stalled every other request meanwhile (health
+        # checks, scan-job polls).
+        result = await run_in_threadpool(
+            text_layer_regions, data, page - 1, dpi=72.0 * render_scale
+        )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")
     except Exception as error:  # a damaged or non-PDF upload
@@ -1180,7 +1185,8 @@ async def read_title_fields(
 
     raw = await file.read()
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    fields = get_pipeline().title_fields(image, wanted)
+    # Off the event loop: a whole-sheet read takes seconds of OCR.
+    fields = await run_in_threadpool(get_pipeline().title_fields, image, wanted)
 
     return {
         "fields": [

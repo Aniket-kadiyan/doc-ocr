@@ -1035,27 +1035,6 @@ export function DrawingViewer() {
         return { status: "failed" };
       }
 
-      // Scan a higher-resolution PDF render when available. Raster drawings
-      // use their original pixels; a non-current TIFF page is decoded here.
-      let scanCanvas = source;
-      let scanScale = 1;
-      if (pdfDoc) {
-        try {
-          const { canvas: hi } = await renderPdfPage(
-            pdfDoc,
-            scanPage,
-            OCR_RENDER_SCALE
-          );
-          scanCanvas = hi;
-          scanScale = OCR_RENDER_SCALE / PDF_RENDER_SCALE;
-        } catch {
-          scanCanvas = source;
-          scanScale = 1;
-        }
-      } else if (rasterFile && scanPage !== currentPage) {
-        scanCanvas = (await loadImageFile(rasterFile, scanPage)).canvas;
-      }
-
       const projectAtStart = projectIdRef.current;
       const scanRunId = uuidv4();
       const manageProcessing = options.manageProcessing ?? true;
@@ -1112,62 +1091,144 @@ export function DrawingViewer() {
             width: source.width,
             height: source.height,
           };
-          const textLayer = await readPdfTextLayer(
-            await (await fetch(sourceFile.dataUrl)).blob(),
-            scanPage,
-            pageBounds
-          );
-          if (textLayer.usable) {
-            const scoped =
-              scopeKind === "page"
-                ? textLayer.regions
-                : regionsWithin(textLayer.regions, bbox);
-            const live = useAnnotationStore.getState().annotations;
-            const kept = filterNewScanRegions(
-              scoped,
-              live,
-              scanPage,
-              undefined,
-              scopeKind
+          // The text-layer read is one request with no job behind it, so the
+          // banner is driven from here: without this it sat at "queued" 0%
+          // for the whole read and then jumped straight to done.
+          const textStartedAt = performance.now();
+          let textStepStartedAt = textStartedAt;
+          let textStep = {
+            stage: "recognizing",
+            message: "Reading the drawing's text, symbols and frames",
+            from: 5,
+            to: 85,
+          };
+          const showTextProgress = () => {
+            const now = performance.now();
+            const stepSeconds = (now - textStepStartedAt) / 1000;
+            // No count to report, so ease towards the step's end over the
+            // few seconds a vector page takes; the step's finish moves it on.
+            const eased = 1 - Math.exp(-stepSeconds / 6);
+            setScanProgress((current) =>
+              current && current.jobId === ""
+                ? {
+                    ...current,
+                    status: "running",
+                    stage: textStep.stage,
+                    message: sectionLabel
+                      ? sectionLabel + " · " + textStep.message
+                      : textStep.message,
+                    percent: Math.round(
+                      textStep.from + (textStep.to - textStep.from) * eased
+                    ),
+                    elapsedSeconds: Math.round((now - textStartedAt) / 1000),
+                    stepElapsedSeconds: Math.round(stepSeconds),
+                    heartbeatAgeSeconds: 0,
+                    progressAgeSeconds: 0,
+                    liveness: "working",
+                  }
+                : current
             );
-            const fromText = annotationsFromRegions(kept.accepted, scanPage);
-            // A vector PDF has a title block too. This branch returned before
-            // the title-field step, so on every drawing with a text layer the
-            // configured keywords were never read and their labels were
-            // missing from the drawing and the exports alike.
-            if (scopeKind === "page") {
-              fromText.push(
-                ...(await readTitleFieldAnnotations(source, scanPage, Date.now()))
-              );
-            }
-            if (fromText.length > 0) addAnnotations(fromText);
-            const textSummary: ScanCompletionSummary = {
-              scopeKind,
-              added: fromText.length,
-              detected: scoped.length,
-              recognized: scoped.length,
-              eligible: scoped.length,
-              excluded: 0,
-              // A value the text layer read exactly but could not say what
-              // it measures — a lone deviation, a number whose symbol the
-              // drawing drew rather than wrote — is ballooned and flagged.
-              reviewRequired: fromText.filter(
-                (annotation) => annotation.needsReview
-              ).length,
-              unread: 0,
-              skippedExisting: kept.skippedExisting,
-              skippedDuplicates: kept.skippedDuplicates,
-            };
-            setScanSummary(textSummary);
-            if (fromText.length === 0) {
-              setSelectionError(
+          };
+          const moveTextStep = (next: typeof textStep) => {
+            textStep = next;
+            textStepStartedAt = performance.now();
+            showTextProgress();
+          };
+          showTextProgress();
+          const textTicker = window.setInterval(showTextProgress, 1000);
+          try {
+            const textLayer = await readPdfTextLayer(
+              await (await fetch(sourceFile.dataUrl)).blob(),
+              scanPage,
+              pageBounds
+            );
+            // A scan falls through to the OCR job, which reports its own.
+            if (textLayer.usable) {
+              const scoped =
                 scopeKind === "page"
-                  ? "The drawing's text carries no values that are not already ballooned."
-                  : "No values were found in the selected section."
+                  ? textLayer.regions
+                  : regionsWithin(textLayer.regions, bbox);
+              const live = useAnnotationStore.getState().annotations;
+              const kept = filterNewScanRegions(
+                scoped,
+                live,
+                scanPage,
+                undefined,
+                scopeKind
               );
+              const fromText = annotationsFromRegions(kept.accepted, scanPage);
+              // A vector PDF has a title block too. This branch returned before
+              // the title-field step, so on every drawing with a text layer the
+              // configured keywords were never read and their labels were
+              // missing from the drawing and the exports alike.
+              if (scopeKind === "page") {
+                moveTextStep({
+                  stage: "context",
+                  message: "Reading title-block fields",
+                  from: 85,
+                  to: 97,
+                });
+                fromText.push(
+                  ...(await readTitleFieldAnnotations(
+                    source,
+                    scanPage,
+                    Date.now()
+                  ))
+                );
+              }
+              if (fromText.length > 0) addAnnotations(fromText);
+              const textSummary: ScanCompletionSummary = {
+                scopeKind,
+                added: fromText.length,
+                detected: scoped.length,
+                recognized: scoped.length,
+                eligible: scoped.length,
+                excluded: 0,
+                // A value the text layer read exactly but could not say what
+                // it measures — a lone deviation, a number whose symbol the
+                // drawing drew rather than wrote — is ballooned and flagged.
+                reviewRequired: fromText.filter(
+                  (annotation) => annotation.needsReview
+                ).length,
+                unread: 0,
+                skippedExisting: kept.skippedExisting,
+                skippedDuplicates: kept.skippedDuplicates,
+              };
+              setScanSummary(textSummary);
+              if (fromText.length === 0) {
+                setSelectionError(
+                  scopeKind === "page"
+                    ? "The drawing's text carries no values that are not already ballooned."
+                    : "No values were found in the selected section."
+                );
+              }
+              return { status: "succeeded", summary: textSummary };
             }
-            return { status: "succeeded", summary: textSummary };
+          } finally {
+            window.clearInterval(textTicker);
           }
+        }
+
+        // Scan a higher-resolution PDF render when available. Raster drawings
+        // use their original pixels; a non-current TIFF page is decoded here.
+        // Rendered only now: a vector page never needs it.
+        let scanCanvas = source;
+        let scanScale = 1;
+        if (pdfDoc) {
+          try {
+            const { canvas: hi } = await renderPdfPage(
+              pdfDoc,
+              scanPage,
+              OCR_RENDER_SCALE
+            );
+            scanCanvas = hi;
+            scanScale = OCR_RENDER_SCALE / PDF_RENDER_SCALE;
+          } catch {
+            scanCanvas = source;
+            scanScale = 1;
+          }
+        } else if (rasterFile && scanPage !== currentPage) {
+          scanCanvas = (await loadImageFile(rasterFile, scanPage)).canvas;
         }
         const scanResult = await runAutoBalloonScan({
           sourceCanvas: scanCanvas,
