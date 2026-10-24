@@ -53,7 +53,13 @@ import {
 } from "@/lib/referenceScanQueue";
 import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import { annotationsFromRegions } from "@/lib/scanAnnotations";
-import { readPdfTextLayer, regionsWithin } from "@/lib/pdfTextLayer";
+import {
+  planTextLayerRefinement,
+  readPdfTextLayer,
+  regionsWithin,
+  type PdfTextLayerResult,
+  type PlacedTextRegion,
+} from "@/lib/pdfTextLayer";
 import { titleFieldAnnotations } from "@/lib/labelRules";
 import { useClientOcr } from "@/hooks/useClientOcr";
 import {
@@ -225,6 +231,11 @@ export function DrawingViewer() {
   const sourceFileRef = useRef<ProjectSource | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const projectIdRef = useRef("");
+  /** Refined text-layer reads in flight, by project and page: the sections
+   * of one sheet share a single read instead of each starting their own. */
+  const textRefinementsRef = useRef(
+    new Map<string, Promise<PdfTextLayerResult>>()
+  );
 
   const [konvaImage, setKonvaImage] = useState<
     HTMLImageElement | HTMLCanvasElement | null
@@ -256,6 +267,8 @@ export function DrawingViewer() {
   // scan, the whole drawing for a page scan. Kept beside the overlay so the
   // two are always cleared together.
   const [scanScope, setScanScope] = useState<BBox | null>(null);
+  /** Refined text-layer reads still running behind already-placed balloons. */
+  const [textRefinements, setTextRefinements] = useState(0);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
   const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
@@ -837,6 +850,15 @@ export function DrawingViewer() {
     [annotations, currentPage, setCurrentPage]
   );
 
+  // A click on the drawing opens the same editor as a click on the sidebar row.
+  const handleOpen = useCallback(
+    (id: string) => {
+      handleSelect(id);
+      setEditingValueId(id);
+    },
+    [handleSelect, setEditingValueId]
+  );
+
   // Clear the local selection with the deleted value so the remaining balloons
   // do not stay dimmed against an id that no longer exists.
   const handleDelete = useCallback(
@@ -1018,6 +1040,83 @@ export function DrawingViewer() {
     [currentPage, setPending, setIsDrawingValue, setIsProcessing]
   );
 
+  // The fast text-layer read balloons a vector page in well under a second;
+  // this brings in what it left out — feature control frames, marks the
+  // drawing drew rather than wrote — without holding the page up for it.
+  const refineTextLayerScan = useCallback(
+    async ({
+      file,
+      page,
+      pageBounds,
+      scope,
+      scopeKind,
+      projectAtStart,
+      placed,
+      fastIds,
+    }: {
+      file: Blob;
+      page: number;
+      pageBounds: BBox;
+      scope: BBox;
+      scopeKind: ScanScopeKind;
+      projectAtStart: string;
+      placed: Map<string, PlacedTextRegion>;
+      fastIds: Set<string>;
+    }) => {
+      const key = projectAtStart + ":" + page;
+      let read = textRefinementsRef.current.get(key);
+      if (!read) {
+        read = readPdfTextLayer(file, page, pageBounds, { refine: true });
+        textRefinementsRef.current.set(key, read);
+        void read.finally(() => textRefinementsRef.current.delete(key));
+      }
+      setTextRefinements((count) => count + 1);
+      try {
+        const refined = await read;
+        if (!refined.usable || projectIdRef.current !== projectAtStart) return;
+        const scoped =
+          scopeKind === "page"
+            ? refined.regions
+            : regionsWithin(refined.regions, scope);
+        const plan = planTextLayerRefinement(
+          placed,
+          fastIds,
+          scoped,
+          useAnnotationStore.getState().annotations
+        );
+        // Removals first: a frame lands where the values it absorbed were,
+        // and would otherwise be skipped as already ballooned.
+        for (const id of plan.remove) removeAnnotation(id);
+        for (const { id, region } of plan.update) {
+          const [reread] = annotationsFromRegions([region], page);
+          updateAnnotation(id, {
+            value: reread.value,
+            label: reread.label,
+            type: reread.type,
+            confidence: reread.confidence,
+            bbox: reread.bbox,
+            rotation: reread.rotation,
+            needsReview: reread.needsReview,
+            range: reread.range,
+          });
+        }
+        const kept = filterNewScanRegions(
+          plan.add,
+          useAnnotationStore.getState().annotations,
+          page,
+          undefined,
+          scopeKind
+        );
+        if (kept.accepted.length > 0) {
+          addAnnotations(annotationsFromRegions(kept.accepted, page));
+        }
+      } finally {
+        setTextRefinements((count) => count - 1);
+      }
+    },
+    [addAnnotations, removeAnnotation, updateAnnotation]
+  );
+
   const runAutoBalloon = useCallback(
     async (
       bbox: BBox,
@@ -1095,18 +1194,17 @@ export function DrawingViewer() {
           // banner is driven from here: without this it sat at "queued" 0%
           // for the whole read and then jumped straight to done.
           const textStartedAt = performance.now();
-          let textStepStartedAt = textStartedAt;
-          let textStep = {
+          const textStep = {
             stage: "recognizing",
             message: "Reading the drawing's text, symbols and frames",
             from: 5,
-            to: 85,
+            to: 97,
           };
           const showTextProgress = () => {
             const now = performance.now();
-            const stepSeconds = (now - textStepStartedAt) / 1000;
+            const stepSeconds = (now - textStartedAt) / 1000;
             // No count to report, so ease towards the step's end over the
-            // few seconds a vector page takes; the step's finish moves it on.
+            // few seconds a vector page takes.
             const eased = 1 - Math.exp(-stepSeconds / 6);
             setScanProgress((current) =>
               current && current.jobId === ""
@@ -1129,18 +1227,15 @@ export function DrawingViewer() {
                 : current
             );
           };
-          const moveTextStep = (next: typeof textStep) => {
-            textStep = next;
-            textStepStartedAt = performance.now();
-            showTextProgress();
-          };
           showTextProgress();
           const textTicker = window.setInterval(showTextProgress, 1000);
           try {
+            const pdfBlob = await (await fetch(sourceFile.dataUrl)).blob();
             const textLayer = await readPdfTextLayer(
-              await (await fetch(sourceFile.dataUrl)).blob(),
+              pdfBlob,
               scanPage,
-              pageBounds
+              pageBounds,
+              { refine: false }
             );
             // A scan falls through to the OCR job, which reports its own.
             if (textLayer.usable) {
@@ -1160,23 +1255,48 @@ export function DrawingViewer() {
               // A vector PDF has a title block too. This branch returned before
               // the title-field step, so on every drawing with a text layer the
               // configured keywords were never read and their labels were
-              // missing from the drawing and the exports alike.
+              // missing from the drawing and the exports alike. The fields
+              // come back with the text layer itself: the OCR title-field
+              // read cost 20-40s here and misread the sheets it was used on.
               if (scopeKind === "page") {
-                moveTextStep({
-                  stage: "context",
-                  message: "Reading title-block fields",
-                  from: 85,
-                  to: 97,
-                });
                 fromText.push(
-                  ...(await readTitleFieldAnnotations(
-                    source,
+                  ...titleFieldAnnotations(
+                    textLayer.titleFields,
+                    useAnnotationStore.getState().annotations,
                     scanPage,
-                    Date.now()
-                  ))
+                    Date.now(),
+                    uuidv4
+                  )
                 );
               }
               if (fromText.length > 0) addAnnotations(fromText);
+              // annotationsFromRegions keeps the order it was given, so the
+              // first balloons are the accepted regions, one for one.
+              const placed = new Map<string, PlacedTextRegion>();
+              kept.accepted.forEach((region, index) => {
+                const balloon = fromText[index];
+                if (region.candidateId) {
+                  placed.set(region.candidateId, {
+                    annotationId: balloon.id,
+                    value: balloon.value,
+                    bbox: balloon.bbox,
+                  });
+                }
+              });
+              void refineTextLayerScan({
+                file: pdfBlob,
+                page: scanPage,
+                pageBounds,
+                scope: bbox,
+                scopeKind,
+                projectAtStart,
+                placed,
+                fastIds: new Set(
+                  textLayer.regions.flatMap((region) =>
+                    region.candidateId ? [region.candidateId] : []
+                  )
+                ),
+              });
               const textSummary: ScanCompletionSummary = {
                 scopeKind,
                 added: fromText.length,
@@ -1431,6 +1551,7 @@ export function DrawingViewer() {
     },
     [
       addAnnotations,
+      refineTextLayerScan,
       replaceScanCandidates,
       setIsProcessing,
       setIsSegmenting,
@@ -2091,6 +2212,11 @@ export function DrawingViewer() {
           onStop={() => void stopActiveScan()}
         />
       )}
+      {textRefinements > 0 && (
+        <div className="bg-sky-50 px-4 py-1.5 text-center text-xs text-sky-900">
+          Values are placed · still reading GD&amp;T frames and drawn symbols…
+        </div>
+      )}
       {lastDebugDump && (
         <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
           OCR debug: {lastDebugDump}
@@ -2325,7 +2451,7 @@ export function DrawingViewer() {
                               : 1
                           }
                           listening={!drawingActive}
-                          onClick={() => handleSelect(ann.id)}
+                          onClick={() => handleOpen(ann.id)}
                         />
                       );
                     })}
@@ -2436,7 +2562,7 @@ export function DrawingViewer() {
                           selectedScanCandidateId !== null
                         }
                         listening={!drawingActive}
-                        onSelect={handleSelect}
+                        onSelect={handleOpen}
                       />
                     ))}
                   </Layer>
@@ -2490,10 +2616,7 @@ export function DrawingViewer() {
           onMetadataChange={handleMetadataChange}
           onMetadataSelect={handleMetadataSelect}
           onMetadataClear={handleMetadataClear}
-          onEdit={(id) => {
-            handleSelect(id);
-            setEditingValueId(id);
-          }}
+          onEdit={handleOpen}
         />
       </div>
 

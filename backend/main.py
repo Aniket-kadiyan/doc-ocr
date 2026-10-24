@@ -1107,6 +1107,17 @@ async def read_pdf_text_layer(
             "pixels its annotations already use"
         ),
     ),
+    keywords: str = Form(
+        "",
+        description="Comma-separated title-block labels, e.g. 'DWG,REV'",
+    ),
+    refine: bool = Form(
+        True,
+        description=(
+            "False returns the fast read: no per-item OCR for drawn marks, "
+            "feature control frames or pasted pictures"
+        ),
+    ),
 ) -> dict[str, Any]:
     """
     Read one page's callouts from the PDF's own text layer.
@@ -1116,7 +1127,7 @@ async def read_pdf_text_layer(
     about three orders of magnitude faster. ``usable`` is False for a raster
     scan, which is the signal to run the ordinary scan instead.
     """
-    from pdf_text_layer import text_layer_regions
+    from pdf_text_layer import native_title_fields, text_layer_regions
 
     if page < 1:
         raise HTTPException(status_code=400, detail="page must be 1 or greater")
@@ -1132,7 +1143,11 @@ async def read_pdf_text_layer(
         # and inline they stalled every other request meanwhile (health
         # checks, scan-job polls).
         result = await run_in_threadpool(
-            text_layer_regions, data, page - 1, dpi=72.0 * render_scale
+            text_layer_regions,
+            data,
+            page - 1,
+            dpi=72.0 * render_scale,
+            refine=refine,
         )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")
@@ -1140,6 +1155,15 @@ async def read_pdf_text_layer(
         raise HTTPException(
             status_code=400, detail=f"Could not read the PDF text layer: {error}"
         )
+
+    # The title block is text too: read here in milliseconds, it spares the
+    # client the OCR /ocr/title-fields round trip (tens of seconds a page).
+    wanted = [k.strip() for k in keywords.split(",") if k.strip()]
+    title_fields = (
+        native_title_fields(data, page - 1, wanted, dpi=72.0 * render_scale)
+        if result["usable"] and wanted
+        else []
+    )
 
     width, height = result["page_size"]
     serialized = _serialize_segment_result(
@@ -1162,6 +1186,8 @@ async def read_pdf_text_layer(
         # Prose the page carries that is not a note (view labels, table and
         # title-block text), with the reason, so nothing read is unaccounted.
         "text_blocks": result.get("text_blocks", []),
+        "title_fields": _serialize_title_fields(title_fields),
+        "refined": refine,
     }
 
 
@@ -1188,27 +1214,29 @@ async def read_title_fields(
     # Off the event loop: a whole-sheet read takes seconds of OCR.
     fields = await run_in_threadpool(get_pipeline().title_fields, image, wanted)
 
-    return {
-        "fields": [
-            {
-                "keyword": f["keyword"],
-                "label": f["label"],
-                "value": f["value"],
-                "confidence": f["confidence"],
-                "bbox": (
-                    {
-                        "x": round(f["bbox"]["x"], 1),
-                        "y": round(f["bbox"]["y"], 1),
-                        "width": round(f["bbox"]["w"], 1),
-                        "height": round(f["bbox"]["h"], 1),
-                    }
-                    if f["bbox"]
-                    else None
-                ),
-            }
-            for f in fields
-        ]
-    }
+    return {"fields": _serialize_title_fields(fields)}
+
+
+def _serialize_title_fields(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "keyword": f["keyword"],
+            "label": f["label"],
+            "value": f["value"],
+            "confidence": f["confidence"],
+            "bbox": (
+                {
+                    "x": round(f["bbox"]["x"], 1),
+                    "y": round(f["bbox"]["y"], 1),
+                    "width": round(f["bbox"]["w"], 1),
+                    "height": round(f["bbox"]["h"], 1),
+                }
+                if f["bbox"]
+                else None
+            ),
+        }
+        for f in fields
+    ]
 
 
 @app.post("/training/export-labels", dependencies=protected_request)

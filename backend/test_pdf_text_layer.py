@@ -20,8 +20,10 @@ from pdf_text_layer import (
     rescue_geometry_marks,
     _decode_symbols,
     _join_runs,
+    _title_line_boxes,
     group_runs,
     has_usable_text_layer,
+    native_title_fields,
     page_text_runs,
     text_layer_regions,
 )
@@ -605,3 +607,40 @@ def test_a_picture_on_a_vector_page_is_read_for_the_notes_inside_it(monkeypatch)
     seen.clear()
     assert _image_area_notes(covered, 0, page_text_runs(covered, 0, dpi=144)[0], dpi=144) == []
     assert seen == []
+
+
+def test_title_line_boxes_join_a_label_split_into_words():
+    # "Drawing" and "nr.:" are two runs; seen right-to-left they must still
+    # join, or the matcher reads "nr.:" as the drawing number.
+    lines = _title_line_boxes(
+        [
+            run("nr.:", 659, 1158, 16, 6),
+            run("Drawing", 613, 1156, 40, 10),
+            run("BS1801006.020", 720, 1156, 80, 10),
+        ]
+    )
+    assert [line["text"] for line in lines] == ["Drawing nr.:", "BS1801006.020"]
+
+
+@pytest.mark.skipif(not CROWDED.exists(), reason="sample drawing not present")
+def test_native_title_fields_read_the_revision_from_the_text_layer():
+    fields = native_title_fields(str(CROWDED), 0, ["REV"], dpi=108.0)
+    assert [(field["label"], field["value"]) for field in fields] == [("Rev.", "R2")]
+
+
+@pytest.mark.skipif(not SYMBOLS_AS_GEOMETRY.exists(), reason="sample drawing not present")
+def test_fast_read_shares_region_ids_with_the_refined_one():
+    data = SYMBOLS_AS_GEOMETRY.read_bytes()
+    fast = text_layer_regions(data, 0, dpi=108.0, refine=False)["regions"]
+    full = text_layer_regions(data, 0, dpi=108.0)["regions"]
+
+    fast_ids = [region["candidate_id"] for region in fast]
+    full_ids = [region["candidate_id"] for region in full]
+    assert len(set(fast_ids)) == len(fast_ids)
+    assert len(set(full_ids)) == len(full_ids)
+    # The refined read only adds frames; everything else it matches by id.
+    assert all(
+        candidate in fast_ids for candidate in full_ids if not candidate.startswith("fcf-")
+    )
+    assert any(candidate.startswith("fcf-") for candidate in full_ids)
+    assert not any(candidate.startswith("fcf-") for candidate in fast_ids)

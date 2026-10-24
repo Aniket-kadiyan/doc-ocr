@@ -779,6 +779,74 @@ def _prefix_zone(
     return crop.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor="white")
 
 
+def _title_line_boxes(runs: list[TextRun]) -> list[dict[str, Any]]:
+    """
+    Horizontal runs merged into the line boxes the title-field matcher expects.
+
+    The text layer splits a label into words ("Drawing" "nr.:") where the OCR
+    detector returned one box per line, and the matcher pairs whole labels
+    with their values. Words merge while they share a line and sit within
+    about a character height of each other; a wider gap is the next cell.
+    """
+    level = sorted(
+        (run for run in runs if abs(run.angle) < 1.0 and run.text.strip()),
+        # Left to right: a merge only ever extends a line rightward, so a word
+        # seen before its left neighbour ("nr.:" ahead of "Drawing") would
+        # never join it.
+        key=lambda run: (run.x, run.y),
+    )
+    lines: list[dict[str, Any]] = []
+    for run in level:
+        for line in lines:
+            top = max(line["y"], run.y)
+            bottom = min(line["y"] + line["h"], run.y + run.height)
+            shorter = max(min(line["h"], run.height), 1.0)
+            taller = max(line["h"], run.height)
+            gap = run.x - (line["x"] + line["w"])
+            if (bottom - top) / shorter >= 0.5 and -0.2 * taller <= gap <= 0.8 * taller:
+                right = max(line["x"] + line["w"], run.x + run.width)
+                bottom = max(line["y"] + line["h"], run.y + run.height)
+                line["text"] += " " + run.text.strip()
+                line["y"] = min(line["y"], run.y)
+                line["w"] = right - line["x"]
+                line["h"] = bottom - line["y"]
+                break
+        else:
+            lines.append(
+                {
+                    "text": run.text.strip(),
+                    "x": run.x,
+                    "y": run.y,
+                    "w": run.width,
+                    "h": run.height,
+                    "conf": 1.0,
+                }
+            )
+    return lines
+
+
+def native_title_fields(
+    pdf: Any,
+    page_index: int,
+    keywords: list[str],
+    *,
+    dpi: float = 250.0,
+) -> list[dict[str, Any]]:
+    """
+    Read the configured title-block fields from the page's text layer.
+
+    The OCR route read the sheet corner twice over for tens of seconds and on
+    vector sheets still misread it ("REVISIONS" split into REV "ISIONS");
+    the text is already here, exact, in milliseconds.
+    """
+    from title_fields import extract_title_fields
+
+    if not keywords:
+        return []
+    runs, _size, _fonts = page_text_runs(pdf, page_index, dpi=dpi)
+    return extract_title_fields(_title_line_boxes(runs), keywords)
+
+
 def _render_page(pdf: Any, page_index: int, dpi: float) -> Any:
     document = pdf if isinstance(pdf, pdfium.PdfDocument) else pdfium.PdfDocument(pdf)
     return document[page_index].render(scale=dpi / 72.0).to_pil().convert("RGB")
@@ -790,6 +858,7 @@ def text_layer_regions(
     *,
     dpi: float = 250.0,
     recover_symbols: bool = True,
+    refine: bool = True,
 ) -> dict[str, Any]:
     """
     Read one page's callouts from its text layer.
@@ -798,6 +867,13 @@ def text_layer_regions(
     and balloons them without knowing which route produced them. ``usable``
     is False when the page carries no text worth trusting, which is the
     signal to fall back to a scan.
+
+    ``refine=False`` skips the passes that run OCR per item — the drawn-mark
+    rescue of bare numbers, feature control frames and pictures pasted into
+    the page — which cost 1-15s of a page that is otherwise read in well
+    under one. The client balloons that fast read first and then asks for
+    the refined one. Every region carries a ``candidate_id`` that is the same
+    in both reads, so the second can be matched to the first.
     """
     from dimension_compose import compose_engineering_dimension
     from feature_classifier import classify_feature
@@ -828,10 +904,12 @@ def text_layer_regions(
     note_regions, text_blocks, consumed, page_image = _native_note_regions(
         pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
     )
+    for index, note in enumerate(note_regions):
+        note.setdefault("candidate_id", f"tl-note-{index}")
     regions.extend(note_regions)
     callout_runs = [run for index, run in enumerate(runs) if index not in consumed]
 
-    for group in group_runs(callout_runs, size):
+    for group_index, group in enumerate(group_runs(callout_runs, size)):
         raw = group["text"]
         composed = compose_engineering_dimension(raw, None, DetectedSymbols())
         text = (composed.text or "").strip() or raw.strip()
@@ -879,7 +957,7 @@ def text_layer_regions(
             excluded.append({"text": text, "bbox": bbox})
             continue
         review = is_bare_number(text)
-        if review and recover_symbols:
+        if review and recover_symbols and refine:
             # A number with no mark has probably lost one the drawing drew
             # instead of writing: "1 × 45°" reaches the text layer as "1" and
             # "45" with nothing between them. Reading that ink recovers the
@@ -923,6 +1001,7 @@ def text_layer_regions(
         feature = classify_feature(text)
         upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
         region = {
+            "candidate_id": f"tl-{group_index}",
             "bbox": bbox,
             "text": text,
             "confidence": 1.0,
@@ -947,14 +1026,16 @@ def text_layer_regions(
     # "0.2", which was published as a plain linear dimension. Frames are found
     # on the rendered page and read the way a scan reads them, and absorb the
     # bare values inside them.
-    if recover_symbols:
+    if recover_symbols and refine:
         regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
 
     # A mixed page: vector text over an embedded picture that carries text of
     # its own (a pasted scan of a notes block, a raster title block). The
     # text layer cannot see inside the picture, so only those areas are read.
-    if recover_symbols:
+    if recover_symbols and refine:
         image_notes = _image_area_notes(pdf, page_index, runs, dpi)
+        for index, note in enumerate(image_notes):
+            note.setdefault("candidate_id", f"tl-image-{index}")
         regions.extend(image_notes)
 
     return {

@@ -71,6 +71,19 @@ describe("tolerance export validation", () => {
 
     expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);
   });
+
+  it("accepts a stacked deviation pair carried only in Value", () => {
+    const annotations = [
+      makeAnnotation({ id: "zero-lower", value: "Ø8+0.2/0", range: undefined }),
+      makeAnnotation({ id: "unsigned-lower", value: "Ø8+0.2/0.2", range: undefined }),
+      makeAnnotation({ id: "signed-lower", value: "21+1/-0.5", range: undefined }),
+      makeAnnotation({ id: "both-below", value: "Ø8-0.1/-0.2", range: undefined }),
+    ];
+
+    expect(
+      findMalformedToleranceAnnotations(annotations).map(({ id }) => id)
+    ).toEqual(["both-below"]);
+  });
 });
 
 describe("inspection exports", () => {

@@ -63,6 +63,35 @@ function angularToleranceDegrees(text: string): number | null {
 }
 
 /**
+ * The tolerance of a stacked deviation pair, "+0.2/0" or "+0.2/-0.1", as
+ * "+0.2, -0" / "+0.2, -0.1"; "" when `value` does not end in one.
+ *
+ * Both routes publish a drawing's upper and lower deviation, set one over
+ * the other, as "upper/lower" after the nominal ("Ø8+0.2/0", "21+1/0").
+ * A lower deviation printed without a sign is taken as negative: a drawn
+ * minus is lost from the text layer, and a positive lower limit equal to or
+ * above a "+" upper one is no tolerance zone at all. A pair the "+a, -b"
+ * field cannot hold (both limits below the nominal) is left unparsed, so
+ * export validation still blocks it.
+ */
+export function stackedDeviationRange(value: string): string {
+  const pair = new RegExp(
+    `([+-]?)\\s*(${TOLERANCE_NUMBER})\\s*°?\\s*/\\s*` +
+      `([+-]?)\\s*(${TOLERANCE_NUMBER})\\s*°?\\s*$`
+  ).exec(value);
+  if (!pair || pair.index == null) return "";
+  // The pair qualifies a number: "1/1" on a sheet count is not a tolerance.
+  if (!/\d\s*°?\s*$/.test(value.slice(0, pair.index))) return "";
+
+  const upper = Number(pair[2]);
+  const lower = Number(pair[4]);
+  // An unsigned upper limit is a fraction ("3/8"), not a deviation.
+  if (pair[1] !== "+" && upper !== 0) return "";
+  if (pair[3] === "+" && lower !== 0) return "";
+  return `+${formatTolerance(upper)}, -${formatTolerance(lower)}`;
+}
+
+/**
  * Derive the editable Tolerance field from Value.
  *
  * - complete ± decimal/DMS tolerances are normalized to decimal values;
@@ -86,6 +115,9 @@ export function deriveRange(value: string): string {
     return `+${formatTolerance(Number(asymmetricMatch[1]))}, ` +
       `-${formatTolerance(Number(asymmetricMatch[2]))}`;
   }
+
+  const stacked = stackedDeviationRange(value);
+  if (stacked) return stacked;
 
   const nominal = new RegExp(`[-+]?${TOLERANCE_NUMBER}`).exec(value);
   if (!nominal || nominal.index == null) return "";

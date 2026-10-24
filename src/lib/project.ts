@@ -4,6 +4,7 @@ import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { titleFieldFor } from "@/lib/labelRules";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import { stackedDeviationRange } from "@/lib/valueFields";
 import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
@@ -104,6 +105,11 @@ export function toleranceForExport(
   if (lower) return `+0, -${lower[1]}`;
 
   if (trimmed) return original;
+
+  // "Ø8+0.2/0": balloons placed before the Tolerance field understood a
+  // stacked pair still carry it only in Value.
+  const stacked = stackedDeviationRange(value ?? "");
+  if (stacked) return stacked;
 
   const embedded = new RegExp(
     String.raw`([+-])\s*(${EXPORT_TOLERANCE_NUMBER})\s*$`
