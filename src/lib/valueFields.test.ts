@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveRange, stackedDeviationRange } from "@/lib/valueFields";
+import {
+  deriveRange,
+  singleDeviationRange,
+  stackedDeviationRange,
+} from "@/lib/valueFields";
 
 describe("deriveRange", () => {
   it("defaults a plain numeric value to zero tolerance", () => {
@@ -42,5 +46,24 @@ describe("stackedDeviationRange", () => {
     expect(stackedDeviationRange("1 3/8")).toBe("");
     expect(stackedDeviationRange("Ø8-0.1/-0.2")).toBe("");
     expect(stackedDeviationRange("Ø8+0.2/+0.1")).toBe("");
+  });
+});
+
+describe("singleDeviationRange", () => {
+  it("takes the nominal as the other limit of a one-sided deviation", () => {
+    expect(deriveRange("Ø37.65+0.01")).toBe("+0.01, -0");
+    expect(deriveRange("*Ø37.65+0.01")).toBe("+0.01, -0");
+    expect(deriveRange("*Ø33.21-0.01")).toBe("+0, -0.01");
+    expect(deriveRange("R0.6 -0.1")).toBe("+0, -0.1");
+    // The count printed after it is not part of the tolerance.
+    expect(deriveRange("R0.3+0.05(34x)")).toBe("+0.05, -0");
+  });
+
+  it("leaves what is not one deviation after a nominal", () => {
+    expect(singleDeviationRange("+0.5")).toBe("");
+    expect(singleDeviationRange("R-5")).toBe("");
+    expect(singleDeviationRange("25 +0.1 +0.2")).toBe("");
+    expect(deriveRange("25 +0.1 +0.2")).toBe("");
+    expect(deriveRange("●Ø37.50")).toBe("0");
   });
 });

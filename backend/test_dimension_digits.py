@@ -98,3 +98,22 @@ def test_glued_values_that_are_not_limits_keep_their_old_reading(glued: str, exp
     from dimension_digits import normalize_cad_number_string
 
     assert normalize_cad_number_string(glued) == expected
+
+
+@pytest.mark.parametrize(
+    "angle",
+    ["90°±0°30'", "6×60°±0°30'", "45°±5°0'", "(8×33°45')"],
+)
+def test_a_toleranced_angle_keeps_its_minute_mark(angle: str) -> None:
+    # Only a bare DMS triple used to keep its ticks; "90°±0°30'" came out as
+    # "90°±0°30", which the check sheet cannot turn into a range.
+    from dimension_digits import normalize_cad_number_string
+
+    assert normalize_cad_number_string(angle) == angle
+
+
+def test_a_stray_tick_is_still_dropped() -> None:
+    from dimension_digits import normalize_cad_number_string
+
+    assert normalize_cad_number_string("Ø37.5'") == "Ø37.5"
+    assert normalize_cad_number_string("'45°") == "45°"

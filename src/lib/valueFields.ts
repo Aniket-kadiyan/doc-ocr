@@ -92,6 +92,33 @@ export function stackedDeviationRange(value: string): string {
 }
 
 /**
+ * A single deviation after the nominal, "Ø37.65+0.01" or "R0.6-0.1", as
+ * "+0.01, -0" / "+0, -0.1"; "" when `value` carries no such deviation.
+ *
+ * The other limit is the nominal itself, the reading project.ts already
+ * gives a balloon whose Value carries one. A count printed after it
+ * ("R0.3+0.05 (34x)") is not part of the tolerance.
+ */
+export function singleDeviationRange(value: string): string {
+  const text = value.replace(/\s*\(\s*\d+\s*[x×]\s*\)\s*$/i, "");
+  const deviation = new RegExp(
+    `([+-])\\s*(${TOLERANCE_NUMBER})\\s*°?\\s*$`
+  ).exec(text);
+  if (!deviation || deviation.index == null) return "";
+  const specification = text.slice(0, deviation.index);
+  // It qualifies a number, and is the only sign after it: "25 +0.1 +0.2"
+  // is malformed, and a negative nominal ("R-5") is not a deviation.
+  if (!/\d\s*°?\s*$/.test(specification)) return "";
+  const nominal = new RegExp(TOLERANCE_NUMBER).exec(specification);
+  if (!nominal || nominal.index == null) return "";
+  if (/[±+-]/.test(specification.slice(nominal.index + nominal[0].length))) {
+    return "";
+  }
+  const amount = formatTolerance(Number(deviation[2]));
+  return deviation[1] === "+" ? `+${amount}, -0` : `+0, -${amount}`;
+}
+
+/**
  * Derive the editable Tolerance field from Value.
  *
  * - complete ± decimal/DMS tolerances are normalized to decimal values;
@@ -118,6 +145,9 @@ export function deriveRange(value: string): string {
 
   const stacked = stackedDeviationRange(value);
   if (stacked) return stacked;
+
+  const single = singleDeviationRange(value);
+  if (single) return single;
 
   const nominal = new RegExp(`[-+]?${TOLERANCE_NUMBER}`).exec(value);
   if (!nominal || nominal.index == null) return "";
