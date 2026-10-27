@@ -1032,6 +1032,7 @@ def text_layer_regions(
     dpi: float = 250.0,
     recover_symbols: bool = True,
     refine: bool = True,
+    read_frames: bool = True,
 ) -> dict[str, Any]:
     """
     Read one page's callouts from its text layer.
@@ -1047,6 +1048,10 @@ def text_layer_regions(
     under one. The client balloons that fast read first and then asks for
     the refined one. Every region carries a ``candidate_id`` that is the same
     in both reads, so the second can be matched to the first.
+
+    ``read_frames=False`` leaves feature control frames out of the refined
+    read; their bare tolerance values are then published as text-layer
+    callouts like any other.
     """
     from dimension_compose import compose_engineering_dimension
     from feature_classifier import classify_feature
@@ -1214,7 +1219,7 @@ def text_layer_regions(
     # "0.2", which was published as a plain linear dimension. Frames are found
     # on the rendered page and read the way a scan reads them, and absorb the
     # bare values inside them.
-    if recover_symbols and refine:
+    if recover_symbols and refine and read_frames:
         regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
 
     # A mixed page: vector text over an embedded picture that carries text of

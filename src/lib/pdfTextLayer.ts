@@ -5,6 +5,7 @@ import {
   type TitleField,
 } from "@/lib/paddleOcrClient";
 import { PDF_RENDER_SCALE } from "@/lib/pdfLoader";
+import { isGdtScanEnabled } from "@/lib/scanSettings";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { fetchWithRequestId } from "@/lib/requestDiagnostics";
 import type { Annotation, BBox } from "@/types/annotation";
@@ -58,6 +59,7 @@ export async function readPdfTextLayer(
   form.append("page", String(page));
   form.append("render_scale", String(PDF_RENDER_SCALE));
   form.append("refine", String(refine));
+  form.append("gdt", String(isGdtScanEnabled()));
   if (!refine) form.append("keywords", getTitleKeywords().join(","));
 
   let response: Response;

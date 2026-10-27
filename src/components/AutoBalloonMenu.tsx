@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  SCAN_SETTINGS_EVENT,
+  isGdtScanEnabled,
+  setGdtScanEnabled,
+} from "@/lib/scanSettings";
 
 interface AutoBalloonMenuProps {
   disabled: boolean;
@@ -18,7 +23,15 @@ export function AutoBalloonMenu({
   onScanWholePage,
 }: AutoBalloonMenuProps) {
   const [open, setOpen] = useState(false);
+  const [readGdt, setReadGdt] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sync = () => setReadGdt(isGdtScanEnabled());
+    sync();
+    window.addEventListener(SCAN_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(SCAN_SETTINGS_EVENT, sync);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -76,6 +89,21 @@ export function AutoBalloonMenu({
               Scan the page, and read its X/Y/Z point table
             </span>
           </button>
+          <label className="flex cursor-pointer items-start gap-2 border-t border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={readGdt}
+              onChange={(event) => setGdtScanEnabled(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-emerald-600"
+            />
+            <span>
+              <span className="font-medium">Read GD&amp;T frames</span>
+              <span className="block text-[11px] text-slate-400">
+                Turn off for a faster scan (3–20 s less a page). Frames can
+                still be read later with GD&amp;T Symbols.
+              </span>
+            </span>
+          </label>
         </div>
       )}
     </div>

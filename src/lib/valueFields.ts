@@ -48,6 +48,16 @@ function angularToleranceDegrees(text: string): number | null {
   );
   if (decimalMatch) return Number(decimalMatch[1]);
 
+  // "0°30": the text layer drops the minute mark; after a degree mark a bare
+  // number can only be minutes (half a degree would read "0.5°").
+  const minutesMatch = new RegExp(
+    `^(${TOLERANCE_NUMBER})\\s*°\\s*(${TOLERANCE_NUMBER})$`
+  ).exec(normalized);
+  if (minutesMatch) {
+    const minutes = Number(minutesMatch[2]);
+    return minutes < 60 ? Number(minutesMatch[1]) + minutes / 60 : null;
+  }
+
   const dmsMatch = new RegExp(
     `^(?:(${TOLERANCE_NUMBER})\\s*°\\s*)?` +
       `(?:(${TOLERANCE_NUMBER})\\s*[′'])?\\s*` +
@@ -119,6 +129,44 @@ export function singleDeviationRange(value: string): string {
 }
 
 /**
+ * `value` without the callout text around a tolerance that only looks like
+ * one: a count ("2-Ø6", "4X M5", "(2X)", "2 PLCS"), a TYP note, a dual-unit
+ * reading ("[.590]"), a thread class ("M8x1.25-6g") and the parentheses
+ * round a fit's deviation ("H7 (+0.015/0)").
+ */
+export function toleranceSpecification(value: string): string {
+  let text = value.trim();
+  for (;;) {
+    const next = text
+      .replace(/\s*\[[^\]]*\]$/, "")
+      .replace(/\s*\(\s*\d+\s*[x×]\s*\)$/i, "")
+      .replace(/\s+\d+\s*(?:[x×]|plcs?\.?|places)$/i, "")
+      .replace(/\s+typ\.?$/i, "")
+      .trim();
+    if (next === text) break;
+    text = next;
+  }
+  return text
+    .replace(/^\d+\s*(?:[x×]|-|plcs?\.?)\s*(?=[^\d\s.+-])/i, "")
+    .replace(
+      /(M\s*\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)?)\s*-\s*\d[a-h](?:\d[a-h])?\b/gi,
+      "$1"
+    )
+    .replace(/\s*\(\s*([+-][^()]*?)\s*\)$/, " $1");
+}
+
+/**
+ * Whether `value` carries a sign that reads as a tolerance: one after its
+ * nominal, or any sign when it has no number at all.
+ */
+export function hasToleranceIntent(value: string): boolean {
+  const text = toleranceSpecification(value);
+  const nominal = /[-+]?\d+(?:\.\d+)?/.exec(text);
+  if (!nominal || nominal.index == null) return /[±+-]/.test(text);
+  return /[±+-]/.test(text.slice(nominal.index + nominal[0].length));
+}
+
+/**
  * Derive the editable Tolerance field from Value.
  *
  * - complete ± decimal/DMS tolerances are normalized to decimal values;
@@ -127,7 +175,8 @@ export function singleDeviationRange(value: string): string {
  * - malformed/incomplete tolerance intent stays empty so export validation can
  *   block it rather than silently treating it as zero.
  */
-export function deriveRange(value: string): string {
+export function deriveRange(rawValue: string): string {
+  const value = toleranceSpecification(rawValue);
   const idx = value.indexOf("±");
   if (idx !== -1) {
     const tolerance = angularToleranceDegrees(value.slice(idx + 1));

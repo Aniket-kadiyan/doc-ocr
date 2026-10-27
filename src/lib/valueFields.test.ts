@@ -23,8 +23,22 @@ describe("deriveRange", () => {
     );
   });
 
+  it("reads minutes whose mark the text layer dropped", () => {
+    expect(deriveRange("60°±0°30")).toBe("+0.5, -0.5");
+  });
+
+  it("ignores counts, notes, dual units and thread classes around a tolerance", () => {
+    expect(deriveRange("M54×1.5-6H")).toBe("0");
+    expect(deriveRange("4X M5-6H")).toBe("0");
+    expect(deriveRange("2-Ø6")).toBe("0");
+    expect(deriveRange("10±0.1 (2X)")).toBe("+0.1, -0.1");
+    expect(deriveRange("3.2 ±0.1 2PLCS")).toBe("+0.1, -0.1");
+    expect(deriveRange("14.99±0.1[.590]")).toBe("+0.1, -0.1");
+    expect(deriveRange("Ø10 H7 (+0.015/0)")).toBe("+0.015, -0");
+  });
+
   it("leaves incomplete or malformed tolerance intent empty", () => {
-    expect(deriveRange("90°±0°30")).toBe("");
+    expect(deriveRange("90°±")).toBe("");
     expect(deriveRange("25 ±")).toBe("");
     expect(deriveRange("25 +0.1 +0.2")).toBe("");
   });

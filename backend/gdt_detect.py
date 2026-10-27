@@ -300,12 +300,15 @@ def _restore_hairline_marks(filtered: np.ndarray, raw: np.ndarray) -> np.ndarray
             continue
         if bw >= HAIRLINE_SPAN_FRACTION * w or bh >= HAIRLINE_SPAN_FRACTION * h:
             continue
-        member = labels == index
+        # Judged inside the piece's own box: a whole-image mask per piece cost
+        # 67 s on a 24 MP sheet.
+        window = (slice(y, y + bh), slice(x, x + bw))
+        member = labels[window] == index
         # Restored unless the median kept it nearly whole: a ring the median
         # cut into arcs is still a ring cut into arcs if it kept 60% of it.
-        if (filtered[member] > 0).mean() >= HAIRLINE_KEPT_WHOLE:
+        if (filtered[window][member] > 0).mean() >= HAIRLINE_KEPT_WHOLE:
             continue
-        out[member] = 255
+        out[window][member] = 255
     return out
 
 #: Share of ink pixels with no inked neighbour at all above which an image is

@@ -90,6 +90,8 @@ export function ExportPanel({
       | "ok"
       | "error";
     message: string;
+    /** Malformed balloons the user may accept as is, then `retry` the action. */
+    malformed?: { ids: string[]; retry: () => void };
   }>({ kind: "idle", message: "" });
   const [menuOpen, setMenuOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -133,8 +135,12 @@ export function ExportPanel({
     if (disabled) setMenuOpen(false);
   }, [disabled]);
 
-  const validateToleranceExpressions = (): boolean => {
-    const malformed = findMalformedToleranceAnnotations(annotations);
+  const updateAnnotation = useAnnotationStore((s) => s.updateAnnotation);
+
+  const validateToleranceExpressions = (retry: () => void): boolean => {
+    const malformed = findMalformedToleranceAnnotations(
+      useAnnotationStore.getState().annotations
+    );
     if (malformed.length === 0) return true;
 
     const numbers = malformed.map((annotation) => annotation.number).join(", ");
@@ -144,9 +150,24 @@ export function ExportPanel({
       message:
         `Balloon${malformed.length === 1 ? "" : "s"} ${numbers} ` +
         `contain${malformed.length === 1 ? "s" : ""} a malformed value or ` +
-        "tolerance expression. Please correct it before saving or exporting.",
+        "tolerance expression. Correct it, or accept the value as is.",
+      malformed: { ids: malformed.map((annotation) => annotation.id), retry },
     });
     return false;
+  };
+
+  const acceptMalformed = () => {
+    const pending = actionStatus.malformed;
+    if (!pending) return;
+    const byId = new Map(
+      useAnnotationStore.getState().annotations.map((a) => [a.id, a])
+    );
+    for (const id of pending.ids) {
+      const annotation = byId.get(id);
+      if (annotation) updateAnnotation(id, { acceptedValue: annotation.value });
+    }
+    setActionStatus({ kind: "idle", message: "" });
+    pending.retry();
   };
 
   // Ask for extra inspector-filled columns: first how many, then their names.
@@ -177,7 +198,7 @@ export function ExportPanel({
   };
 
   const handleWebView = () => {
-    if (!validateToleranceExpressions()) return;
+    if (!validateToleranceExpressions(handleWebView)) return;
     setMenuOpen(false);
     setActionStatus({ kind: "idle", message: "" });
     setCreateDialogOpen(true);
@@ -247,7 +268,7 @@ export function ExportPanel({
   };
 
   const handleJSON = () => {
-    if (!validateToleranceExpressions()) return;
+    if (!validateToleranceExpressions(handleJSON)) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
@@ -264,7 +285,7 @@ export function ExportPanel({
   };
 
   const handleExcelDialog = () => {
-    if (!validateToleranceExpressions()) return;
+    if (!validateToleranceExpressions(handleExcelDialog)) return;
     setMenuOpen(false);
     setActionStatus({ kind: "idle", message: "" });
     setExcelDialogOpen(true);
@@ -431,7 +452,7 @@ export function ExportPanel({
   };
 
   const handleXML = () => {
-    if (!validateToleranceExpressions()) return;
+    if (!validateToleranceExpressions(handleXML)) return;
     setMenuOpen(false);
     // Same prompt as CSV/JSON so all three exports carry identical columns.
     const extraColumns = askExtraColumns();
@@ -444,7 +465,7 @@ export function ExportPanel({
   };
 
   const handleVerify = async () => {
-    if (!validateToleranceExpressions()) return;
+    if (!validateToleranceExpressions(handleVerify)) return;
     setMenuOpen(false);
     const extraColumns = askExtraColumns();
     if (extraColumns === null) return;
@@ -577,15 +598,33 @@ export function ExportPanel({
       )}
 
       {actionStatus.kind !== "idle" && !busy && (
-        <p
+        <div
           className={`absolute right-0 top-full mt-1 w-56 rounded-lg border bg-white px-3 py-2 text-xs shadow-lg ${
             actionStatus.kind === "ok"
               ? "border-emerald-200 text-emerald-700"
               : "border-red-200 text-red-600"
           }`}
         >
-          {actionStatus.message}
-        </p>
+          <p>{actionStatus.message}</p>
+          {actionStatus.malformed && (
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={acceptMalformed}
+                className="rounded-md bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700"
+              >
+                Accept as is
+              </button>
+              <button
+                type="button"
+                onClick={() => setActionStatus({ kind: "idle", message: "" })}
+                className="rounded-md border border-gray-300 px-2 py-1 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       <CreateChecksheetDialog

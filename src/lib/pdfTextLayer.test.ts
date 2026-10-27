@@ -83,6 +83,30 @@ describe("reading a PDF text layer", () => {
     expect(forms[1].get("keywords")).toBeNull();
   });
 
+  it("asks for no feature control frames when GD&T reading is off", async () => {
+    const fetchMock = reply({ usable: false, regions: [], fonts: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("CustomEvent", class extends Event {});
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => void items.set(key, value),
+    });
+    const { setGdtScanEnabled } = await import("@/lib/scanSettings");
+
+    await readPdfTextLayer(pdf(), 1, PAGE);
+    setGdtScanEnabled(false);
+    await readPdfTextLayer(pdf(), 1, PAGE);
+    setGdtScanEnabled(true);
+
+    const forms = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, { body: FormData }])[1].body
+    );
+    expect(forms[0].get("gdt")).toBe("true");
+    expect(forms[1].get("gdt")).toBe("false");
+  });
+
   it("treats a page with no callouts as unusable", async () => {
     vi.stubGlobal("fetch", reply({ usable: true, regions: [], fonts: ["Arial"] }));
 

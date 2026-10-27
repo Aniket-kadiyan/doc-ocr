@@ -60,6 +60,17 @@ describe("tolerance export validation", () => {
     ).toEqual(["bad-field", "bad-value"]);
   });
 
+  it("skips a value the user accepted until it is edited", () => {
+    const annotations = [
+      makeAnnotation({ id: "accepted", value: "25 ±", range: undefined, acceptedValue: "25 ±" }),
+      makeAnnotation({ id: "edited", value: "26 ±", range: undefined, acceptedValue: "25 ±" }),
+    ];
+
+    expect(
+      findMalformedToleranceAnnotations(annotations).map(({ id }) => id)
+    ).toEqual(["edited"]);
+  });
+
   it("accepts embedded one-sided tolerances and fit designations", () => {
     const annotations = [
       makeAnnotation({ id: "radius-lower", value: "R0.6-0", range: undefined }),
@@ -67,6 +78,9 @@ describe("tolerance export validation", () => {
       makeAnnotation({ id: "radius-upper", value: "R0.3+0.05", range: undefined }),
       makeAnnotation({ id: "linear-lower", value: "65-0.01", range: undefined }),
       makeAnnotation({ id: "fit", value: "2N9", range: "0" }),
+      makeAnnotation({ id: "thread", value: "M54×1.5-6H", range: undefined }),
+      makeAnnotation({ id: "count", value: "12.5±0.05 (4x)", range: undefined }),
+      makeAnnotation({ id: "angle", value: "60°±0°30", range: undefined }),
     ];
 
     expect(findMalformedToleranceAnnotations(annotations)).toEqual([]);

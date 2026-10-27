@@ -167,7 +167,8 @@ describe("project and integration exports", () => {
     expect(toleranceForExport(undefined, "R0.3+0.05")).toBe("+0.05, -0");
     expect(toleranceForExport(undefined, "65-0.01")).toBe("+0, -0.01");
     expect(toleranceForExport("0", "2N9")).toBe("0");
-    expect(toleranceForExport(undefined, "R-5")).toBe("");
+    // A negative nominal is not a deviation; it takes the scan default.
+    expect(toleranceForExport(undefined, "R-5")).toBe("0");
 
     const sheet = buildInspectionSheet([upperOnly, lowerOnly]);
     expect(sheet.rows[0][3]).toBe("+0.1, -0");

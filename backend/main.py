@@ -55,6 +55,7 @@ from page_layout import (
     crop_section,
 )
 from page_layout_cache import PageLayoutCache
+from scan_workers import shutdown_scan_pool
 from page_value_filters import normalize_page_value_text
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
@@ -308,6 +309,7 @@ def startup() -> None:
 def shutdown() -> None:
     logger.info("QTracX backend stopping", extra={"event": "backend_stopping"})
     scan_job_manager.shutdown(wait=False)
+    shutdown_scan_pool()
     if auth_database_manager is not None:
         auth_database_manager.dispose()
     logger.info("QTracX backend stopped", extra={"event": "backend_stopped"})
@@ -811,6 +813,13 @@ async def create_scan_job(
     scope_width: float = Form(...),
     scope_height: float = Form(...),
     existing_value_boxes: str = Form("[]"),
+    gdt: bool = Form(
+        True,
+        description=(
+            "Read feature control frames. Off makes a scan 3-20 s a page "
+            "faster on sheets without GD&T"
+        ),
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -896,6 +905,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
                 existing_value_boxes=saved_value_boxes,
+                read_frames=gdt,
             )
             seg["coordinate_space"] = "page"
         else:
@@ -941,6 +951,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_section_progress,
                 existing_value_boxes=section_existing_boxes,
+                read_frames=gdt,
             )
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
@@ -977,6 +988,7 @@ async def create_scan_job(
             # stop/resume design a stable identity for the complete page.
             "page_fingerprint": fingerprint,
             "existing_value_box_count": len(saved_value_boxes),
+            "gdt": gdt,
         },
     )
 
@@ -1118,6 +1130,10 @@ async def read_pdf_text_layer(
             "feature control frames or pasted pictures"
         ),
     ),
+    gdt: bool = Form(
+        True,
+        description="Read feature control frames in the refined read",
+    ),
 ) -> dict[str, Any]:
     """
     Read one page's callouts from the PDF's own text layer.
@@ -1148,6 +1164,7 @@ async def read_pdf_text_layer(
             page - 1,
             dpi=72.0 * render_scale,
             refine=refine,
+            read_frames=gdt,
         )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")

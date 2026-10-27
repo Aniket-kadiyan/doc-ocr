@@ -119,6 +119,9 @@ export interface Annotation {
   /** Editable tolerance; numeric values default to "0" and embedded ± values
    * are normalized to "+x, -x". */
   range?: string;
+  /** The Value text the user accepted as is when export flagged its
+   * tolerance as malformed. Editing Value re-arms the check. */
+  acceptedValue?: string;
   /** Legacy browser-based inspector readings retained for older projects and
    * values-only CSV/JSON exports. Internal checksheet runs use backend storage. */
   extras?: Record<string, string>;
