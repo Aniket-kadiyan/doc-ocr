@@ -34,6 +34,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 from PIL import Image
 
+import run_report
+
 logger = logging.getLogger(__name__)
 
 PRIORITY_CRITICAL = 0
@@ -263,6 +265,7 @@ class ScanWork:
         elif self.parallel:
             assert self._path is not None
             future = self._pool.submit(priority, self._path, method, *args, **kwargs)
+            run_report.count(f"worker pool: {method} queued")
         else:
             future = Future()
             future.set_running_or_notify_cancel()
@@ -273,6 +276,7 @@ class ScanWork:
 
     def _local(self, future: Future) -> Any:
         method, args, kwargs = future._scan_call  # type: ignore[attr-defined]
+        run_report.count(f"worker pool: {method} run in backend process")
         return getattr(self._pipeline, method)(self._image, *args, **kwargs)
 
     def result(self, future: Future, heartbeat: Callable[[], None] | None = None) -> Any:

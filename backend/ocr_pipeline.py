@@ -15,6 +15,7 @@ from PIL import Image
 from debug_dump import StepDumper, dump_force, dump_status, should_dump
 from dimension_compose import compose_engineering_dimension
 from feature_classifier import classify_feature
+import run_report
 from dimension_digits import normalize_cad_number_string
 from image_preprocess import (
     bbox_from_oriented_to_original,
@@ -356,7 +357,7 @@ class OcrPipeline:
     # own threads. Inference takes turns; the image work around it does not.
     # Class-level, so it holds for the one shared pipeline however it was
     # constructed.
-    _inference_lock = threading.Lock()
+    _inference_lock = run_report.TimedLock()
 
     def __init__(self) -> None:
         self._configured_device = configured_ocr_device()

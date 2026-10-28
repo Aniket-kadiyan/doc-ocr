@@ -12,6 +12,10 @@ python-multipart>=0.0.12,<1.0
 # Authentication persistence
 -r requirements-auth.txt
 
+# Per-run reports: CPU and memory of the backend and its scan workers
+# (logs/runs/). Optional at runtime; without it reports omit those figures.
+psutil>=5.9,<8
+
 # Image processing
 Pillow>=11,<13
 
