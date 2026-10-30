@@ -1,4 +1,11 @@
-export type SourceFileKind = "pdf" | "png" | "jpeg" | "tiff" | "webp";
+export type SourceFileKind =
+  | "pdf"
+  | "png"
+  | "jpeg"
+  | "tiff"
+  | "webp"
+  | "dwg"
+  | "dxf";
 
 const EXTENSION_KIND: Record<string, SourceFileKind> = {
   pdf: "pdf",
@@ -8,6 +15,8 @@ const EXTENSION_KIND: Record<string, SourceFileKind> = {
   tif: "tiff",
   tiff: "tiff",
   webp: "webp",
+  dwg: "dwg",
+  dxf: "dxf",
 };
 
 const MIME_KIND: Record<string, SourceFileKind> = {
@@ -18,6 +27,10 @@ const MIME_KIND: Record<string, SourceFileKind> = {
   "image/tiff": "tiff",
   "image/x-tiff": "tiff",
   "image/webp": "webp",
+  "image/vnd.dwg": "dwg",
+  "application/acad": "dwg",
+  "image/vnd.dxf": "dxf",
+  "application/dxf": "dxf",
 };
 
 function bytesEqual(bytes: Uint8Array, offset: number, expected: number[]) {
@@ -43,6 +56,11 @@ function signatureKind(bytes: Uint8Array): SourceFileKind | null {
   if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") {
     return "webp";
   }
+  // Every DWG opens with its version tag, e.g. "AC1015" for AutoCAD 2000.
+  if (/^AC(10\d\d|1\.40|2\.)/.test(ascii)) return "dwg";
+  if (ascii.startsWith("AutoCAD Binary DXF")) return "dxf";
+  // ASCII DXF is group-code/value pairs and begins with "0 / SECTION".
+  if (/^\s*0\s*\r?\n\s*SECTION\s*\r?\n/.test(ascii)) return "dxf";
   return null;
 }
 
@@ -60,7 +78,7 @@ export async function detectSourceFileKind(file: File): Promise<SourceFileKind> 
   const actual = signatureKind(head);
   if (!actual) {
     throw new Error(
-      "Unsupported drawing format. Choose a PDF, PNG, JPG/JPEG, TIF/TIFF, or WebP file."
+      "Unsupported drawing format. Choose a PDF, DWG, DXF, PNG, JPG/JPEG, TIF/TIFF, or WebP file."
     );
   }
   const declared = declaredKind(file);
@@ -74,3 +92,5 @@ export async function detectSourceFileKind(file: File): Promise<SourceFileKind> 
 
 export const isPdfKind = (kind: SourceFileKind) => kind === "pdf";
 export const isTiffKind = (kind: SourceFileKind) => kind === "tiff";
+export const isCadKind = (kind: SourceFileKind) =>
+  kind === "dwg" || kind === "dxf";
