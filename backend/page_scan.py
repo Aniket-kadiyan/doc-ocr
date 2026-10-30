@@ -63,6 +63,11 @@ PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS = 24
 # deviation stack at a margin this tight.
 PAGE_SCAN_SLANT_MERGE_MARGIN = 0.08
 PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
+# Above this long edge the slanted pass skips levelling the whole image by one
+# angle and works only neighbourhood by neighbourhood. A zoomed selection needs
+# the whole-image pass; a sheet's views each lean their own way, so it finds
+# nothing there, and on 113-M02-292A (5849x4119) it cost 860 s on its own.
+PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE = 3000
 
 
 def bbox_overlap_fraction(
@@ -412,3 +417,4 @@ def assign_candidate_ids(
         replace(candidate, candidate_id=f"C{index:04d}")
         for index, candidate in enumerate(candidates, start=1)
     ]
+

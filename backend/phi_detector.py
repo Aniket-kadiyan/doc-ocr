@@ -303,47 +303,56 @@ def detect_phi_multi_strip(
     from image_preprocess import orientations_for_ocr, pad_image, upscale_min_edge
     from symbol_regions import enlarge_zone, split_symbol_zones
 
-    prep = upscale_min_edge(pad_image(image))
-    w, h = prep.size
-    best = 0.0
-    details: list[dict[str, Any]] = []
-    src_vertical = is_vertical_dimension(prep)
-
-    if src_vertical:
-        for frac in (0.30, 0.38, 0.45):
-            strip = max(16, int(h * frac))
-            for side, crop in (
-                ("bottom", prep.crop((0, h - strip, w, h))),
-                ("top", prep.crop((0, 0, w, strip))),
-            ):
-                _, sc = detect_phi_in_prefix(enlarge_zone(crop, 5.0))
-                details.append({"strip": f"vertical_{side}", "frac": frac, "score": sc})
-                best = max(best, sc)
-
-    for oname, oriented in orientations_for_ocr(prep):
-        zones = split_symbol_zones(
-            oriented,
-            from_vertical_rotated=src_vertical and oname == "cw",
-        )
-        _, sc = detect_phi_in_prefix(enlarge_zone(zones["prefix"], 5.0))
-        details.append({"strip": f"oriented_{oname}_prefix", "score": sc})
-        best = max(best, sc)
-
-    # Topology is the decisive signal. The strip detectors above (template /
+    # Topology is the decisive signal. The strip detectors below (template /
     # Hough / contour) fire on 0/4/8 loops nearly as often as on a real Ø, so
     # without a slashed-ring hole pair their score is capped below the
     # vision-only compose threshold; with one, its score is used outright.
+    # It runs first because either way most strip work is then wasted: a
+    # confirmed ring ignores the strips, and an unconfirmed one needs them only
+    # until one reaches the cap. This ran inside every recognition, 170 s of
+    # one page scan.
     topo_score, topo = detect_phi_topology(image)
-    details.append({"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])})
     topology_confirmed = topo_score >= TOPO_ACCEPT
+    details: list[dict[str, Any]] = []
     if topology_confirmed:
-        best = topo_score
-    else:
-        best = min(best, LEGACY_CAP)
+        details.append({"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])})
+        return True, round(topo_score, 3), details
+
+    prep = upscale_min_edge(pad_image(image))
+    w, h = prep.size
+    best = 0.0
+    src_vertical = is_vertical_dimension(prep)
+
+    def strips():
+        if src_vertical:
+            for frac in (0.30, 0.38, 0.45):
+                strip = max(16, int(h * frac))
+                for side, crop in (
+                    ("bottom", prep.crop((0, h - strip, w, h))),
+                    ("top", prep.crop((0, 0, w, strip))),
+                ):
+                    yield {"strip": f"vertical_{side}", "frac": frac}, crop
+        for oname, oriented in orientations_for_ocr(prep):
+            zones = split_symbol_zones(
+                oriented,
+                from_vertical_rotated=src_vertical and oname == "cw",
+            )
+            yield {"strip": f"oriented_{oname}_prefix"}, zones["prefix"]
+
+    for detail, crop in strips():
+        _, sc = detect_phi_in_prefix(enlarge_zone(crop, 5.0))
+        details.append({**detail, "score": sc})
+        best = max(best, sc)
+        if best >= LEGACY_CAP:
+            break
+
+    details.append({"strip": "topology", "score": topo_score, "cands": topo.get("cands", [])})
+    best = min(best, LEGACY_CAP)
     # The boolean must honour the cap this module documents: "a strip hit alone
     # can never inject a Ø, but it still corroborates OCR hints". Reporting
     # True for a capped legacy-only hit made it decisive after all, which is
     # how a plain length whose leader read as a dash became "Ø5.50[139.70]".
     # The score is still returned so callers can use it as corroboration.
     return topology_confirmed, round(best, 3), details
+
 

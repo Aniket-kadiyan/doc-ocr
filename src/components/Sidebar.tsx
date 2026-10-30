@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Annotation } from "@/types/annotation";
 import { BalloonThumbnail } from "@/components/BalloonThumbnail";
 import { MetadataPanel } from "@/components/MetadataPanel";
@@ -84,6 +84,16 @@ export function Sidebar({
     (value) => value.trim() !== ""
   ).length;
   const balloonControlsDisabled = disabled || activeMetadataField !== null;
+  const balloonListRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected value in view when it is picked on the drawing.
+  useEffect(() => {
+    if (!selectedId || activeTab !== "balloons") return;
+    const row = balloonListRef.current?.querySelector<HTMLElement>(
+      `[data-annotation-id="${CSS.escape(selectedId)}"]`
+    );
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedId, activeTab]);
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
@@ -162,7 +172,7 @@ export function Sidebar({
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto p-2">
+          <div ref={balloonListRef} className="flex-1 overflow-y-auto p-2">
         {values.length === 0 && scanCandidates.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-slate-500">
             Choose Draw Value, then draw a box around a value on the drawing.
@@ -196,7 +206,11 @@ export function Sidebar({
                       .join(" · ");
 
                     return (
-                      <li key={annotation.id} className="mb-2">
+                      <li
+                        key={annotation.id}
+                        data-annotation-id={annotation.id}
+                        className="mb-2"
+                      >
                         <div
                           className={`flex items-stretch overflow-hidden rounded-lg transition ${
                             selected
@@ -510,3 +524,4 @@ export function Sidebar({
     </aside>
   );
 }
+

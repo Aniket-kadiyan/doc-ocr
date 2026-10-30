@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readPdfTextLayer, regionsWithin } from "@/lib/pdfTextLayer";
+import {
+  planTextLayerRefinement,
+  readPdfTextLayer,
+  regionsWithin,
+} from "@/lib/pdfTextLayer";
 import type { SegmentRegion } from "@/lib/paddleOcrClient";
+import type { Annotation } from "@/types/annotation";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -58,7 +63,48 @@ describe("reading a PDF text layer", () => {
       usable: false,
       regions: [],
       fonts: [],
+      titleFields: [],
     });
+  });
+
+  it("asks for the fast read with the title keywords, the refined one without", async () => {
+    const fetchMock = reply({ usable: false, regions: [], fonts: [] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await readPdfTextLayer(pdf(), 1, PAGE, { refine: false });
+    await readPdfTextLayer(pdf(), 1, PAGE);
+
+    const forms = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, { body: FormData }])[1].body
+    );
+    expect(forms[0].get("refine")).toBe("false");
+    expect(forms[0].get("keywords")).toBeTruthy();
+    expect(forms[1].get("refine")).toBe("true");
+    expect(forms[1].get("keywords")).toBeNull();
+  });
+
+  it("asks for no feature control frames when GD&T reading is off", async () => {
+    const fetchMock = reply({ usable: false, regions: [], fonts: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("CustomEvent", class extends Event {});
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => void items.set(key, value),
+    });
+    const { setGdtScanEnabled } = await import("@/lib/scanSettings");
+
+    await readPdfTextLayer(pdf(), 1, PAGE);
+    setGdtScanEnabled(false);
+    await readPdfTextLayer(pdf(), 1, PAGE);
+    setGdtScanEnabled(true);
+
+    const forms = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, { body: FormData }])[1].body
+    );
+    expect(forms[0].get("gdt")).toBe("true");
+    expect(forms[1].get("gdt")).toBe("false");
   });
 
   it("treats a page with no callouts as unusable", async () => {
@@ -103,3 +149,57 @@ describe("limiting callouts to a drawn selection", () => {
     expect(kept.map((r) => r.valueBox.x)).toEqual([120, 280]);
   });
 });
+
+describe("folding the refined read into the fast one", () => {
+  const box = (x: number) => ({ x, y: 10, width: 40, height: 12 });
+  const region = (candidateId: string, text: string, x: number): SegmentRegion =>
+    ({
+      candidateId,
+      text,
+      confidence: 1,
+      orientation: "horizontal",
+      rotation: 0,
+      needsReview: false,
+      recognized: true,
+      valueBox: box(x),
+    }) as SegmentRegion;
+  const balloon = (id: string, value: string, x: number): Annotation =>
+    ({ id, value, bbox: box(x), number: 1, page: 1, kind: "dimension" }) as Annotation;
+
+  const placed = new Map([
+    ["tl-0", { annotationId: "a", value: "0.2", bbox: box(0) }],
+    ["tl-1", { annotationId: "b", value: "45", bbox: box(100) }],
+    ["tl-2", { annotationId: "c", value: "25", bbox: box(200) }],
+  ]);
+  const fastIds = new Set(["tl-0", "tl-1", "tl-2"]);
+  const refined = [
+    region("tl-1", "1×45°", 80),
+    region("tl-2", "25", 200),
+    region("fcf-0", "⌓ 0.2 Ⓤ", 0),
+  ];
+
+  it("drops what a frame absorbed, rereads changed values and adds the frame", () => {
+    const plan = planTextLayerRefinement(placed, fastIds, refined, [
+      balloon("a", "0.2", 0),
+      balloon("b", "45", 100),
+      balloon("c", "25", 200),
+    ]);
+
+    expect(plan.remove).toEqual(["a"]);
+    expect(plan.update.map((item) => [item.id, item.region.text])).toEqual([
+      ["b", "1×45°"],
+    ]);
+    expect(plan.add.map((item) => item.text)).toEqual(["⌓ 0.2 Ⓤ"]);
+  });
+
+  it("leaves a balloon the inspector edited, moved or deleted alone", () => {
+    const plan = planTextLayerRefinement(placed, fastIds, refined, [
+      balloon("a", "0.25", 0),
+      { ...balloon("b", "45", 100), bbox: box(110) },
+    ]);
+
+    expect(plan.remove).toEqual([]);
+    expect(plan.update).toEqual([]);
+  });
+});
+

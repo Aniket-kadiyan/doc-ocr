@@ -836,6 +836,16 @@ export function DrawingViewer() {
     [annotations, currentPage, setCurrentPage]
   );
 
+  // Opening a balloon on the drawing should match opening its sidebar row:
+  // select it, follow it to its page, and present the same value editor.
+  const handleOpen = useCallback(
+    (id: string) => {
+      handleSelect(id);
+      setEditingValueId(id);
+    },
+    [handleSelect, setEditingValueId]
+  );
+
   // Clear the local selection with the deleted value so the remaining balloons
   // do not stay dimmed against an id that no longer exists.
   const handleDelete = useCallback(
@@ -2218,7 +2228,7 @@ export function DrawingViewer() {
                               : 1
                           }
                           listening={!drawingActive}
-                          onClick={() => handleSelect(ann.id)}
+                          onClick={() => handleOpen(ann.id)}
                         />
                       );
                     })}
@@ -2329,7 +2339,7 @@ export function DrawingViewer() {
                           selectedScanCandidateId !== null
                         }
                         listening={!drawingActive}
-                        onSelect={handleSelect}
+                        onSelect={handleOpen}
                       />
                     ))}
                   </Layer>
@@ -2410,3 +2420,4 @@ export function DrawingViewer() {
     </div>
   );
 }
+

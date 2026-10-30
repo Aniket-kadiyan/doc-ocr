@@ -885,6 +885,13 @@ async def create_scan_job(
     scope_width: float = Form(...),
     scope_height: float = Form(...),
     existing_value_boxes: str = Form("[]"),
+    gdt: bool = Form(
+        True,
+        description=(
+            "Read feature control frames. Turn this off to skip that bounded "
+            "pass on drawings known not to contain GD&T."
+        ),
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -959,6 +966,8 @@ async def create_scan_job(
                     source_pdf_data,
                     page - 1,
                     dpi=72.0 * pdf_render_scale,
+                    refine=True,
+                    read_frames=gdt,
                 )
             except Exception as error:  # damaged PDF falls back to page OCR
                 logger.warning(
@@ -1037,6 +1046,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
                 existing_value_boxes=saved_value_boxes,
+                read_frames=gdt,
             )
             seg["coordinate_space"] = "page"
         else:
@@ -1082,6 +1092,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_section_progress,
                 existing_value_boxes=section_existing_boxes,
+                read_frames=gdt,
             )
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
@@ -1126,6 +1137,7 @@ async def create_scan_job(
             "page_fingerprint": fingerprint,
             "existing_value_box_count": len(saved_value_boxes),
             "pdf_text_layer_requested": source_pdf_data is not None,
+            "gdt": gdt,
         },
     )
 
@@ -1256,6 +1268,28 @@ async def read_reference_points(
     }
 
 
+def _serialize_title_fields(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "keyword": field["keyword"],
+            "label": field["label"],
+            "value": field["value"],
+            "confidence": field["confidence"],
+            "bbox": (
+                {
+                    "x": round(field["bbox"]["x"], 1),
+                    "y": round(field["bbox"]["y"], 1),
+                    "width": round(field["bbox"]["w"], 1),
+                    "height": round(field["bbox"]["h"], 1),
+                }
+                if field["bbox"]
+                else None
+            ),
+        }
+        for field in fields
+    ]
+
+
 @app.post("/ocr/text-layer", dependencies=protected_request)
 async def read_pdf_text_layer(
     file: UploadFile = File(..., description="The drawing PDF itself"),
@@ -1267,6 +1301,18 @@ async def read_pdf_text_layer(
             "pixels its annotations already use"
         ),
     ),
+    keywords: str = Form(
+        "",
+        description="Comma-separated title-block labels, e.g. 'DWG,REV'",
+    ),
+    refine: bool = Form(
+        True,
+        description="Recover drawn symbols, frames, and embedded image text",
+    ),
+    gdt: bool = Form(
+        True,
+        description="Read feature control frames in the refined pass",
+    ),
 ) -> dict[str, Any]:
     """
     Read one page's callouts from the PDF's own text layer.
@@ -1276,7 +1322,7 @@ async def read_pdf_text_layer(
     about three orders of magnitude faster. ``usable`` is False for a raster
     scan, which is the signal to run the ordinary scan instead.
     """
-    from pdf_text_layer import text_layer_regions
+    from pdf_text_layer import native_title_fields, text_layer_regions
 
     if page < 1:
         raise HTTPException(status_code=400, detail="page must be 1 or greater")
@@ -1294,6 +1340,8 @@ async def read_pdf_text_layer(
                 data,
                 page - 1,
                 dpi=72.0 * render_scale,
+                refine=refine,
+                read_frames=gdt,
             )
         )
     except IndexError:
@@ -1302,6 +1350,21 @@ async def read_pdf_text_layer(
         raise HTTPException(
             status_code=400, detail=f"Could not read the PDF text layer: {error}"
         )
+
+    wanted = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+    title_fields = (
+        await run_in_threadpool(
+            partial(
+                native_title_fields,
+                data,
+                page - 1,
+                wanted,
+                dpi=72.0 * render_scale,
+            )
+        )
+        if result["usable"] and wanted
+        else []
+    )
 
     width, height = result["page_size"]
     serialized = _serialize_segment_result(
@@ -1320,6 +1383,8 @@ async def read_pdf_text_layer(
         # Prose the page carries that is not a note (view labels, table and
         # title-block text), with the reason, so nothing read is unaccounted.
         "text_blocks": result.get("text_blocks", []),
+        "title_fields": _serialize_title_fields(title_fields),
+        "refined": refine,
     }
 
 
@@ -1349,27 +1414,7 @@ async def read_title_fields(
         wanted,
     )
 
-    return {
-        "fields": [
-            {
-                "keyword": f["keyword"],
-                "label": f["label"],
-                "value": f["value"],
-                "confidence": f["confidence"],
-                "bbox": (
-                    {
-                        "x": round(f["bbox"]["x"], 1),
-                        "y": round(f["bbox"]["y"], 1),
-                        "width": round(f["bbox"]["w"], 1),
-                        "height": round(f["bbox"]["h"], 1),
-                    }
-                    if f["bbox"]
-                    else None
-                ),
-            }
-            for f in fields
-        ]
-    }
+    return {"fields": _serialize_title_fields(fields)}
 
 
 @app.post("/training/export-labels", dependencies=protected_request)
@@ -1411,3 +1456,4 @@ if __name__ == "__main__":
         reload=runtime_config.backend_reload,
         **tls_arguments,
     )
+

@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-chitra-detection-notes-queued-pdf"
+OCR_CHANGESET_ID = "mvp2-chitra-missed-values-deployment-ready"
 #: A section-scan value read below this confidence is excluded rather than
 #: ballooned. See the gate in ``segment`` for the measurement behind it.
 SECTION_MIN_CONFIDENCE = 0.6
@@ -113,6 +113,59 @@ MAX_TABLES_READ = 6
 # measured on cover 2.7% and 1.7%, so the cap is far away; it exists only so
 # that a block which grew wrong cannot delete a drawing's worth of values.
 NOTES_MAX_PAGE_FRACTION = 0.25
+
+
+def _ink_row_count(
+    image: Image.Image,
+    box: Mapping[str, float],
+    rotation: Any = 0,
+) -> int:
+    """Count distinct rows of writing inside a candidate box.
+
+    Long unbroken rules are ignored, so a separator line does not make one
+    callout look like a stacked pair. This is a cheap geometry gate before a
+    second detector/OCR pass.
+    """
+
+    x0 = max(0, int(box["x"]))
+    y0 = max(0, int(box["y"]))
+    x1 = min(image.width, int(box["x"] + box["width"] + 0.999))
+    y1 = min(image.height, int(box["y"] + box["height"] + 0.999))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return 0
+    ink = np.asarray(image.crop((x0, y0, x1, y1)).convert("L")) < 160
+    try:
+        angle = float(rotation or 0.0) % 180.0
+    except (TypeError, ValueError):
+        angle = 0.0
+    if abs(angle - 90.0) < 20.0:
+        ink = ink.T
+    width = ink.shape[1]
+
+    def longest_run(row: np.ndarray) -> int:
+        edges = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+        starts = np.flatnonzero(edges == 1)
+        ends = np.flatnonzero(edges == -1)
+        return int((ends - starts).max()) if len(starts) else 0
+
+    writing = np.array(
+        [row.any() and longest_run(row) < 0.6 * width for row in ink],
+        dtype=bool,
+    )
+    heights: list[int] = []
+    run = 0
+    for has_ink in writing:
+        if has_ink:
+            run += 1
+        elif run:
+            heights.append(run)
+            run = 0
+    if run:
+        heights.append(run)
+    if not heights:
+        return 0
+    tallest = max(heights)
+    return sum(1 for height in heights if height >= max(3, 0.3 * tallest))
 
 
 def sort_reading_order(
@@ -3637,6 +3690,23 @@ class OcrPipeline:
                 ):
                     continue
                 sub = rimg.crop((cx0, cy0, cx1, cy1))
+                # Reject impossible geometry before paying for recognition.
+                # A cluster with four or more writing rows is several fused
+                # callouts, not one balloonable value.
+                if self._cluster_row_count(cluster) > 3:
+                    continue
+                # Tighten the eventual balloon to the ink. A roughly square
+                # patch is part geometry caught at this angle, not a text line.
+                box_x, box_y = ub["x"], ub["y"]
+                box_w, box_h = ub["width"], ub["height"]
+                ink = self._ink_extent(sub)
+                if ink is not None:
+                    ix0, iy0, ix1, iy1 = ink
+                    if ix1 - ix0 >= 4 and iy1 - iy0 >= 4:
+                        box_x, box_y = cx0 + ix0, cy0 + iy0
+                        box_w, box_h = ix1 - ix0, iy1 - iy0
+                        if max(box_w, box_h) < min(box_w, box_h) * 1.8:
+                            continue
                 res = self.recognize(sub, compute_text_bbox=False)
                 text = strip_foreign_glyphs((res.get("text") or "").strip())
                 # A value with stacked deviations reads back interleaved. Only
@@ -3692,25 +3762,8 @@ class OcrPipeline:
                 # (``Ø20H10 +0.084/0``, 9 digits) trips.
                 if count_dimension_values(text) >= 2:
                     continue
-                if self._cluster_row_count(cluster) > 3:
-                    continue
                 if sum(c.isdigit() for c in text) > 14:
                     continue
-                # Shrink the cluster box onto the ink it actually contains, so
-                # the balloon hugs the writing instead of the hull plus margin.
-                box_x, box_y = ub["x"], ub["y"]
-                box_w, box_h = ub["width"], ub["height"]
-                ink = self._ink_extent(sub)
-                if ink is not None:
-                    ix0, iy0, ix1, iy1 = ink
-                    if ix1 - ix0 >= 4 and iy1 - iy0 >= 4:
-                        box_x, box_y = cx0 + ix0, cy0 + iy0
-                        box_w, box_h = ix1 - ix0, iy1 - iy0
-                        # Writing along a leader is elongated once the box is on
-                        # the ink. A square patch is not a line of text, it is a
-                        # piece of the part caught at this angle.
-                        if max(box_w, box_h) < min(box_w, box_h) * 1.8:
-                            continue
                 bbox = self._bbox_rot_to_source(
                     box_x, box_y, box_w, box_h, inv, iw, ih
                 )
@@ -4004,6 +4057,7 @@ class OcrPipeline:
         max_rois: int = 3,
         margin_frac: float = 1.0,
         expand_frac: float = 0.2,
+        whole_image: bool = True,
     ) -> list[dict[str, Any]]:
         """
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
@@ -4017,8 +4071,10 @@ class OcrPipeline:
         Results are deduped against ``base_regions`` so a value already read
         upright is not reported twice.
         """
-        # First the whole selection, which is what a zoomed-in crop needs.
-        found = self._angled_in_roi(image)
+        # A zoomed selection benefits from one whole-image pass. A full sheet
+        # contains unrelated slants and makes that pass both very expensive
+        # and less accurate, so it uses the bounded neighbourhoods only.
+        found = self._angled_in_roi(image) if whole_image else []
         # Then each diagonal neighbourhood, always — not only when the pass
         # above came back empty. On a large selection the slant vote is diluted
         # by the rest of the drawing and names one angle, so it recovers one
@@ -5196,6 +5252,7 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
+        read_frames: bool = True,
     ) -> dict[str, Any]:
         """Scan a whole page through the bounded technical-value route.
 
@@ -5233,6 +5290,7 @@ class OcrPipeline:
             PAGE_SCAN_ROTATIONS_CW,
             PAGE_SCAN_SLANT_CONTEXT_MARGIN,
             PAGE_SCAN_SLANT_MERGE_MARGIN,
+            PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE,
             assign_candidate_ids,
             deduplicate_page_candidates,
             map_tile_candidate,
@@ -6564,7 +6622,9 @@ class OcrPipeline:
             tall = box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(
                 box["width"], 1.0
             )
-            if count_dimension_values(text) < 2 and not tall:
+            if count_dimension_values(text) < 2 and not (
+                tall and _ink_row_count(image, box, region.get("rotation")) >= 2
+            ):
                 split_regions.append(region)
                 continue
             margin = 6
@@ -6626,6 +6686,9 @@ class OcrPipeline:
                 max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
                 margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
                 expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
+                whole_image=(
+                    max(image.size) <= PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE
+                ),
             )
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
@@ -6696,18 +6759,19 @@ class OcrPipeline:
         # OCR could read. The frames are found from their rules and read
         # structurally; everything the scan produced inside one gives way to
         # it. Same accounting as the notes blocks above.
-        report(
-            stage="gdt",
-            message="Reading feature control frames",
-            percent=99,
-            completed=detected_count,
-            total=detected_count,
-            candidate_count=len(regions),
-            operation_label="Feature control frames",
-        )
+        if read_frames:
+            report(
+                stage="gdt",
+                message="Reading feature control frames",
+                percent=99,
+                completed=detected_count,
+                total=detected_count,
+                candidate_count=len(regions),
+                operation_label="Feature control frames",
+            )
         frame_regions = [
             region
-            for region in self._frame_regions(image)
+            for region in (self._frame_regions(image) if read_frames else [])
             if not overlaps_existing_value(region["bbox"], existing_value_boxes)
         ]
         if frame_regions:
@@ -7191,4 +7255,5 @@ def get_pipeline() -> OcrPipeline:
         _pipeline = OcrPipeline()
         _pipeline.load(load_runtime_config().ocr_model_instances)
     return _pipeline
+
 

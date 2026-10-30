@@ -199,7 +199,14 @@ def normalize_cad_number_string(t: str) -> str:
     if dms is not None:
         return dms
 
-    s = _strip_dimension_spaces(s).replace("'", "").replace('"', "")
+    s = _strip_dimension_spaces(s)
+    if "°" in s:
+        # A toleranced angle is not a bare DMS triple, but its ticks are just
+        # as real: "90°±0°30'" lost its minute and published "30" of nothing.
+        # Only a tick that closes a number is kept; a stray one is still noise.
+        s = re.sub(r"(?<!\d)['\"]", "", s)
+    else:
+        s = s.replace("'", "").replace('"', "")
 
     # European comma decimals in short dims only (215,37 → 215.37)
     m = _COMMA_DEC_RE.match(s)
@@ -245,3 +252,4 @@ def normalize_cad_number_string(t: str) -> str:
             return f"{main}±{tol}"
 
     return s
+

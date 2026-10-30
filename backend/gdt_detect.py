@@ -254,10 +254,12 @@ def despeckle(binary: np.ndarray, *, max_floor: float | None = None) -> np.ndarr
     floor = max(2.0, float(areas.max()) * SPECKLE_FRACTION)
     if max_floor is not None:
         floor = min(floor, float(max_floor))
+    # One lookup over the label image. Clearing each speck with its own
+    # ``labels == i`` mask was components x pixels: 9s on a 250dpi page.
+    keep = stats[:, cv2.CC_STAT_AREA] >= floor
+    keep[0] = True
     out = binary.copy()
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] < floor:
-            out[labels == i] = 0
+    out[~keep[labels]] = 0
     return out
 
 
@@ -298,12 +300,15 @@ def _restore_hairline_marks(filtered: np.ndarray, raw: np.ndarray) -> np.ndarray
             continue
         if bw >= HAIRLINE_SPAN_FRACTION * w or bh >= HAIRLINE_SPAN_FRACTION * h:
             continue
-        member = labels == index
+        # Judged inside the piece's own box: a whole-image mask per piece cost
+        # 67 s on a 24 MP sheet.
+        window = (slice(y, y + bh), slice(x, x + bw))
+        member = labels[window] == index
         # Restored unless the median kept it nearly whole: a ring the median
         # cut into arcs is still a ring cut into arcs if it kept 60% of it.
-        if (filtered[member] > 0).mean() >= HAIRLINE_KEPT_WHOLE:
+        if (filtered[window][member] > 0).mean() >= HAIRLINE_KEPT_WHOLE:
             continue
-        out[member] = 255
+        out[window][member] = 255
     return out
 
 #: Share of ink pixels with no inked neighbour at all above which an image is
@@ -1384,3 +1389,4 @@ def merge_detections(
         duplicate.evidence.setdefault("merged_duplicates", 0)
         duplicate.evidence["merged_duplicates"] += 1
     return kept
+

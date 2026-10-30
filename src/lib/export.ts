@@ -4,6 +4,7 @@ import {
   toleranceForExport,
   type InspectionSheet,
 } from "@/lib/project";
+import { deriveRange, hasToleranceIntent } from "@/lib/valueFields";
 import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
@@ -13,9 +14,6 @@ import type { PageReferenceTable } from "@/types/referencePoint";
 const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
   String.raw`^(?:${TOLERANCE_NUMBER}|±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
-);
-const VALID_EMBEDDED_TOLERANCE = new RegExp(
-  String.raw`^[-+]?\d+(?:\.\d+)?\s*(?:±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
 );
 
 /**
@@ -28,6 +26,7 @@ export function findMalformedToleranceAnnotations(
 ): Annotation[] {
   return annotations.filter((annotation) => {
     if ((annotation.kind ?? "dimension") !== "dimension") return false;
+    if (annotation.acceptedValue === annotation.value) return false;
 
     const tolerance = toleranceForExport(
       annotation.range,
@@ -35,15 +34,9 @@ export function findMalformedToleranceAnnotations(
     ).trim();
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);
 
-    const value = annotation.value.trim();
-    const nominal = value.match(/[-+]?\d+(?:\.\d+)?/);
-    if (!nominal || nominal.index == null) {
-      return /[±+-]/.test(value);
-    }
-
-    const remainder = value.slice(nominal.index + nominal[0].length);
-    const hasToleranceIntent = /[±+-]/.test(remainder);
-    return hasToleranceIntent && !VALID_EMBEDDED_TOLERANCE.test(value);
+    // Value carries no tolerance the Tolerance field could hold.
+    return deriveRange(annotation.value) === "" &&
+      hasToleranceIntent(annotation.value);
   });
 }
 /** In-memory form of the inspection JSON export. */
@@ -210,3 +203,4 @@ export function downloadBlob(blob: Blob, filename: string): void {
   // a ballooned page PNG is large enough for an immediate revoke to race it.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+

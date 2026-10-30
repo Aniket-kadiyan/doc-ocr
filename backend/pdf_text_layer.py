@@ -43,8 +43,26 @@ SYMBOL_GLYPHS = {"P": "Ø", "B": "±", "n": "Ø"}
 # is safe and leaves anything else untouched.
 # ``0x91`` is the diameter: AutoCAD's "%%c" written in a text font rather
 # than in AIGDT, which left "Ø37.5 +0.2" published as a value opening with a
-# control character.
-CONTROL_GLYPHS = {"\x83": "°", "\x91": "Ø"}
+# control character. ``0x93`` is the plus-minus ("%%p"): pdfium returns no
+# text for it at all, so it has to be read by code (``_page_chars``).
+CONTROL_GLYPHS = {"\x83": "°", "\x91": "Ø", "\x93": "±"}
+
+# Another CAD export shifts into its symbol set for one character:
+# "\x01#\x02" is ± and "\x01$\x02" is ° (560-391h: "ANG ±1°").
+SHIFTED_GLYPHS = {"#": "±", "$": "°"}
+
+# A special-characteristic mark set in front of a value: "*Ø37.65" before
+# pressing, "●Ø37.50" after (BS1801025.048b). It says which state the value
+# is measured in, so it stays in the text; but it is not part of the number,
+# and the dimension gate, built for OCR, reads "*" as a misread and threw
+# every such value away while the drawing still showed it.
+CHARACTERISTIC_MARKS = "*●•"
+# The same file's Tahoma maps its bullet to "ł" in the ToUnicode table, so
+# the "after pressing" mark reached the text as a Polish letter. Only one in
+# front of a value, a bracket or nothing at all is the bullet; a word that
+# really spells with it is left alone.
+_MISMAPPED_BULLET_RE = re.compile(r"ł(?=\s*[Ø⌀(\d]|\s*$)")
+_LEADING_MARK_RE = re.compile(rf"[{re.escape(CHARACTERISTIC_MARKS)}]\s*(?=[Ø⌀(\dR])")
 
 # Fonts used by "searchable scan" tools to hide OCR text behind the image.
 # That text IS OCR output, and worse than our own, so a page carrying it is
@@ -85,6 +103,45 @@ def _decode_symbols(char: str, font: str) -> str:
     if font in SYMBOL_FONTS:
         return SYMBOL_GLYPHS.get(char, char)
     return CONTROL_GLYPHS.get(char, char)
+
+
+def _decode_bullets(text: str) -> str:
+    return _MISMAPPED_BULLET_RE.sub("●", text)
+
+
+def without_marks(text: str) -> str:
+    """A callout's text with its characteristic marks taken out, for the gates."""
+    return _LEADING_MARK_RE.sub("", text or "")
+
+
+def _page_chars(text_page: Any, count: int) -> list[str | None]:
+    """
+    Every char on the page as text; None for one that is folded into another.
+
+    pdfium returns nothing for some C1 codes, and an empty string tested as
+    ``char in "\\r\\n"`` is always true, so the ± of "6x60° ±30'" (0x93)
+    was taken for a line break and the run torn in two around a gap. Those
+    codes are read from the char's unicode value instead.
+    """
+    chars: list[str | None] = []
+    for index in range(count):
+        char = text_page.get_text_range(index, 1)
+        if not char:
+            code = pdfium_raw.FPDFText_GetUnicode(text_page.raw, index)
+            if 0x80 <= code <= 0x9F:
+                char = chr(code)
+        chars.append(char)
+    for index in range(count - 2):
+        if (
+            chars[index] == "\x01"
+            and chars[index + 1] in SHIFTED_GLYPHS
+            and pdfium_raw.FPDFText_GetUnicode(text_page.raw, index + 2) == 0x02
+        ):
+            # The middle char is the one drawn, so it keeps its own box.
+            chars[index] = None
+            chars[index + 1] = SHIFTED_GLYPHS[chars[index + 1]]
+            chars[index + 2] = None
+    return chars
 
 
 # Sub-pixel precision for FPDF_PageToDevice, which only returns integers:
@@ -155,10 +212,16 @@ def page_text_runs(
             x, y = current["x0"], current["y0"]
             width = current["x1"] - x
             height = current["y1"] - y
-            lx, ly, lw, lh = _level_box(x, y, width, height, theta)
+            if _off_axis(current["angle"]):
+                # The union of its glyphs' own boxes, not the levelled hull of
+                # the run, which grows with the run's length (_level_glyph).
+                lx, ly = current["lx"], current["ly"]
+                lw, lh = current["lx1"] - lx, current["ly1"] - ly
+            else:
+                lx, ly, lw, lh = _level_box(x, y, width, height, theta)
             runs.append(
                 TextRun(
-                    text=current["text"].strip(),
+                    text=_decode_bullets(current["text"].strip()),
                     x=x,
                     y=y,
                     width=width,
@@ -174,9 +237,14 @@ def page_text_runs(
             )
         current = None
 
+    chars = _page_chars(text_page, count)
     for index in range(count):
-        char = text_page.get_text_range(index, 1)
-        if char in "\r\n":
+        char = chars[index]
+        if char is None:
+            continue
+        # An empty char is one pdfium could not express (a NUL, an unmapped
+        # code): it has always ended the run, as a line break does.
+        if not char or char in "\r\n":
             flush()
             continue
         is_space = char.isspace()
@@ -223,7 +291,7 @@ def page_text_runs(
         if angle >= 359.95:
             angle = 0.0
         font_size = pdfium_raw.FPDFText_GetFontSize(text_page.raw, index) * scale
-        lx, ly, lw, lh = _level_box(x0, y0, x1 - x0, y1 - y0, math.radians(angle))
+        lx, ly, lw, lh = _level_glyph(x0, y0, x1 - x0, y1 - y0, angle, font_size)
 
         if current is not None:
             broken = abs(angle - current["angle"]) > 1.0
@@ -315,8 +383,10 @@ SAME_LINE_SIZE_RATIO = 1.4
 
 # A deviation is a signed number and nothing else. Requiring the shape keeps
 # the rule below from sweeping up a title-block label that happens to be set
-# in smaller type beside a value ("23-11-2018" next to "Dat.:").
-_DEVIATION_RE = re.compile(r"^[+\-\u2212\u00b1]?\s*\d*\.?\d+$")
+# in smaller type beside a value ("23-11-2018" next to "Dat.:"). An angle's
+# deviation carries its unit ("+1\u00b0", "30'"); without it the "\u00b130'" of a
+# diagonal "6x60\u00b0" chamfer was published on its own.
+_DEVIATION_RE = re.compile(r"^[+\-\u2212\u00b1]?\s*\d*\.?\d+[\u00b0'\u2032]?$")
 
 # Marks that make a number a measurement on their own.
 _VALUE_MARKS = "\u00d8\u2300\u00f8\u03c6\u03a6\u00b0\u00b1\u2032\u2033'\""
@@ -326,6 +396,15 @@ _QUALIFIER_RE = re.compile(r"(MIN|MAX|REF|TYP|THK|DEEP)", re.I)
 # A word, as opposed to the single letters of a datum or a feature control
 # frame ("Ø0.5 A B C"), which belong to the callout they sit in.
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
+# A title block's general tolerance table: "X.XXX ±.005 [.012]", "X ±NA",
+# ".X ±.060 FRAC ±1/16",
+# "FRAC ±.03 ANG ±1°". Its X's stand for digits; it states the tolerance of
+# every value on the sheet and is not a value anybody measures. Its ± used to
+# arrive undecoded, which kept it out by accident.
+_GENERAL_TOLERANCE_RE = re.compile(
+    r"(?<![A-Za-z0-9])X*\.X+\b|±\s*NA\b"
+    r"|(?<![A-Za-z])(?:ANG|ANGLES?|FRAC|FRACTIONS?|DECIMALS?)\b"
+)
 # A signed value standing entirely on its own: "+0.5", "-0.8".
 _SIGNED_ALONE_RE = re.compile(r"^[+\-\u2212\u00b1]\s*\d+(?:[.,]\d+)?$")
 
@@ -352,6 +431,15 @@ def _is_value_shaped(members: Iterable[TextRun]) -> bool:
     return sum(character.isdigit() for character in text) >= 2
 
 
+def _carries_its_own_value(members: Iterable[TextRun]) -> bool:
+    """Whether a group is a whole value, mark and all, rather than a deviation."""
+    members = list(members)
+    if all(_DEVIATION_RE.match(member.text.strip()) for member in members):
+        return False
+    text = without_marks("".join(member.text for member in members))
+    return any(mark in text for mark in "Ø⌀°") or bool(_RADIUS_RE.search(text))
+
+
 def is_callout(text: str) -> bool:
     """
     Whether one piece of exact text is a callout worth a balloon.
@@ -373,7 +461,9 @@ def is_callout(text: str) -> bool:
     """
     from segment_quality import has_dimension_value
 
-    stripped = (text or "").strip()
+    stripped = without_marks(text).strip()
+    if _GENERAL_TOLERANCE_RE.search(stripped):
+        return False
     if not has_dimension_value(stripped) and not _SIGNED_ALONE_RE.match(stripped):
         return False
     digits = sum(character.isdigit() for character in stripped)
@@ -389,6 +479,23 @@ def is_callout(text: str) -> bool:
     return digits >= 2
 
 
+def _still_a_measurement(members: Iterable[TextRun], text: str) -> bool:
+    """
+    Whether a group the callout gate rejected still plainly measures something.
+
+    A number carrying Ø, ±, ° or a radius, in a group with no word in it, is a
+    dimension whatever else surrounds it. Title-block notes ("ANGLES ±2°",
+    "WEIGHT: 6.475 lbm") carry a word and stay out.
+    """
+    if not any(character.isdigit() for character in text):
+        return False
+    if _GENERAL_TOLERANCE_RE.search(text):
+        return False
+    if _is_prose(members):
+        return False
+    return any(mark in text for mark in "Ø⌀±°") or bool(_RADIUS_RE.search(text))
+
+
 def is_bare_number(text: str) -> bool:
     """
     Whether a callout carries no mark saying what it measures.
@@ -397,7 +504,7 @@ def is_bare_number(text: str) -> bool:
     value has probably lost one, so it is published for the inspector to
     confirm rather than dropped or presented as certain.
     """
-    stripped = (text or "").strip()
+    stripped = without_marks(text).strip()
     # A lone deviation says how much, never of what. Whatever it qualifies is
     # drawn rather than written, so it always goes to the inspector.
     if _SIGNED_ALONE_RE.match(stripped):
@@ -469,6 +576,48 @@ def _level_box(
     )
 
 
+# Text further than this from the page axes is levelled glyph by glyph.
+OFF_AXIS_DEGREES = 3.0
+
+
+def _off_axis(angle: float) -> bool:
+    off = angle % 90.0
+    return min(off, 90.0 - off) >= OFF_AXIS_DEGREES
+
+
+def _level_glyph(
+    x: float, y: float, width: float, height: float, angle: float, size: float
+) -> tuple[float, float, float, float]:
+    """
+    One glyph's own box in the frame that levels ``angle``.
+
+    pdfium gives a turned glyph's axis-aligned hull, and levelling that hull
+    inflates it a second time: at 45° a 25px digit came out 45px tall, and a
+    whole run levelled from its hull grew with its length ("6x60°" 104px), so
+    the two lines of a diagonal chamfer callout banded as one. The hull is
+    ``W = a·w + b·h``, ``H = b·w + a·h``; it is solved for the glyph's own
+    ``w`` and ``h`` where that is well conditioned, and near 45°, where it is
+    not, the height comes from the font size (a digit is 0.73 of it).
+    """
+    if not _off_axis(angle):
+        return _level_box(x, y, width, height, math.radians(angle))
+    theta = math.radians(angle)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    a, b = abs(cos_t), abs(sin_t)
+    det = a * a - b * b
+    if abs(det) > 0.25:
+        glyph_w = (a * width - b * height) / det
+        glyph_h = (a * height - b * width) / det
+    else:
+        glyph_h = min(0.73 * size, max(width, height) / max(a, b))
+        glyph_w = (max(width, height) - min(a, b) * glyph_h) / max(a, b)
+    glyph_w, glyph_h = max(glyph_w, 1.0), max(glyph_h, 1.0)
+    centre_x, centre_y = x + width / 2.0, y + height / 2.0
+    level_x = centre_x * cos_t + centre_y * sin_t
+    level_y = -centre_x * sin_t + centre_y * cos_t
+    return level_x - glyph_w / 2.0, level_y - glyph_h / 2.0, glyph_w, glyph_h
+
+
 def _unlevel(x: float, y: float, theta: float) -> tuple[float, float]:
     cos_t, sin_t = math.cos(theta), math.sin(theta)
     return x * cos_t - y * sin_t, x * sin_t + y * cos_t
@@ -515,9 +664,24 @@ def _reading_order(members: list[TextRun]) -> list[TextRun]:
         else:
             rows.append([run])
     rows.sort(key=lambda row: min(r.ly for r in row))
-    return sorted(lead, key=lambda r: r.lx) + [
-        run for row in rows for run in sorted(row, key=lambda r: r.lx)
-    ]
+    small = [run for row in rows for run in sorted(row, key=lambda r: r.lx)]
+    lead.sort(key=lambda r: r.lx)
+    if len(lead) < 2 or not all(
+        _DEVIATION_RE.match(run.text.strip()) or run.text.strip() in "+-−±"
+        for run in small
+    ):
+        return lead + small
+    # Each deviation follows the lead it sits after, not the last lead in the
+    # group: "R0.3 +0.05 (34x)" read as "R0.3(34x)+0.05".
+    ordered: list[TextRun] = []
+    for index, value in enumerate(lead):
+        ordered.append(value)
+        following = lead[index + 1].lx if index + 1 < len(lead) else math.inf
+        ordered.extend(
+            run for run in small
+            if (index == 0 or run.lx >= value.lx) and run.lx < following
+        )
+    return ordered
 
 
 def _join_runs(ordered: list[TextRun], line: float) -> str:
@@ -671,6 +835,15 @@ def group_runs(
                         continue
                     if not _is_value_shaped(upper):
                         continue
+                    # Two values in a column, each with its own mark, are two
+                    # callouts: "*Ø33.21 -0.01" over "●Ø33.08" (before and
+                    # after pressing) fused into "*●Ø3Ø3/3.21/3.08/-0.01".
+                    if (
+                        _carries_its_own_value(upper)
+                        and _carries_its_own_value(lower)
+                        and max(r.size for r in lower) >= 0.9 * max(r.size for r in upper)
+                    ):
+                        continue
                     # Rows of a deviation column can overlap slightly, and the
                     # line height here is a median over text of two sizes.
                     if not -0.3 * line <= ly0 - uy1 <= 0.7 * line:
@@ -779,6 +952,74 @@ def _prefix_zone(
     return crop.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor="white")
 
 
+def _title_line_boxes(runs: list[TextRun]) -> list[dict[str, Any]]:
+    """
+    Horizontal runs merged into the line boxes the title-field matcher expects.
+
+    The text layer splits a label into words ("Drawing" "nr.:") where the OCR
+    detector returned one box per line, and the matcher pairs whole labels
+    with their values. Words merge while they share a line and sit within
+    about a character height of each other; a wider gap is the next cell.
+    """
+    level = sorted(
+        (run for run in runs if abs(run.angle) < 1.0 and run.text.strip()),
+        # Left to right: a merge only ever extends a line rightward, so a word
+        # seen before its left neighbour ("nr.:" ahead of "Drawing") would
+        # never join it.
+        key=lambda run: (run.x, run.y),
+    )
+    lines: list[dict[str, Any]] = []
+    for run in level:
+        for line in lines:
+            top = max(line["y"], run.y)
+            bottom = min(line["y"] + line["h"], run.y + run.height)
+            shorter = max(min(line["h"], run.height), 1.0)
+            taller = max(line["h"], run.height)
+            gap = run.x - (line["x"] + line["w"])
+            if (bottom - top) / shorter >= 0.5 and -0.2 * taller <= gap <= 0.8 * taller:
+                right = max(line["x"] + line["w"], run.x + run.width)
+                bottom = max(line["y"] + line["h"], run.y + run.height)
+                line["text"] += " " + run.text.strip()
+                line["y"] = min(line["y"], run.y)
+                line["w"] = right - line["x"]
+                line["h"] = bottom - line["y"]
+                break
+        else:
+            lines.append(
+                {
+                    "text": run.text.strip(),
+                    "x": run.x,
+                    "y": run.y,
+                    "w": run.width,
+                    "h": run.height,
+                    "conf": 1.0,
+                }
+            )
+    return lines
+
+
+def native_title_fields(
+    pdf: Any,
+    page_index: int,
+    keywords: list[str],
+    *,
+    dpi: float = 250.0,
+) -> list[dict[str, Any]]:
+    """
+    Read the configured title-block fields from the page's text layer.
+
+    The OCR route read the sheet corner twice over for tens of seconds and on
+    vector sheets still misread it ("REVISIONS" split into REV "ISIONS");
+    the text is already here, exact, in milliseconds.
+    """
+    from title_fields import extract_title_fields
+
+    if not keywords:
+        return []
+    runs, _size, _fonts = page_text_runs(pdf, page_index, dpi=dpi)
+    return extract_title_fields(_title_line_boxes(runs), keywords)
+
+
 def _render_page(pdf: Any, page_index: int, dpi: float) -> Any:
     document = pdf if isinstance(pdf, pdfium.PdfDocument) else pdfium.PdfDocument(pdf)
     return document[page_index].render(scale=dpi / 72.0).to_pil().convert("RGB")
@@ -790,6 +1031,8 @@ def text_layer_regions(
     *,
     dpi: float = 250.0,
     recover_symbols: bool = True,
+    refine: bool = True,
+    read_frames: bool = True,
 ) -> dict[str, Any]:
     """
     Read one page's callouts from its text layer.
@@ -798,6 +1041,17 @@ def text_layer_regions(
     and balloons them without knowing which route produced them. ``usable``
     is False when the page carries no text worth trusting, which is the
     signal to fall back to a scan.
+
+    ``refine=False`` skips the passes that run OCR per item — the drawn-mark
+    rescue of bare numbers, feature control frames and pictures pasted into
+    the page — which cost 1-15s of a page that is otherwise read in well
+    under one. The client balloons that fast read first and then asks for
+    the refined one. Every region carries a ``candidate_id`` that is the same
+    in both reads, so the second can be matched to the first.
+
+    ``read_frames=False`` leaves feature control frames out of the refined
+    read; their bare tolerance values are then published as text-layer
+    callouts like any other.
     """
     from dimension_compose import compose_engineering_dimension
     from feature_classifier import classify_feature
@@ -828,10 +1082,12 @@ def text_layer_regions(
     note_regions, text_blocks, consumed, page_image = _native_note_regions(
         pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
     )
+    for index, note in enumerate(note_regions):
+        note.setdefault("candidate_id", f"tl-note-{index}")
     regions.extend(note_regions)
     callout_runs = [run for index, run in enumerate(runs) if index not in consumed]
 
-    for group in group_runs(callout_runs, size):
+    for group_index, group in enumerate(group_runs(callout_runs, size)):
         raw = group["text"]
         composed = compose_engineering_dimension(raw, None, DetectedSymbols())
         text = (composed.text or "").strip() or raw.strip()
@@ -882,18 +1138,28 @@ def text_layer_regions(
                             )
                         ]
                     )
+        held_back = False
         if not is_callout(text):
-            excluded.append(
-                {
-                    "text": text,
-                    "bbox": bbox,
-                    "rule": "pdf_text_non_callout",
-                    "reason": "Native PDF text does not match an engineering callout",
-                }
-            )
-            continue
-        review = is_bare_number(text)
-        if review and recover_symbols:
+            if not _still_a_measurement(group["runs"], text):
+                excluded.append(
+                    {
+                        "text": text,
+                        "bbox": bbox,
+                        "rule": "pdf_text_non_callout",
+                        "reason": (
+                            "Native PDF text does not match an engineering callout"
+                        ),
+                    }
+                )
+                continue
+            # The gate's rules come from OCR, where an odd character means a
+            # misread. Here nothing is misread, so a value it rejects is a
+            # shape it has not met yet, and every new drawing met a new one.
+            # Losing it leaves no trace on the sheet; asking the inspector
+            # costs one click.
+            held_back = True
+        review = held_back or is_bare_number(text)
+        if review and not held_back and recover_symbols and refine:
             # A number with no mark has probably lost one the drawing drew
             # instead of writing: "1 × 45°" reaches the text layer as "1" and
             # "45" with nothing between them. Reading that ink recovers the
@@ -912,7 +1178,9 @@ def text_layer_regions(
             if crop is not None:
                 from ocr_pipeline import get_pipeline
 
-                result = get_pipeline().recognize(crop, compute_text_bbox=False)
+                result = get_pipeline().recognize(
+                    crop, compute_text_bbox=False, max_paddle_predictions=1, allow_prefix_ocr=False
+                )
                 rescued = rescue_geometry_marks(
                     text, str(result.get("text") or "").strip()
                 )
@@ -933,12 +1201,20 @@ def text_layer_regions(
                         ]
                     )
         feature = classify_feature(text)
+        kind = composed.kind
+        if without_marks(text) != text:
+            # "*Ø37.65" is a diameter; with the mark in front the composer
+            # sees no leading Ø and calls it linear.
+            kind = compose_engineering_dimension(
+                without_marks(text), None, DetectedSymbols()
+            ).kind
         upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
         region = {
+            "candidate_id": f"tl-{group_index}",
             "bbox": bbox,
             "text": text,
             "confidence": 1.0,
-            "type": composed.kind,
+            "type": kind,
             "category": feature.category,
             "subtype": feature.subtype,
             "label": feature.label,
@@ -959,14 +1235,16 @@ def text_layer_regions(
     # "0.2", which was published as a plain linear dimension. Frames are found
     # on the rendered page and read the way a scan reads them, and absorb the
     # bare values inside them.
-    if recover_symbols:
+    if recover_symbols and refine and read_frames:
         regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
 
     # A mixed page: vector text over an embedded picture that carries text of
     # its own (a pasted scan of a notes block, a raster title block). The
     # text layer cannot see inside the picture, so only those areas are read.
-    if recover_symbols:
+    if recover_symbols and refine:
         image_notes = _image_area_notes(pdf, page_index, runs, dpi)
+        for index, note in enumerate(image_notes):
+            note.setdefault("candidate_id", f"tl-image-{index}")
         regions.extend(image_notes)
 
     return {
@@ -1009,7 +1287,6 @@ def _native_frames(
     text_blocks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Feature control frames on a vector page, read from its render."""
-    import fcf_parse
     import gdt_pipeline
     from gdt_config import get_config
 
@@ -1017,10 +1294,10 @@ def _native_frames(
         return regions
     frame_dpi = max(dpi, FRAME_DPI)
     image = _render_page(pdf, page_index, frame_dpi)
-    # The finder is morphology only; the OCR-backed read runs only when a
-    # page has something frame-shaped on it.
-    if not fcf_parse.find_frames(image, reference_edge=min(image.size)):
-        return regions
+    # No whole-page find_frames gate first: the tiled pass below runs the same
+    # finder, and OCR only runs on what it finds. The gate binarized the page
+    # in one piece, with an adaptive block a third of its edge, and cost ~10s
+    # on an A3 sheet where the tiles cost ~3s.
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
@@ -1033,7 +1310,9 @@ def _native_frames(
             return "", 0.0
 
     try:
-        frames = gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn)
+        # A render of vector geometry is square by construction; the skew
+        # estimate cost ~20s of a page's ~30s here and could only find noise.
+        frames = gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn, deskew=False)
     except Exception:  # noqa: BLE001 - the page's text is still worth having
         return regions
     if not frames:
@@ -1380,3 +1659,4 @@ def rescue_geometry_marks(text: str, read: str) -> str | None:
     if not re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):
         return None
     return read
+

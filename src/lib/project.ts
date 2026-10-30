@@ -4,6 +4,7 @@ import { collectNotePoints } from "@/lib/notes";
 import { getTitleKeywords } from "@/lib/titleKeywords";
 import { titleFieldFor } from "@/lib/labelRules";
 import { renumberValueAnnotations } from "@/lib/annotationNumbers";
+import { deriveRange } from "@/lib/valueFields";
 import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
@@ -105,21 +106,9 @@ export function toleranceForExport(
 
   if (trimmed) return original;
 
-  const embedded = new RegExp(
-    String.raw`([+-])\s*(${EXPORT_TOLERANCE_NUMBER})\s*$`
-  ).exec(value?.trim() ?? "");
-  if (embedded && embedded.index != null) {
-    const specification = (value ?? "").slice(0, embedded.index);
-    // A sign is a tolerance only when it follows a numeric specification;
-    // this prevents a negative nominal such as R-5 from being reinterpreted.
-    if (/\d\s*$/.test(specification)) {
-      return embedded[1] === "+"
-        ? `+${embedded[2]}, -0`
-        : `+0, -${embedded[2]}`;
-    }
-  }
-
-  return original;
+  // Balloons placed before the Tolerance field understood a value's form
+  // ("Ø8+0.2/0", "M8x1.25-6g") read it now as a fresh scan would.
+  return deriveRange(value ?? "") || original;
 }
 
 /** New projects contain value annotations only. Older projects may still have
@@ -490,3 +479,4 @@ export function dataUrlToFile(
     type: mimeType || dataUrl.slice(5, comma).split(";")[0],
   });
 }
+

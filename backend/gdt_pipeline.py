@@ -794,6 +794,7 @@ def scan_regions(
     ocr_fn: OcrFn | None,
     page: int = 1,
     config: GdtConfig | None = None,
+    deskew: bool = True,
 ) -> list[dict[str, Any]]:
     """Every feature control frame on a page, as whole-page scan regions.
 
@@ -807,6 +808,10 @@ def scan_regions(
 
     The segments of a composite frame are one region: they are one
     requirement, and an inspector balloons them once.
+
+    ``deskew`` is for a caller that knows the page is square — a vector PDF's
+    render is — and so can skip the skew estimate, which on a 250dpi page
+    costs more than finding the frames does.
     """
     result = analyze_page(
         image,
@@ -815,6 +820,7 @@ def scan_regions(
         source="page_scan",
         config=config,
         detect_loose_symbols=False,
+        deskew=deskew,
     )
     groups: dict[str, list[FeatureControlFrame]] = {}
     order: list[str] = []
@@ -1003,3 +1009,4 @@ def attach_adjacent_text(
             associated = " ".join(t for _, t in sorted(found))
             region["associated_text"] = associated
             region["label"] = f"{region.get('label') or 'GD&T'} · {associated}"
+

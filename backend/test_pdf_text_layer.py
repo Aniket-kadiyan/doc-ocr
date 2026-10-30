@@ -20,8 +20,10 @@ from pdf_text_layer import (
     rescue_geometry_marks,
     _decode_symbols,
     _join_runs,
+    _title_line_boxes,
     group_runs,
     has_usable_text_layer,
+    native_title_fields,
     page_text_runs,
     text_layer_regions,
 )
@@ -148,20 +150,20 @@ def test_every_callout_on_a_real_vector_drawing_is_read_exactly():
     # The twelve callouts this drawing carries, exactly as the benchmark
     # fixture lists them.
     assert {
-        "60°±0°30", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
-        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30",
+        "60°±0°30'", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
+        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30'",
         "Ø23.5-0.05", "Ø30-0.2",
     } <= set(by_text)
 
     assert by_text["Ø33-0.05-0.1"]["type"] == "diameter"
-    assert by_text["60°±0°30"]["type"] == "angle"
+    assert by_text["60°±0°30'"]["type"] == "angle"
     assert by_text["R10±2"]["category"] == "Radius"
     # Every dimension is exact, so none of them is sent for review. Only a
     # bare number with no mark saying what it measures is, and on this sheet
     # those are title-block codes, not callouts.
     dimensions = [
-        "60°±0°30", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
-        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30",
+        "60°±0°30'", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
+        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30'",
         "Ø23.5-0.05", "Ø30-0.2",
     ]
     assert not any(by_text[value]["needs_review"] for value in dimensions)
@@ -235,7 +237,7 @@ def test_symbol_recovery_adds_nothing_when_the_text_already_has_it():
     assert "Ø33-0.05-0.1" in values
     # Every radius and angle on this sheet stays what it is.
     assert "R2±0.2" in values and "R10±2" in values
-    assert "60°±0°30" in values
+    assert "60°±0°30'" in values
     assert not any(value.startswith("ØR") for value in values)
 
 
@@ -401,6 +403,151 @@ def test_no_value_on_a_crowded_sheet_is_lost_to_its_neighbours():
     assert not [
         text for text in by_text if any(0x7F <= ord(c) <= 0x9F for c in text)
     ]
+
+
+# ── Characteristic marks, stacked values and diagonal text ───────────────
+# BS1801025.048b writes each pressed diameter twice, "*Ø37.65 +0.01" before
+# pressing and "●Ø37.50" after, mostly as vertical text, and every one of the
+# "*" values was lost while the drawing still showed it.
+MARKED = DOCS / "BS1801025.048b.pdf"
+
+
+def test_a_marked_value_is_a_callout():
+    from pdf_text_layer import is_bare_number, is_callout
+
+    for text in ["*Ø37.65+0.01", "(*Ø35.77)", "●Ø37.50", "(●Ø37.90)", "*Ø33.21-0.01"]:
+        assert is_callout(text), text
+        assert not is_bare_number(text), text
+    # The mark alone, or on a word, is still not a value.
+    assert not is_callout("*")
+    assert not is_callout("*BEFORE PRESSING IN")
+
+
+def test_a_bullet_mismapped_to_a_letter_is_read_as_the_bullet():
+    from pdf_text_layer import _decode_bullets
+
+    assert _decode_bullets("łØ37.9") == "●Ø37.9"
+    assert _decode_bullets("(ł") == "(●"
+    assert _decode_bullets("ł") == "●"
+    # A word that really spells with it is left alone.
+    assert _decode_bullets("złoty") == "złoty"
+
+
+def test_two_marked_values_in_a_column_stay_two_callouts():
+    # "*Ø33.21 -0.01" over "●Ø33.08": each a whole value with its own Ø,
+    # once fused into "*●Ø3Ø3/3.21/3.08/-0.01" and thrown away.
+    groups = group_runs(
+        [
+            run("*Ø38.05", 3507, 1735, 134, 37, size=41.3),
+            run("-0.01", 3653, 1746, 57, 20, size=27.5),
+            run("●Ø37.9", 3509, 1790, 115, 36, size=41.3),
+            run("0", 3626, 1796, 16, 25, size=34.4),
+        ],
+        PAGE,
+    )
+    assert sorted(group["text"] for group in groups) == ["*Ø38.05 -0.01", "●Ø37.90"]
+
+
+def test_each_deviation_follows_the_value_it_qualifies():
+    groups = group_runs(
+        [
+            run("R0.3", 772, 2523, 69, 25, size=34.4),
+            run("+0.05", 849, 2512, 68, 20, size=27.5),
+            run("(34x)", 930, 2523, 74, 32, size=34.4),
+        ],
+        PAGE,
+    )
+    assert [group["text"] for group in groups] == ["R0.3 +0.05 (34x)"]
+
+
+def test_a_diagonal_glyph_is_levelled_to_its_own_height():
+    from pdf_text_layer import _level_glyph
+
+    # A 25px digit at 45° has a 35px square hull. Levelling the hull again
+    # made it 50px tall; the glyph itself is what lines are banded by.
+    _, _, _, height = _level_glyph(100, 100, 35, 35, 45.0, 34.4)
+    assert height == pytest.approx(0.73 * 34.4, abs=1.0)
+    # Off 45° the hull is solved exactly: a 20x25 glyph at 30°.
+    a, b = math.cos(math.radians(30)), math.sin(math.radians(30))
+    hull_w, hull_h = a * 20 + b * 25, b * 20 + a * 25
+    _, _, width, height = _level_glyph(0, 0, hull_w, hull_h, 30.0, 34.4)
+    assert (width, height) == (pytest.approx(20), pytest.approx(25))
+
+
+def test_a_rejected_value_that_still_measures_goes_to_review_not_away():
+    from pdf_text_layer import _still_a_measurement
+
+    # A mark the gate has never seen in front of a diameter.
+    assert _still_a_measurement([run("§Ø10", 0, 0, 60, 25)], "§Ø10")
+    # Title-block tolerance notes carry a word and stay out.
+    assert not _still_a_measurement([run("ANGLES", 0, 0, 90, 25), run("±2°", 95, 0, 40, 25)], "ANGLES ±2°")
+    assert not _still_a_measurement([run("BS1801025.048b", 0, 0, 200, 25)], "BS1801025.048b")
+
+
+def test_a_plus_minus_pdfium_returns_no_text_for_is_still_read():
+    # 0x93 is "%%p" in a text font. pdfium gives it no text, and the empty
+    # string passed the line-break test, so the ± vanished and split the run.
+    assert _decode_symbols("\x93", "ArialMT") == "±"
+
+
+def test_a_general_tolerance_table_is_not_a_callout():
+    from pdf_text_layer import _still_a_measurement, is_callout
+
+    for text in [
+        "X.XXX±.005[.012]", "±NA±.1±.03[.12]", ".03[.75]ANG±1°0.500",
+        ".X±.060FRAC±1/16",
+    ]:
+        assert not is_callout(text), text
+        assert not _still_a_measurement([run(text, 0, 0, 200, 25)], text), text
+    assert is_callout("L±.09") and is_callout("6×60°±30'")
+    assert is_callout("ØA±.008") and is_callout("0.5×45°") and is_callout("2X Ø6.5")
+
+
+TOLERANCE_IN_C1 = DOCS / "Dwg" / "11-2-21_rev.L_P600-2325_redacted.pdf"
+SHIFTED_TOLERANCE = DOCS / "Dwg" / "560-391h_redacted.pdf"
+
+
+@pytest.mark.skipif(not TOLERANCE_IN_C1.exists(), reason="sample drawing not present")
+def test_values_whose_plus_minus_has_no_text_keep_it():
+    texts = {region["text"] for region in text_layer_regions(TOLERANCE_IN_C1, refine=False)["regions"]}
+    assert {"L±.09", "ØA±.008", "ØB±.008"} <= texts
+
+
+@pytest.mark.skipif(not SHIFTED_TOLERANCE.exists(), reason="sample drawing not present")
+def test_shifted_symbols_are_decoded_and_the_tolerance_table_stays_out():
+    result = text_layer_regions(SHIFTED_TOLERANCE, refine=False)
+    excluded = {item["text"] for item in result["excluded"]}
+    assert "FRAC±.03[.75]ANG±1°0.500" in excluded
+    published = [region["text"] for region in result["regions"]]
+    assert not [text for text in published if "X.X" in text or "NA" in text]
+    assert not [text for text in published if any(ord(c) < 0x20 for c in text)]
+
+
+@pytest.mark.skipif(not MARKED.exists(), reason="sample drawing not present")
+def test_every_value_before_and_after_pressing_is_read():
+    result = text_layer_regions(MARKED, refine=False)
+    by_text = {region["text"]: region for region in result["regions"]}
+
+    expected = [
+        "*Ø37.65+0.01", "●Ø37.50", "*Ø41.16+0.01", "●Ø41.00",
+        "*Ø35.77-0.01", "●Ø35.63", "*Ø33.21-0.01", "●Ø33.08",
+        "*Ø38.05-0.01", "●Ø37.90",
+        "(*Ø35.77)", "(●Ø35.63)", "(*Ø37.65)", "(●Ø37.50)",
+        "(*Ø38.05)", "(●Ø37.90)",
+        "90°±0°30'", "70°±0°30'", "42°±0°30'", "5°±0°30'",
+        "R0.5±0.05", "0.5±0.1", "R0.3+0.05(34x)",
+        # The diagonal chamfer, two callouts once fused into one.
+        "Ø0.2+0.1", "6×60°±30'",
+    ]
+    assert [value for value in expected if value not in by_text] == []
+    for value in expected[:16]:
+        assert by_text[value]["category"] == "Diameter", value
+        assert by_text[value]["needs_review"] is False, value
+    # A bracketed reference is typed like any other bracket; the mark in
+    # front of a plain one must not hide its Ø from the composer.
+    for value in expected[:10]:
+        assert by_text[value]["type"] == "diameter", value
+    assert not any("ł" in text for text in by_text)
 
 
 # ── Notes, page geometry and edges ────────────────────────────────────────
@@ -605,3 +752,41 @@ def test_a_picture_on_a_vector_page_is_read_for_the_notes_inside_it(monkeypatch)
     seen.clear()
     assert _image_area_notes(covered, 0, page_text_runs(covered, 0, dpi=144)[0], dpi=144) == []
     assert seen == []
+
+
+def test_title_line_boxes_join_a_label_split_into_words():
+    # "Drawing" and "nr.:" are two runs; seen right-to-left they must still
+    # join, or the matcher reads "nr.:" as the drawing number.
+    lines = _title_line_boxes(
+        [
+            run("nr.:", 659, 1158, 16, 6),
+            run("Drawing", 613, 1156, 40, 10),
+            run("BS1801006.020", 720, 1156, 80, 10),
+        ]
+    )
+    assert [line["text"] for line in lines] == ["Drawing nr.:", "BS1801006.020"]
+
+
+@pytest.mark.skipif(not CROWDED.exists(), reason="sample drawing not present")
+def test_native_title_fields_read_the_revision_from_the_text_layer():
+    fields = native_title_fields(str(CROWDED), 0, ["REV"], dpi=108.0)
+    assert [(field["label"], field["value"]) for field in fields] == [("Rev.", "R2")]
+
+
+@pytest.mark.skipif(not SYMBOLS_AS_GEOMETRY.exists(), reason="sample drawing not present")
+def test_fast_read_shares_region_ids_with_the_refined_one():
+    data = SYMBOLS_AS_GEOMETRY.read_bytes()
+    fast = text_layer_regions(data, 0, dpi=108.0, refine=False)["regions"]
+    full = text_layer_regions(data, 0, dpi=108.0)["regions"]
+
+    fast_ids = [region["candidate_id"] for region in fast]
+    full_ids = [region["candidate_id"] for region in full]
+    assert len(set(fast_ids)) == len(fast_ids)
+    assert len(set(full_ids)) == len(full_ids)
+    # The refined read only adds frames; everything else it matches by id.
+    assert all(
+        candidate in fast_ids for candidate in full_ids if not candidate.startswith("fcf-")
+    )
+    assert any(candidate.startswith("fcf-") for candidate in full_ids)
+    assert not any(candidate.startswith("fcf-") for candidate in fast_ids)
+
