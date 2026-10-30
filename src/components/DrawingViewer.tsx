@@ -836,6 +836,15 @@ export function DrawingViewer() {
     [annotations, currentPage, setCurrentPage]
   );
 
+  // A click on the value rectangle opens the same editor as its sidebar row.
+  const handleOpen = useCallback(
+    (id: string) => {
+      handleSelect(id);
+      setEditingValueId(id);
+    },
+    [handleSelect, setEditingValueId]
+  );
+
   // Clear the local selection with the deleted value so the remaining balloons
   // do not stay dimmed against an id that no longer exists.
   const handleDelete = useCallback(
@@ -2329,7 +2338,7 @@ export function DrawingViewer() {
                           selectedScanCandidateId !== null
                         }
                         listening={!drawingActive}
-                        onSelect={handleSelect}
+                        onSelect={handleOpen}
                       />
                     ))}
                   </Layer>
@@ -2383,10 +2392,7 @@ export function DrawingViewer() {
           onMetadataChange={handleMetadataChange}
           onMetadataSelect={handleMetadataSelect}
           onMetadataClear={handleMetadataClear}
-          onEdit={(id) => {
-            handleSelect(id);
-            setEditingValueId(id);
-          }}
+          onEdit={handleOpen}
         />
       </div>
 

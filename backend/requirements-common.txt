@@ -12,6 +12,9 @@ python-multipart>=0.0.12,<1.0
 # Authentication persistence
 -r requirements-auth.txt
 
+# Human-readable per-scan diagnostics. psutil is BSD-3-Clause licensed.
+psutil>=5.9,<8
+
 # Image processing
 Pillow>=11,<13
 

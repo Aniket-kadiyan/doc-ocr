@@ -63,6 +63,10 @@ PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS = 24
 # deviation stack at a margin this tight.
 PAGE_SCAN_SLANT_MERGE_MARGIN = 0.08
 PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
+# Large sheets contain several unrelated slant directions. Levelling the
+# entire image by one angle adds multiple full-page OCR calls but finds no
+# extra values; the neighbourhood pass below remains enabled.
+PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE = 3000
 
 
 def bbox_overlap_fraction(

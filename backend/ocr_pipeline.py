@@ -4004,6 +4004,7 @@ class OcrPipeline:
         max_rois: int = 3,
         margin_frac: float = 1.0,
         expand_frac: float = 0.2,
+        whole_image: bool = True,
     ) -> list[dict[str, Any]]:
         """
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
@@ -4017,8 +4018,10 @@ class OcrPipeline:
         Results are deduped against ``base_regions`` so a value already read
         upright is not reported twice.
         """
-        # First the whole selection, which is what a zoomed-in crop needs.
-        found = self._angled_in_roi(image)
+        # A zoomed selection benefits from a whole-image angle. A full sheet
+        # often contains several unrelated slants, making that expensive pass
+        # ineffective; its neighbourhood reads still run below.
+        found = self._angled_in_roi(image) if whole_image else []
         # Then each diagonal neighbourhood, always — not only when the pass
         # above came back empty. On a large selection the slant vote is diluted
         # by the rest of the drawing and names one angle, so it recovers one
@@ -5196,6 +5199,7 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
+        read_frames: bool = True,
     ) -> dict[str, Any]:
         """Scan a whole page through the bounded technical-value route.
 
@@ -5233,6 +5237,7 @@ class OcrPipeline:
             PAGE_SCAN_ROTATIONS_CW,
             PAGE_SCAN_SLANT_CONTEXT_MARGIN,
             PAGE_SCAN_SLANT_MERGE_MARGIN,
+            PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE,
             assign_candidate_ids,
             deduplicate_page_candidates,
             map_tile_candidate,
@@ -6626,6 +6631,9 @@ class OcrPipeline:
                 max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
                 margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
                 expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
+                whole_image=(
+                    max(image.size) <= PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE
+                ),
             )
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
@@ -6696,20 +6704,24 @@ class OcrPipeline:
         # OCR could read. The frames are found from their rules and read
         # structurally; everything the scan produced inside one gives way to
         # it. Same accounting as the notes blocks above.
-        report(
-            stage="gdt",
-            message="Reading feature control frames",
-            percent=99,
-            completed=detected_count,
-            total=detected_count,
-            candidate_count=len(regions),
-            operation_label="Feature control frames",
-        )
-        frame_regions = [
-            region
-            for region in self._frame_regions(image)
-            if not overlaps_existing_value(region["bbox"], existing_value_boxes)
-        ]
+        frame_regions: list[dict[str, Any]] = []
+        if read_frames:
+            report(
+                stage="gdt",
+                message="Reading feature control frames",
+                percent=99,
+                completed=detected_count,
+                total=detected_count,
+                candidate_count=len(regions),
+                operation_label="Feature control frames",
+            )
+            frame_regions = [
+                region
+                for region in self._frame_regions(image)
+                if not overlaps_existing_value(
+                    region["bbox"], existing_value_boxes
+                )
+            ]
         if frame_regions:
             from gdt_pipeline import absorb_frames, attach_adjacent_text
 

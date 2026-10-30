@@ -112,6 +112,13 @@ The backend writes newline-delimited JSON diagnostics to
 `QTRACX_LOG_LEVEL`, `QTRACX_LOG_MAX_MB`, and `QTRACX_LOG_BACKUP_COUNT` control
 the destination, detail level, rotation size, and retained file count.
 
+Every auto-balloon scan also writes a human-readable diagnostic report under
+`backend/logs/runs/`. It records queue delay, stage and operation timings, OCR
+model-capacity wait time, outcome counts, concurrent-run overlap and observed
+backend resources without storing drawing text or user data.
+`QTRACX_RUN_REPORT_KEEP` controls how many completed reports are retained and
+defaults to 300. `runs/index.log` provides a one-line summary of each run.
+
 Each API response includes `X-Request-ID`. The same identifier follows a
 queued OCR scan through its background worker without logging the uploaded
 drawing, request body, recognized values, password, token, or database

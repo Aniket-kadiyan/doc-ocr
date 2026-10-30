@@ -11,6 +11,7 @@ and skips when that file is not present.
 from __future__ import annotations
 
 import math
+import zlib
 from pathlib import Path
 
 import pytest
@@ -403,6 +404,93 @@ def test_no_value_on_a_crowded_sheet_is_lost_to_its_neighbours():
     ]
 
 
+# ── Characteristic marks, stacked values and diagonal text ───────────────
+
+
+def test_a_marked_value_is_a_callout():
+    from pdf_text_layer import is_bare_number, is_callout
+
+    for text in ["*Ø37.65+0.01", "(*Ø35.77)", "●Ø37.50", "(●Ø37.90)"]:
+        assert is_callout(text), text
+        assert not is_bare_number(text), text
+    assert not is_callout("*")
+    assert not is_callout("*BEFORE PRESSING IN")
+
+
+def test_a_bullet_mismapped_to_a_letter_is_read_as_the_bullet():
+    from pdf_text_layer import _decode_bullets
+
+    assert _decode_bullets("łØ37.9") == "●Ø37.9"
+    assert _decode_bullets("(ł") == "(●"
+    assert _decode_bullets("ł") == "●"
+    assert _decode_bullets("złoty") == "złoty"
+
+
+def test_two_marked_values_in_a_column_stay_two_callouts():
+    groups = group_runs(
+        [
+            run("*Ø38.05", 3507, 1735, 134, 37, size=41.3),
+            run("-0.01", 3653, 1746, 57, 20, size=27.5),
+            run("●Ø37.9", 3509, 1790, 115, 36, size=41.3),
+            run("0", 3626, 1796, 16, 25, size=34.4),
+        ],
+        PAGE,
+    )
+    assert sorted(group["text"] for group in groups) == [
+        "*Ø38.05 -0.01",
+        "●Ø37.90",
+    ]
+
+
+def test_each_deviation_follows_the_value_it_qualifies():
+    groups = group_runs(
+        [
+            run("R0.3", 772, 2523, 69, 25, size=34.4),
+            run("+0.05", 849, 2512, 68, 20, size=27.5),
+            run("(34x)", 930, 2523, 74, 32, size=34.4),
+        ],
+        PAGE,
+    )
+    assert [group["text"] for group in groups] == ["R0.3 +0.05 (34x)"]
+
+
+def test_a_diagonal_glyph_is_levelled_to_its_own_height():
+    from pdf_text_layer import _level_glyph
+
+    _, _, _, height = _level_glyph(100, 100, 35, 35, 45.0, 34.4)
+    assert height == pytest.approx(0.73 * 34.4, abs=1.0)
+    a, b = math.cos(math.radians(30)), math.sin(math.radians(30))
+    hull_w, hull_h = a * 20 + b * 25, b * 20 + a * 25
+    _, _, width, height = _level_glyph(0, 0, hull_w, hull_h, 30.0, 34.4)
+    assert (width, height) == (pytest.approx(20), pytest.approx(25))
+
+
+def test_a_rejected_value_that_still_measures_goes_to_review_not_away():
+    from pdf_text_layer import _still_a_measurement
+
+    assert _still_a_measurement([run("§Ø10", 0, 0, 60, 25)], "§Ø10")
+    assert not _still_a_measurement(
+        [run("ANGLES", 0, 0, 90, 25), run("±2°", 95, 0, 40, 25)],
+        "ANGLES ±2°",
+    )
+
+
+def test_control_plus_minus_and_general_tolerance_table_handling():
+    from pdf_text_layer import _still_a_measurement, is_callout
+
+    assert _decode_symbols("\x93", "ArialMT") == "±"
+    for text in [
+        "X.XXX±.005[.012]",
+        "±NA±.1±.03[.12]",
+        ".03[.75]ANG±1°0.500",
+        ".X±.060FRAC±1/16",
+    ]:
+        assert not is_callout(text), text
+        assert not _still_a_measurement([run(text, 0, 0, 200, 25)], text), text
+    assert is_callout("L±.09")
+    assert is_callout("6×60°±30'")
+
+
 # ── Notes, page geometry and edges ────────────────────────────────────────
 # Hand-built PDFs (standard Helvetica, no fonts embedded) so the CropBox,
 # MediaBox and /Rotate are exactly what the test says. Every box is checked
@@ -539,6 +627,7 @@ def _pdf_with_image(texts, image_rect, size=(600, 400)):
     """A vector page with text, plus one embedded grey picture at ``image_rect`` (x, y, w, h in pt)."""
     width, height = 40, 20
     pixels = bytes([90] * (width * height))
+    compressed_pixels = zlib.compress(pixels)
     x, y, w, h = image_rect
     content = (
         f"q {w} 0 0 {h} {x} {y} cm /Im1 Do Q\n"
@@ -555,9 +644,10 @@ def _pdf_with_image(texts, image_rect, size=(600, 400)):
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         (
             f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
-            f"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length {len(pixels)} >>\nstream\n"
+            "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(compressed_pixels)} >>\nstream\n"
         ).encode()
-        + pixels
+        + compressed_pixels
         + b"\nendstream",
     ]
     out, offsets = bytearray(b"%PDF-1.7\n"), []
