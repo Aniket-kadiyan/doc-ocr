@@ -144,6 +144,7 @@ class ConvertDwgTest(unittest.TestCase):
 
         with (
             mock.patch("cad_documents._dwg_converter", return_value="/converter"),
+            mock.patch("cad_documents.Path.is_file", return_value=True),
             mock.patch("cad_documents._run", side_effect=fake_run),
         ):
             pdf, pages = convert_cad_to_pdf(SAMPLE_DWG, "sheet.dwg")
@@ -158,6 +159,7 @@ class ConvertDwgTest(unittest.TestCase):
         )
         with (
             mock.patch("cad_documents._dwg_converter", return_value="/converter"),
+            mock.patch("cad_documents.Path.is_file", return_value=True),
             mock.patch("cad_documents._run", return_value=failed),
             self.assertRaisesRegex(CadDocumentError, "unsupported DWG object"),
         ):
