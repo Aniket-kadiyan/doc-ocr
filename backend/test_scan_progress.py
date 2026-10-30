@@ -418,7 +418,7 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
     assert len(authoritative_crops) == 2
     assert all(width > 40 and height > 16 for width, height in authoritative_crops)
     assert any(
-        event["pass_total"] == 8 and event["tile_total"] == 4
+        event["pass_total"] == 16 and event["tile_total"] == 4
         for event in events
     )
     assert any(

@@ -4640,7 +4640,11 @@ class OcrPipeline:
             split_mixed_clusters,
             union_bbox,
         )
-        from segment_quality import count_dimension_values, dedupe_regions
+        from segment_quality import (
+            count_dimension_values,
+            dedupe_regions,
+            has_dimension_value,
+        )
         from stroke_filter import is_stray_line
         from page_scan import overlaps_existing_value
         from page_value_filters import (
@@ -5057,11 +5061,13 @@ class OcrPipeline:
                     regions.extend(split_regions)
                     continue
 
-            # Keep the geometry-only stray-line rejection here, then let the
-            # shared section policy below make the one authoritative content
-            # decision. The former segment-quality gates rejected complete,
-            # short values such as "50" before that policy could evaluate
-            # them, so section and page scans disagreed about the same value.
+            # Keep the broad prose/code rejection and the geometry-only
+            # stray-line check here, then let the shared section policy below
+            # make the syntax decision. The former is_segment_worthy gate
+            # rejected complete, short values such as "50" before that policy
+            # could evaluate them, so section and page scans disagreed.
+            if not has_dimension_value(text):
+                continue
             if is_stray_line(sub, text):
                 continue
 
