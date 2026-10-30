@@ -794,6 +794,7 @@ def scan_regions(
     ocr_fn: OcrFn | None,
     page: int = 1,
     config: GdtConfig | None = None,
+    deskew: bool = True,
 ) -> list[dict[str, Any]]:
     """Every feature control frame on a page, as whole-page scan regions.
 
@@ -807,6 +808,10 @@ def scan_regions(
 
     The segments of a composite frame are one region: they are one
     requirement, and an inspector balloons them once.
+
+    ``deskew=False`` is used for vector-PDF renders, whose geometry is already
+    square to the page. It avoids an expensive skew estimate without changing
+    the normal scanned-image path.
     """
     result = analyze_page(
         image,
@@ -815,6 +820,7 @@ def scan_regions(
         source="page_scan",
         config=config,
         detect_loose_symbols=False,
+        deskew=deskew,
     )
     groups: dict[str, list[FeatureControlFrame]] = {}
     order: list[str] = []

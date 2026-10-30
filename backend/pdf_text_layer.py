@@ -1060,7 +1060,12 @@ def text_layer_regions(
             if crop is not None:
                 from ocr_pipeline import get_pipeline
 
-                result = get_pipeline().recognize(crop, compute_text_bbox=False)
+                result = get_pipeline().recognize(
+                    crop,
+                    compute_text_bbox=False,
+                    max_paddle_predictions=1,
+                    allow_prefix_ocr=False,
+                )
                 rescued = rescue_geometry_marks(
                     text, str(result.get("text") or "").strip()
                 )
@@ -1162,7 +1167,6 @@ def _native_frames(
     text_blocks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Feature control frames on a vector page, read from its render."""
-    import fcf_parse
     import gdt_pipeline
     from gdt_config import get_config
 
@@ -1170,23 +1174,26 @@ def _native_frames(
         return regions
     frame_dpi = max(dpi, FRAME_DPI)
     image = _render_page(pdf, page_index, frame_dpi)
-    # The finder is morphology only; the OCR-backed read runs only when a
-    # page has something frame-shaped on it.
-    if not fcf_parse.find_frames(image, reference_edge=min(image.size)):
-        return regions
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
 
     def ocr_fn(crop: Any) -> tuple[str, float]:
         try:
-            result = pipeline.recognize(crop)
+            result = pipeline.recognize(
+                crop,
+                max_paddle_predictions=1,
+                allow_prefix_ocr=False,
+            )
             return str(result.get("text") or ""), float(result.get("confidence") or 0.0)
         except Exception:  # noqa: BLE001 - one unreadable cell
             return "", 0.0
 
     try:
-        frames = gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn)
+        # The tiled pass already performs frame finding. A separate full-page
+        # gate repeated the same morphology, and vector geometry needs no
+        # deskew estimate.
+        frames = gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn, deskew=False)
     except Exception:  # noqa: BLE001 - the page's text is still worth having
         return regions
     if not frames:
