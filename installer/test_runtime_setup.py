@@ -86,7 +86,10 @@ class RuntimeSetupTests(unittest.TestCase):
             self.assertEqual(result["status"], "ready")
             self.assertFalse(result["changes_applied"])
             self.assertEqual(result["environment_action"], "create")
-            self.assertEqual(request.environment, root / "backend" / ".venv")
+            self.assertEqual(
+                request.environment,
+                (root / "backend" / ".venv").resolve(),
+            )
             self.assertTrue(str(result["requirements"]).endswith("requirements.txt"))
             self.assertFalse(request.environment.exists())
             stages = [action["stage"] for action in result["actions"]]
@@ -117,7 +120,10 @@ class RuntimeSetupTests(unittest.TestCase):
             ):
                 result = plan_runtime_setup(request)
 
-            self.assertEqual(request.environment, root / "backend" / ".venv-gpu")
+            self.assertEqual(
+                request.environment,
+                (root / "backend" / ".venv-gpu").resolve(),
+            )
             self.assertEqual(result["environment_action"], "create")
             self.assertEqual(result["actions"][0]["stage"], "python-environment")
 

@@ -4640,12 +4640,7 @@ class OcrPipeline:
             split_mixed_clusters,
             union_bbox,
         )
-        from segment_quality import (
-            count_dimension_values,
-            dedupe_regions,
-            has_dimension_value,
-            is_segment_worthy,
-        )
+        from segment_quality import count_dimension_values, dedupe_regions
         from stroke_filter import is_stray_line
         from page_scan import overlaps_existing_value
         from page_value_filters import (
@@ -5062,14 +5057,11 @@ class OcrPipeline:
                     regions.extend(split_regions)
                     continue
 
-            # A balloon is for something a person measures. These three gates
-            # drop what merely looks numeric: zone letters and balloon numbers
-            # ("4", "33"), revision dates ("DATE3/17/2011..."), and leader or
-            # extension lines that OCR'd as a phantom digit.
-            if not is_segment_worthy(text):
-                continue
-            if not has_dimension_value(text):
-                continue
+            # Keep the geometry-only stray-line rejection here, then let the
+            # shared section policy below make the one authoritative content
+            # decision. The former segment-quality gates rejected complete,
+            # short values such as "50" before that policy could evaluate
+            # them, so section and page scans disagreed about the same value.
             if is_stray_line(sub, text):
                 continue
 
@@ -7255,5 +7247,6 @@ def get_pipeline() -> OcrPipeline:
         _pipeline = OcrPipeline()
         _pipeline.load(load_runtime_config().ocr_model_instances)
     return _pipeline
+
 
 

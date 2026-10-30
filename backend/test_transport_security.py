@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import ssl
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -61,13 +60,14 @@ class TransportSecurityTests(unittest.TestCase):
                     "TLS_KEY_FILE": str(key),
                 },
                 clear=True,
-            ), patch.object(
-                ssl.SSLContext, "load_cert_chain", autospec=True
+            ), patch(
+                "transport_security._certificate_pair_is_valid",
+                return_value=True,
             ) as load_pair:
                 transport = resolve_transport_security(load_runtime_config())
         self.assertTrue(transport.active)
         self.assertEqual(transport.scheme, "https")
-        load_pair.assert_called_once()
+        load_pair.assert_called_once_with(cert.resolve(), key.resolve())
 
     def test_invalid_pair_falls_back_to_http(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -91,3 +91,4 @@ class TransportSecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

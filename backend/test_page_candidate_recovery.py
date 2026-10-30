@@ -278,7 +278,7 @@ def test_authoritative_target_lock_rejects_an_adjacent_value() -> None:
     assert authoritative_result_needs_retry(neighbour)
 
 
-def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> None:
+def test_authoritative_resolution_preserves_symbols_and_trusts_complete_reread() -> None:
     equivalent = resolve_authoritative_hypotheses(
         _result("30°±3°", confidence=0.40),
         [
@@ -314,7 +314,11 @@ def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> N
     assert not equivalent["needs_review"]
     assert conflict["text"] == "105"
     assert conflict["numeric_conflict"]
-    assert conflict["authoritative_review_required"]
+    # The target-locked Draw Value pipeline is authoritative when it produced
+    # one complete engineering value. The preliminary batch read remains as
+    # diagnostic evidence but must not flood the review queue.
+    assert not conflict["needs_review"]
+    assert not conflict["authoritative_review_required"]
     assert untargeted["text"] == ""
     assert untargeted["needs_review"]
 
@@ -409,3 +413,4 @@ def test_an_ordinary_disagreement_still_trusts_the_authoritative_read() -> None:
 
     assert resolved["text"] == "R1.4"
     assert not resolved["needs_review"]
+

@@ -53,6 +53,38 @@ def _overlap(a: tuple[float, float, float, float], b: tuple[float, float, float,
     return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
 
 
+def _spatial_candidate_pairs(
+    rectangles: list[tuple[float, float, float, float]],
+) -> list[tuple[int, int]]:
+    """Return only rectangle pairs whose x/y intervals can overlap.
+
+    The previous all-pairs loops made a page with 1,000 separated detector
+    boxes perform 499,500 expensive merge checks. A sweep on the left edge
+    discards boxes once their right edge is behind the current rectangle and
+    checks y overlap before calling the semantic merge rule. Sorting the final
+    pairs by their original indexes preserves the old deterministic union
+    order, including the transitive cluster-size cap.
+    """
+
+    ordered = sorted(range(len(rectangles)), key=lambda index: rectangles[index][0])
+    active: list[int] = []
+    candidates: set[tuple[int, int]] = set()
+    for current in ordered:
+        x0, y0, _x1, y1 = rectangles[current]
+        active = [
+            other
+            for other in active
+            if rectangles[other][2] >= x0
+        ]
+        for other in active:
+            _ox0, oy0, _ox1, oy1 = rectangles[other]
+            if oy1 < y0 or y1 < oy0:
+                continue
+            candidates.add((min(other, current), max(other, current)))
+        active.append(current)
+    return sorted(candidates)
+
+
 def _reading_axis(box: Box) -> str:
     """Primary reading axis from aspect ratio: ``vertical``, ``horizontal``, or ``square``."""
     w, h = box["w"], box["h"]
@@ -248,23 +280,23 @@ def cluster_boxes(
         max_w = min(max_w, abs_cap) if max_w else abs_cap
         max_h = min(max_h, abs_cap) if max_h else abs_cap
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not _should_merge(boxes[i], boxes[j], margin_ratio):
+    inflated = [_inflate(box, margin_ratio) for box in boxes]
+    for i, j in _spatial_candidate_pairs(inflated):
+        if not _should_merge(boxes[i], boxes[j], margin_ratio):
+            continue
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            continue
+        # Cap the *transitive* cluster size, not just this pair's union: a
+        # chain of individually-close boxes (a linear dim → its GD&T frames →
+        # a neighbouring dim) would otherwise fuse into one oversized cluster
+        # far wider than any single dimension.
+        if max_w and max_h:
+            uw = max(rx1[ri], rx1[rj]) - min(rx0[ri], rx0[rj])
+            uh = max(ry1[ri], ry1[rj]) - min(ry0[ri], ry0[rj])
+            if uw > max_w or uh > max_h:
                 continue
-            ri, rj = find(i), find(j)
-            if ri == rj:
-                continue
-            # Cap the *transitive* cluster size, not just this pair's union: a
-            # chain of individually-close boxes (a linear dim → its GD&T frames →
-            # a neighbouring dim) would otherwise fuse into one oversized cluster
-            # far wider than any single dimension.
-            if max_w and max_h:
-                uw = max(rx1[ri], rx1[rj]) - min(rx0[ri], rx0[rj])
-                uh = max(ry1[ri], ry1[rj]) - min(ry0[ri], ry0[rj])
-                if uw > max_w or uh > max_h:
-                    continue
-            union(ri, rj)
+        union(ri, rj)
 
     groups: dict[int, list[Box]] = {}
     for i, box in enumerate(boxes):
@@ -449,13 +481,21 @@ def merge_overlapping_clusters(
             i = parent[i]
         return i
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            need = complete_overlap if (complete[i] and complete[j]) else min_overlap
-            if _ubbox_overlap_frac(boxes[i], boxes[j]) >= need:
-                ri, rj = find(i), find(j)
-                if ri != rj:
-                    parent[ri] = rj
+    rectangles = [
+        (
+            box["x"],
+            box["y"],
+            box["x"] + box["width"],
+            box["y"] + box["height"],
+        )
+        for box in boxes
+    ]
+    for i, j in _spatial_candidate_pairs(rectangles):
+        need = complete_overlap if (complete[i] and complete[j]) else min_overlap
+        if _ubbox_overlap_frac(boxes[i], boxes[j]) >= need:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
 
     groups: dict[int, list[Box]] = {}
     for i, cluster in enumerate(clusters):
@@ -481,3 +521,4 @@ def order_clusters(clusters: list[list[Box]]) -> list[list[Box]]:
             boxed, key=lambda bc: (round(bc[0]["y"] / band), bc[0]["x"])
         )
     ]
+

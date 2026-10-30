@@ -33,6 +33,17 @@ class TransportSecurity:
         }
 
 
+def _certificate_pair_is_valid(cert_file: Path, key_file: Path) -> bool:
+    """Ask OpenSSL to parse the pair without retaining secret material."""
+
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+    except (OSError, ssl.SSLError, TypeError, ValueError):
+        return False
+    return True
+
+
 def resolve_transport_security(config: RuntimeConfig) -> TransportSecurity:
     """Validate the PEM certificate pair and otherwise select HTTP safely."""
 
@@ -60,10 +71,7 @@ def resolve_transport_security(config: RuntimeConfig) -> TransportSecurity:
             fallback_reason="TLS private-key file is unavailable",
         )
 
-    try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
-    except (OSError, ssl.SSLError, ValueError):
+    if not _certificate_pair_is_valid(cert_file, key_file):
         return TransportSecurity(
             requested=True,
             active=False,
@@ -76,3 +84,4 @@ def resolve_transport_security(config: RuntimeConfig) -> TransportSecurity:
         cert_file=cert_file,
         key_file=key_file,
     )
+

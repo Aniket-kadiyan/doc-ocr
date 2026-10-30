@@ -390,8 +390,10 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         progress_callback=lambda **event: events.append(event),
     )
 
-    assert len(detector_calls) == 8
-    assert [target for _size, target in detector_calls] == [1000] * 8
+    # Eight bounded panel calls are followed by the two-orientation whole-page
+    # proposal used only by the slanted-callout recovery pass on small sheets.
+    assert len(detector_calls) == 10
+    assert [target for _size, target in detector_calls] == [1000] * 8 + [1100] * 2
     assert result["detected_count"] == 4
     assert result["recognized_count"] == 4
     assert result["eligible_count"] == 2, [
@@ -679,7 +681,7 @@ def test_page_scan_corrects_preliminary_review_text_with_full_ocr() -> None:
     assert authoritative_calls == 1
 
 
-def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
+def test_page_scan_excludes_stable_garbage_instead_of_publishing_review_text() -> None:
     pipeline = object.__new__(OcrPipeline)
     pipeline._text_detector_available = True
     pipeline._page_batch_recognition_available = True
@@ -745,13 +747,11 @@ def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
 
     assert result["detected_count"] == 1
     assert result["eligible_count"] == 0
-    assert result["excluded_count"] == 0
-    assert result["review_count"] == 1
-    assert result["review_candidates"][0]["candidate_id"] == "C0001"
-    assert result["review_candidates"][0]["text"] == ""
-    assert "detector target" in result["review_candidates"][0]["review_reason"].lower()
-    assert result["candidate_outcomes"][0]["state"] == "review"
-    assert result["candidate_outcomes"][0]["text"] == ""
+    assert result["excluded_count"] == 1
+    assert result["review_count"] == 0
+    assert result["review_candidates"] == []
+    assert result["candidate_outcomes"][0]["state"] == "excluded"
+    assert result["candidate_outcomes"][0]["rule"] == "no_numeric_component"
     assert recognition_profiles == [
         "batch_recognition",
         "recovery_rectified",
@@ -963,3 +963,4 @@ def test_a_prose_strip_keeps_its_single_oriented_read() -> None:
 
     assert pipeline.sizes == [1]
     assert results[0]["reading_rotation_cw"] == 0
+

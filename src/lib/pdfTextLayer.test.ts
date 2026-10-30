@@ -86,7 +86,7 @@ describe("reading a PDF text layer", () => {
   it("asks for no feature control frames when GD&T reading is off", async () => {
     const fetchMock = reply({ usable: false, regions: [], fonts: [] });
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("window", new EventTarget());
+    const browserWindow = Object.assign(new EventTarget(), {\n      location: { protocol: "http:" },\n    });\n    vi.stubGlobal("window", browserWindow);
     vi.stubGlobal("CustomEvent", class extends Event {});
     const items = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -202,4 +202,5 @@ describe("folding the refined read into the fast one", () => {
     expect(plan.update).toEqual([]);
   });
 });
+
 
