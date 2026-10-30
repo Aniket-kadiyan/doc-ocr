@@ -85,6 +85,9 @@ class RuntimeConfig:
     tls_key_file: Path | None = field(repr=False)
     checksheet_data_dir: Path
     checksheet_max_document_mb: int
+    cad_max_document_mb: int
+    cad_convert_timeout_seconds: int
+    dwg_converter_path: Path | None = field(repr=False)
     database_url: str = field(repr=False)
     auth_session_hours: int
     log_dir: Path
@@ -110,6 +113,9 @@ class RuntimeConfig:
             "cors_policy": "allow_all_origins",
             "checksheet_data_dir": str(self.checksheet_data_dir),
             "checksheet_max_document_mb": self.checksheet_max_document_mb,
+            "cad_max_document_mb": self.cad_max_document_mb,
+            "cad_convert_timeout_seconds": self.cad_convert_timeout_seconds,
+            "dwg_converter_configured": self.dwg_converter_path is not None,
             "database_configured": bool(self.database_url),
             "auth_session_hours": self.auth_session_hours,
             "log_dir": str(self.log_dir),
@@ -197,6 +203,13 @@ def load_runtime_config() -> RuntimeConfig:
         checksheet_max_document_mb=_strict_int(
             "CHECKSHEET_MAX_DOCUMENT_MB", 200, minimum=1, maximum=2048
         ),
+        cad_max_document_mb=_strict_int(
+            "CAD_MAX_DOCUMENT_MB", 128, minimum=1, maximum=2048
+        ),
+        cad_convert_timeout_seconds=_strict_int(
+            "CAD_CONVERT_TIMEOUT_SECONDS", 180, minimum=5, maximum=1800
+        ),
+        dwg_converter_path=_optional_configured_path("DWG2DXF_ACADSHARP"),
         database_url=os.environ.get("DATABASE_URL", "").strip(),
         auth_session_hours=_strict_int(
             "AUTH_SESSION_HOURS", 8, minimum=1, maximum=168

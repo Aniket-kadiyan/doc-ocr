@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from auth_routes import require_protected_request, router as auth_router
 from auth_service import AuthenticatedSession
+from cad_documents import CadDocumentError, convert_cad_to_pdf
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -237,6 +238,45 @@ async def raster_document_page(
             "X-Document-Page-Height": str(rendered.height),
             "X-Document-Format": rendered.format,
         },
+    )
+
+
+@app.post("/documents/cad-to-pdf", dependencies=protected_request)
+async def cad_document_to_pdf(file: UploadFile = File(...)) -> Response:
+    """Convert a validated DWG or DXF drawing to a vector PDF."""
+
+    max_bytes = runtime_config.cad_max_document_mb * 1024 * 1024
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "The CAD file is larger than the "
+                f"{runtime_config.cad_max_document_mb} MB limit"
+            ),
+        )
+
+    converter_path = (
+        str(runtime_config.dwg_converter_path)
+        if runtime_config.dwg_converter_path is not None
+        else None
+    )
+    try:
+        pdf, page_count = await run_in_threadpool(
+            convert_cad_to_pdf,
+            data,
+            file.filename or "",
+            max_bytes=max_bytes,
+            timeout_seconds=runtime_config.cad_convert_timeout_seconds,
+            converter_path=converter_path,
+        )
+    except CadDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"X-Document-Page-Count": str(page_count)},
     )
 
 

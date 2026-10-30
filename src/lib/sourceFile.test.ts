@@ -55,4 +55,16 @@ describe("source drawing format detection", () => {
       detectSourceFileKind(file("RIFF0000WEBP", "drawing.webp", "image/webp"))
     ).resolves.toBe("webp");
   });
+
+  it("recognizes DWG and DXF drawings for conversion", async () => {
+    await expect(
+      detectSourceFileKind(file("AC1015\0\0\0\0\0", "part.dwg"))
+    ).resolves.toBe("dwg");
+    await expect(
+      detectSourceFileKind(file("  0\r\nSECTION\r\n  2\r\nHEADER\r\n", "part.dxf"))
+    ).resolves.toBe("dxf");
+    await expect(
+      detectSourceFileKind(file("AC1015\0\0\0\0\0", "part.dxf"))
+    ).rejects.toThrow(/contains DWG data/i);
+  });
 });
