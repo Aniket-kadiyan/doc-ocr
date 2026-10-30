@@ -109,6 +109,9 @@ jobs:
                 backend\.venv backend\.venv-gpu `
             /XF .env.local *.pyc
           if ($LASTEXITCODE -gt 7) { throw "robocopy failed: $LASTEXITCODE" }
+          # Robocopy uses 1-7 for successful copy states. Clear that native
+          # process code so PowerShell does not fail the otherwise valid step.
+          $global:LASTEXITCODE = 0
           $zip = Join-Path $PWD "QTracX-windows-x64.zip"
           Compress-Archive -Path $package -DestinationPath $zip -CompressionLevel Optimal
           (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() + `
