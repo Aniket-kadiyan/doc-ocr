@@ -107,6 +107,38 @@ def overlaps_existing_value(
     )
 
 
+def bbox_intersects_scope(
+    bbox: Mapping[str, float],
+    scope: Mapping[str, float],
+) -> bool:
+    """Whether two page-coordinate rectangles have positive overlap."""
+
+    return (
+        float(bbox["x"]) < float(scope["x"]) + float(scope["width"])
+        and float(scope["x"]) < float(bbox["x"]) + float(bbox["width"])
+        and float(bbox["y"]) < float(scope["y"]) + float(scope["height"])
+        and float(scope["y"]) < float(bbox["y"]) + float(bbox["height"])
+    )
+
+
+def bbox_center_in_scope(
+    bbox: Mapping[str, float],
+    scope: Mapping[str, float],
+) -> bool:
+    """Whether an object's centre belongs to the requested page scope."""
+
+    centre_x = float(bbox["x"]) + float(bbox["width"]) / 2.0
+    centre_y = float(bbox["y"]) + float(bbox["height"]) / 2.0
+    return (
+        float(scope["x"])
+        <= centre_x
+        <= float(scope["x"]) + float(scope["width"])
+        and float(scope["y"])
+        <= centre_y
+        <= float(scope["y"]) + float(scope["height"])
+    )
+
+
 @dataclass(frozen=True)
 class PageCandidate:
     """One detector-pass object restored to whole-page coordinates."""

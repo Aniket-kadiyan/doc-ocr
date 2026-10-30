@@ -6,8 +6,9 @@ temporary overlapping processing panels from whitespace and ink density, and
 provides page-coordinate geometry for the live debug overlay.
 
 Nothing in this module decides whether a recognized value is technically
-meaningful.  Table masks are a whole-page hard exclusion; selected-section
-pixels remain raw and use only the light value gate in :mod:`page_value_filters`.
+meaningful. Whole-page and selected-section scans consume the same table masks
+and adaptive panels so a value cannot change merely because the user selected
+the area around it.
 """
 
 from __future__ import annotations
@@ -120,21 +121,20 @@ class PageLayout:
             "page_width": self.width,
             "page_height": self.height,
             "scope_kind": scope_kind,
-            "table_masks": (
-                [box.to_dict() for box in self.table_masks]
+            # Both scan scopes now consume the same page masks. Section mode
+            # processes only panels whose state is not ``skipped``.
+            "table_masks": [box.to_dict() for box in self.table_masks],
+            "panels": [
+                panel.to_dict(
+                    state=states.get(panel.panel_id, "pending")
+                )
+                for panel in self.panels
                 if scope_kind == "page"
-                else []
-            ),
-            "panels": (
-                [
-                    panel.to_dict(
-                        state=states.get(panel.panel_id, "pending")
-                    )
-                    for panel in self.panels
-                ]
-                if scope_kind == "page"
-                else []
-            ),
+                or (
+                    panel_states is not None
+                    and states.get(panel.panel_id, "pending") != "skipped"
+                )
+            ],
             "overlaps": (
                 [box.to_dict() for box in self.overlaps]
                 if scope_kind == "page"
@@ -1078,9 +1078,8 @@ def crop_section(
     """Return a padded raw section crop in the page coordinate system.
 
     The returned origin maps crop-local coordinates—including padding—back to
-    the full page.  Section mode is deliberately user-bounded and layout-mask
-    free, so table-like pixels are retained exactly as selected. A later light
-    text gate may still discard pure letters, symbols, and prose.
+    the full page. Pixels are returned unchanged; callers that need scan parity
+    must apply the page layout separately.
     """
 
     x0 = max(0, floor(float(scope_bbox["x"])))

@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-postprocessing-progress"
+OCR_CHANGESET_ID = "mvp2-scope-aware-scan-parity"
 #: A section-scan value read below this confidence is excluded rather than
 #: ballooned. See the gate in ``segment`` for the measurement behind it.
 SECTION_MIN_CONFIDENCE = 0.6
@@ -5290,16 +5290,15 @@ class OcrPipeline:
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
         read_frames: bool = True,
+        scope_bbox: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
-        """Scan a whole page through the bounded technical-value route.
+        """Scan a page or page-coordinate section through one shared route.
 
-        Section scanning intentionally remains in :meth:`segment`.  This page
-        path runs only standalone detection (0/90 degrees) on adaptive panels,
-        deduplicates atomic boxes without grouping neighbours, recognizes crops
-        in standalone model batches, performs bounded recognition-only recovery,
-        applies ``page_value_filters.py`` as a cost gate, then rereads every
-        eligible/review object through the complete Draw Value OCR pipeline
-        before final filtering and publication.
+        A section keeps the full page image and layout. Only adaptive panels
+        intersecting ``scope_bbox`` are processed, then only objects whose
+        centres lie in that exact scope are published. Consequently detector
+        scale, table masks, panel boundaries, coordinates, OCR and value rules
+        match page mode instead of treating a crop as a new drawing.
         """
 
         from collections import Counter
@@ -5329,6 +5328,8 @@ class OcrPipeline:
             PAGE_SCAN_SLANT_MERGE_MARGIN,
             PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE,
             assign_candidate_ids,
+            bbox_center_in_scope,
+            bbox_intersects_scope,
             deduplicate_page_candidates,
             map_tile_candidate,
             overlaps_existing_value,
@@ -5424,15 +5425,64 @@ class OcrPipeline:
         if (layout.width, layout.height) != page_size:
             raise ValueError("Page layout dimensions do not match the scan image")
 
+        scan_scope: dict[str, float] | None = None
+        if scope_bbox is not None:
+            try:
+                raw_x = float(scope_bbox["x"])
+                raw_y = float(scope_bbox["y"])
+                raw_width = float(scope_bbox["width"])
+                raw_height = float(scope_bbox["height"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Section scope needs numeric page coordinates"
+                ) from exc
+            if not all(
+                np.isfinite(value)
+                for value in (raw_x, raw_y, raw_width, raw_height)
+            ):
+                raise ValueError("Section scope coordinates must be finite")
+            scope_x0 = max(0.0, raw_x)
+            scope_y0 = max(0.0, raw_y)
+            scope_x1 = min(float(page_size[0]), raw_x + raw_width)
+            scope_y1 = min(float(page_size[1]), raw_y + raw_height)
+            if (
+                raw_width <= 0
+                or raw_height <= 0
+                or scope_x1 <= scope_x0
+                or scope_y1 <= scope_y0
+            ):
+                raise ValueError("Section scope does not intersect the page")
+            scan_scope = {
+                "x": scope_x0,
+                "y": scope_y0,
+                "width": scope_x1 - scope_x0,
+                "height": scope_y1 - scope_y0,
+            }
+        scan_scope_kind = "section" if scan_scope is not None else "page"
+        scan_label = "section" if scan_scope is not None else "page"
+
+        processing_panels = [
+            (panel_index, panel)
+            for panel_index, panel in enumerate(layout.panels, start=1)
+            if scan_scope is None
+            or bbox_intersects_scope(panel.bbox.to_dict(), scan_scope)
+        ]
+        if not processing_panels:
+            raise ValueError("No processing panel intersects the section scope")
+
         masked_page = mask_table_regions(image, layout.table_masks)
         tiles = [
-            DetectionTile(
-                x=panel.bbox.x,
-                y=panel.bbox.y,
-                width=panel.bbox.width,
-                height=panel.bbox.height,
+            (
+                panel_index,
+                panel,
+                DetectionTile(
+                    x=panel.bbox.x,
+                    y=panel.bbox.y,
+                    width=panel.bbox.width,
+                    height=panel.bbox.height,
+                ),
             )
-            for panel in layout.panels
+            for panel_index, panel in processing_panels
         ]
         tile_total = len(tiles)
         if tile_total < 1 or tile_total > PAGE_SCAN_MAX_TILES:
@@ -5446,13 +5496,17 @@ class OcrPipeline:
                 f"{PAGE_SCAN_MAX_DETECTOR_CALLS} detector calls"
             )
         page_candidates = []
+        selected_panel_ids = {panel.panel_id for _, panel in processing_panels}
         panel_states = {
-            panel.panel_id: "pending" for panel in layout.panels
+            panel.panel_id: (
+                "pending" if panel.panel_id in selected_panel_ids else "skipped"
+            )
+            for panel in layout.panels
         }
         report(
             stage="preparing",
             message=(
-                f"Preparing {tile_total} adaptive panel"
+                f"Preparing {tile_total} adaptive {scan_label} panel"
                 f"{'s' if tile_total != 1 else ''}, "
                 f"{len(layout.table_masks)} table masks, and "
                 f"{detector_pass_total} detector-only passes"
@@ -5464,14 +5518,17 @@ class OcrPipeline:
             pass_total=detector_pass_total,
             operation_label="Adaptive page layout",
             overlay=layout.overlay(
-                scope_kind="page",
+                scope_kind=scan_scope_kind,
                 panel_states=panel_states,
             ),
         )
 
         detector_pass_index = 0
-        for tile_index, tile in enumerate(tiles, start=1):
-            panel_id = layout.panels[tile_index - 1].panel_id
+        for tile_index, (panel_index, panel, tile) in enumerate(
+            tiles,
+            start=1,
+        ):
+            panel_id = panel.panel_id
             panel_states[panel_id] = "active"
             tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
@@ -5513,7 +5570,7 @@ class OcrPipeline:
                     ),
                     candidate_count=len(page_candidates),
                     overlay=layout.overlay(
-                        scope_kind="page",
+                        scope_kind=scan_scope_kind,
                         panel_states=panel_states,
                     ),
                 )
@@ -5538,7 +5595,7 @@ class OcrPipeline:
                             "height": restored["h"],
                         },
                         tile,
-                        tile_index=tile_index,
+                        tile_index=panel_index,
                         page_size=page_size,
                         detection_confidence=float(
                             restored.get("conf", 0.0)
@@ -5594,7 +5651,7 @@ class OcrPipeline:
                 operation_label=f"Panel {panel_id} complete",
                 candidate_count=len(page_candidates),
                 overlay=layout.overlay(
-                    scope_kind="page",
+                    scope_kind=scan_scope_kind,
                     panel_states=panel_states,
                 ),
             )
@@ -5610,8 +5667,11 @@ class OcrPipeline:
         # object where the primary passes found nothing at all.
         primary_candidates = deduplicate_page_candidates(page_candidates)
         gap_candidates: list[Any] = []
-        for tile_index, tile in enumerate(tiles, start=1):
-            panel_id = layout.panels[tile_index - 1].panel_id
+        for tile_index, (panel_index, panel, tile) in enumerate(
+            tiles,
+            start=1,
+        ):
+            panel_id = panel.panel_id
             tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
             native_edge = detection_tile_target_edge(
@@ -5677,7 +5737,7 @@ class OcrPipeline:
                             "height": restored["h"],
                         },
                         tile,
-                        tile_index=tile_index,
+                        tile_index=panel_index,
                         page_size=page_size,
                         detection_confidence=float(restored.get("conf", 0.0)),
                         pass_index=detector_pass_index,
@@ -5728,16 +5788,25 @@ class OcrPipeline:
         )
         deduplicated_candidates = deduplicate_page_candidates(page_candidates)
         duplicates_removed = len(page_candidates) - len(deduplicated_candidates)
-        new_candidates = [
+        scoped_candidates = [
             candidate
             for candidate in deduplicated_candidates
+            if scan_scope is None
+            or bbox_center_in_scope(candidate.bbox, scan_scope)
+        ]
+        outside_scope_count = (
+            len(deduplicated_candidates) - len(scoped_candidates)
+        )
+        new_candidates = [
+            candidate
+            for candidate in scoped_candidates
             if not overlaps_existing_value(
                 candidate.bbox,
                 existing_value_boxes,
             )
         ]
         skipped_existing_count = (
-            len(deduplicated_candidates) - len(new_candidates)
+            len(scoped_candidates) - len(new_candidates)
         )
         final_candidates = assign_candidate_ids(new_candidates)
         neutral_overlay_candidates = [
@@ -5748,12 +5817,18 @@ class OcrPipeline:
             }
             for candidate in final_candidates
         ]
+        outside_scope_message = (
+            f", skipped {outside_scope_count} outside the selection"
+            if scan_scope is not None
+            else ""
+        )
         report(
             stage="grouping",
             message=(
-                f"Prepared {len(final_candidates)} page objects; "
-                f"removed {duplicates_removed} same-object duplicates and "
-                f"skipped {skipped_existing_count} existing balloons"
+                f"Prepared {len(final_candidates)} {scan_label} objects; "
+                f"removed {duplicates_removed} same-object duplicates"
+                f"{outside_scope_message} and "
+                f"{skipped_existing_count} existing balloons"
             ),
             percent=57,
             completed=1,
@@ -5765,7 +5840,7 @@ class OcrPipeline:
             operation_label="Atomic candidate deduplication complete",
             candidate_count=len(final_candidates),
             overlay=layout.overlay(
-                scope_kind="page",
+                scope_kind=scan_scope_kind,
                 panel_states=panel_states,
                 candidates=neutral_overlay_candidates,
             ),
@@ -5840,7 +5915,7 @@ class OcrPipeline:
                 ),
                 candidate_count=detected_count,
                 overlay=layout.overlay(
-                    scope_kind="page",
+                    scope_kind=scan_scope_kind,
                     panel_states=panel_states,
                     candidates=neutral_overlay_candidates,
                 ),
@@ -5977,7 +6052,7 @@ class OcrPipeline:
                 ),
                 candidate_count=len(selected_recovery_indexes),
                 overlay=layout.overlay(
-                    scope_kind="page",
+                    scope_kind=scan_scope_kind,
                     panel_states=panel_states,
                     candidates=recovery_overlay_candidates,
                 ),
@@ -6078,7 +6153,7 @@ class OcrPipeline:
                 ),
                 candidate_count=len(second_recovery_indexes),
                 overlay=layout.overlay(
-                    scope_kind="page",
+                    scope_kind=scan_scope_kind,
                     panel_states=panel_states,
                     candidates=recovery_overlay_candidates,
                 ),
@@ -6788,6 +6863,12 @@ class OcrPipeline:
             # The upright balloons are the point of the scan; a failed angled
             # recovery must never discard them.
             angled_regions = []
+        if scan_scope is not None:
+            angled_regions = [
+                region
+                for region in angled_regions
+                if bbox_center_in_scope(region["bbox"], scan_scope)
+            ]
         report(
             stage="slanted",
             message=f"Recovered {len(angled_regions)} slanted callouts",
@@ -6848,6 +6929,12 @@ class OcrPipeline:
             debug_dump_force=debug_dump_force,
             progress_callback=report_notes_progress,
         )
+        if scan_scope is not None:
+            notes_regions = [
+                region
+                for region in notes_regions
+                if bbox_intersects_scope(region["bbox"], scan_scope)
+            ]
         page_area = float(image.width) * float(image.height)
         for notes_region in notes_regions:
             before_notes = len(regions)
@@ -6877,8 +6964,12 @@ class OcrPipeline:
                 ]
                 detected_count -= before_review - len(review_candidates)
             detected_count -= before_notes - len(regions)
-            regions.append(notes_region)
-            detected_count += 1
+            if scan_scope is None or bbox_center_in_scope(
+                notes_region["bbox"],
+                scan_scope,
+            ):
+                regions.append(notes_region)
+                detected_count += 1
 
         # Feature control frames. The detector finds text, so a frame reached
         # this point as its tolerance compartment alone — "0.3", ballooned as
@@ -6921,6 +7012,10 @@ class OcrPipeline:
                 if not overlaps_existing_value(
                     region["bbox"], existing_value_boxes
                 )
+                and (
+                    scan_scope is None
+                    or bbox_intersects_scope(region["bbox"], scan_scope)
+                )
             ]
             report(
                 stage="gdt",
@@ -6949,6 +7044,14 @@ class OcrPipeline:
                 regions, review_candidates, frame_regions
             )
             detected_count += delta
+            if scan_scope is not None:
+                before_scope_filter = len(regions)
+                regions = [
+                    region
+                    for region in regions
+                    if bbox_center_in_scope(region["bbox"], scan_scope)
+                ]
+                detected_count -= before_scope_filter - len(regions)
 
         # Two detection passes can resolve the same callout and both survive to
         # publication, which puts a second balloon exactly on top of the first:
@@ -6989,7 +7092,9 @@ class OcrPipeline:
         )
         review_count = len(review_candidates)
         if detected_count != eligible_count + excluded_count + review_count:
-            raise AssertionError("Every detected page object must have one final state")
+            raise AssertionError(
+                f"Every detected {scan_label} object must have one final state"
+            )
 
         report(
             stage="finalizing",
@@ -7001,15 +7106,16 @@ class OcrPipeline:
             completed=detected_count,
             total=detected_count,
             candidate_count=eligible_count,
-            operation_label="Page scan complete",
+            operation_label=f"{scan_label.title()} scan complete",
             overlay=layout.overlay(
-                scope_kind="page",
+                scope_kind=scan_scope_kind,
                 panel_states=panel_states,
                 candidates=filtered_overlay_candidates,
             ),
         )
         return {
             "count": eligible_count,
+            "coordinate_space": "page",
             "detected_count": detected_count,
             "recognized_count": recognized_count,
             "eligible_count": eligible_count,

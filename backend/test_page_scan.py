@@ -5,6 +5,8 @@ from __future__ import annotations
 from detection_passes import DetectionTile
 from page_scan import (
     assign_candidate_ids,
+    bbox_center_in_scope,
+    bbox_intersects_scope,
     bbox_overlap_fraction,
     deduplicate_page_candidates,
     map_tile_candidate,
@@ -13,6 +15,32 @@ from page_scan import (
     looks_like_a_small_callout,
     uncovered_gap_candidates,
 )
+
+
+def test_scope_geometry_uses_intersection_for_work_and_centre_for_output() -> None:
+    scope = {"x": 100, "y": 50, "width": 80, "height": 60}
+
+    # A processing panel only has to touch the selection: using the complete
+    # panel is what gives section mode the same detector context as page mode.
+    assert bbox_intersects_scope(
+        {"x": 0, "y": 0, "width": 120, "height": 100},
+        scope,
+    )
+    assert not bbox_intersects_scope(
+        {"x": 0, "y": 0, "width": 90, "height": 40},
+        scope,
+    )
+
+    # Publication follows the existing native-PDF rule: a partially clipped
+    # object belongs to the selection only when its centre is inside it.
+    assert bbox_center_in_scope(
+        {"x": 95, "y": 60, "width": 20, "height": 10},
+        scope,
+    )
+    assert not bbox_center_in_scope(
+        {"x": 80, "y": 60, "width": 30, "height": 10},
+        scope,
+    )
 
 
 def test_coordinate_restoration_prefers_the_non_boundary_duplicate() -> None:
