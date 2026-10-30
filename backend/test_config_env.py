@@ -22,6 +22,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.ocr_scan_workers, 2)
         self.assertEqual(config.cad_max_document_mb, 128)
         self.assertEqual(config.cad_convert_timeout_seconds, 180)
+        self.assertTrue(config.run_reports_enabled)
+        self.assertEqual(config.run_report_keep, 300)
+        self.assertEqual(config.run_report_sample_ms, 500)
         self.assertIsNone(config.dwg_converter_path)
         self.assertFalse(config.https_enabled)
         self.assertIsNone(config.tls_cert_file)
@@ -46,6 +49,9 @@ class RuntimeConfigTests(unittest.TestCase):
             "DATABASE_URL": "postgresql://user:secret@db/qtracx",
             "QTRACX_LOG_LEVEL": "warning", "QTRACX_LOG_MAX_MB": "50",
             "QTRACX_LOG_BACKUP_COUNT": "20",
+            "QTRACX_RUN_REPORTS_ENABLED": "false",
+            "QTRACX_RUN_REPORT_KEEP": "700",
+            "QTRACX_RUN_REPORT_SAMPLE_MS": "1000",
             "AUTH_SESSION_HOURS": "12",
         }
         with patch.dict(os.environ, values, clear=True):
@@ -67,6 +73,9 @@ class RuntimeConfigTests(unittest.TestCase):
             )
         )
         self.assertEqual(config.log_level, "WARNING")
+        self.assertFalse(config.run_reports_enabled)
+        self.assertEqual(config.run_report_keep, 700)
+        self.assertEqual(config.run_report_sample_ms, 1000)
         self.assertEqual(config.auth_session_hours, 12)
         self.assertTrue(config.https_enabled)
         self.assertTrue(
@@ -116,6 +125,13 @@ class RuntimeConfigTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_RUN_REPORT_SAMPLE_MS": "99"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
 
     def test_absolute_certificate_paths_are_preserved(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -144,3 +160,4 @@ class RuntimeConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

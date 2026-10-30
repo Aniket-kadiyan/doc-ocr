@@ -25,6 +25,7 @@ from app_logging import (
     log_context,
     safe_exception_details,
 )
+import run_report
 
 ScanJobStatus = Literal[
     "queued",
@@ -56,6 +57,7 @@ def _safe_job_details(metadata: dict[str, Any]) -> dict[str, Any]:
     allowed = (
         "scope_kind", "page", "scope_pixel_area",
         "existing_value_box_count", "native_pdf_supplied",
+        "pdf_text_layer_requested", "gdt",
     )
     return {key: metadata[key] for key in allowed if key in metadata}
 
@@ -340,8 +342,65 @@ class ScanJobManager:
         work: ScanWork,
         inherited_context: dict[str, object] | None = None,
     ) -> None:
+        report: run_report.RunReport | None = None
+        if run_report.reports_enabled():
+            with self._lock:
+                job = self._jobs.get(job_id)
+                metadata = dict(job.metadata) if job else {}
+                queued_seconds = time() - job.created_at if job else 0.0
+            safe = _safe_job_details(metadata)
+            details: dict[str, Any] = {}
+            if "scope_pixel_area" in safe:
+                details["scan area"] = (
+                    f"{float(safe['scope_pixel_area']) / 1_000_000:.1f} megapixels"
+                )
+            if "existing_value_box_count" in safe:
+                details["existing boxes"] = safe["existing_value_box_count"]
+            if "gdt" in safe:
+                details["GD&T frames"] = "read" if safe["gdt"] else "skipped"
+            details["queued for"] = f"{queued_seconds:.1f} s before starting"
+            report = run_report.RunReport(
+                "scan-job",
+                job_id,
+                (
+                    f"Scan job ({metadata.get('scope_kind', 'section')} scope, "
+                    f"page {metadata.get('page', '?')})"
+                ),
+                details,
+            ).start()
         with log_context(**(inherited_context or {}), job_id=job_id):
-            self._run_with_context(job_id, work)
+            with run_report.activate(report):
+                try:
+                    self._run_with_context(job_id, work)
+                finally:
+                    if report is not None:
+                        self._finish_report(job_id, report)
+
+    def _finish_report(
+        self,
+        job_id: str,
+        report: run_report.RunReport,
+    ) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            status = job.status if job else "unknown"
+            result = job.result if job else None
+            failed = bool(job and job.error)
+        outcome: dict[str, Any] = {}
+        if isinstance(result, dict):
+            for key in (
+                "eligible_count",
+                "excluded_count",
+                "review_count",
+                "detected_count",
+            ):
+                if key in result:
+                    outcome[key] = result[key]
+        report.finish(
+            status,
+            error="see qtracx-backend.log" if failed else "",
+            outcome=outcome,
+        )
 
     def _run_with_context(self, job_id: str, work: ScanWork) -> None:
         if self._cancel_was_requested(job_id):
@@ -359,6 +418,13 @@ class ScanJobManager:
         )
         self._record_queue_wait(job_id, started_at)
         logger.info("OCR scan job started", extra={"event": "scan_job_started"})
+        report = run_report.current_run()
+        if report is not None:
+            report.progress(
+                stage="preparing",
+                message="Decoding the uploaded image",
+                operation_label="Image decode",
+            )
         if self._cancel_was_requested(job_id):
             self._finish_cancelled(job_id)
             return
@@ -416,6 +482,16 @@ class ScanJobManager:
             if overlay is not None:
                 changes["overlay"] = deepcopy(overlay)
             self._update(job_id, **changes)
+            report = run_report.current_run()
+            if report is not None:
+                report.progress(
+                    stage=stage,
+                    message=message,
+                    operation_label=operation_label,
+                    completed=completed,
+                    total=total,
+                    candidate_count=candidate_count,
+                )
             if stage != last_logged_stage:
                 last_logged_stage = stage
                 logger.info(
@@ -828,3 +904,4 @@ class ScanJobManager:
             deepcopy(job.result) if job.status == "succeeded" else None
         )
         return snapshot
+

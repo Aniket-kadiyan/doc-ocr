@@ -61,6 +61,7 @@ from page_layout import (
 )
 from page_layout_cache import PageLayoutCache
 from page_value_filters import normalize_page_value_text
+import run_report
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
 from text_layer_scan import scan_result_from_text_layer
@@ -72,6 +73,12 @@ load_env_files()
 runtime_config = load_runtime_config()
 transport_security = resolve_transport_security(runtime_config)
 log_path = configure_logging(runtime_config)
+run_reports_dir = run_report.configure_run_reports(
+    runtime_config.log_dir,
+    enabled=runtime_config.run_reports_enabled,
+    keep=runtime_config.run_report_keep,
+    sample_ms=runtime_config.run_report_sample_ms,
+)
 logger = get_logger("api")
 
 app = FastAPI(
@@ -95,6 +102,43 @@ app.include_router(checksheet_router, dependencies=protected_request)
 app.include_router(gdt_router, dependencies=protected_request)
 
 
+_REPORTED_PATHS = frozenset(
+    {
+        "/documents/raster-page",
+        "/documents/cad-to-pdf",
+        "/ocr/recognize",
+        "/ocr/segment",
+        "/ocr/reference-points",
+        "/ocr/text-layer",
+        "/ocr/title-fields",
+        "/ocr/gdt-symbols",
+    }
+)
+
+
+def _request_run_report(
+    request: Request,
+    correlation_id: str,
+) -> run_report.RunReport | None:
+    path = request.url.path
+    if (
+        not run_report.reports_enabled()
+        or request.method != "POST"
+        or path not in _REPORTED_PATHS
+    ):
+        return None
+    return run_report.RunReport(
+        "request" + path.replace("/", "-"),
+        correlation_id,
+        f"{request.method} {path}",
+        {
+            "upload size": (
+                f"{int(request.headers.get('content-length') or 0) / 1_000_000:.1f} MB"
+            )
+        },
+    ).start()
+
+
 @app.middleware("http")
 async def request_diagnostics(request: Request, call_next):
     """Correlate each request without recording its query string or body."""
@@ -114,9 +158,13 @@ async def request_diagnostics(request: Request, call_next):
             and request.url.path.startswith("/ocr/scan-jobs/")
         )
         logger.debug("HTTP request started", extra={"event": "request_started"})
+        report = _request_run_report(request, correlation_id)
         try:
-            response = await call_next(request)
+            with run_report.activate(report):
+                response = await call_next(request)
         except Exception as error:
+            if report is not None:
+                report.finish("failed", error=type(error).__name__)
             logger.error(
                 "HTTP request failed",
                 extra={
@@ -128,6 +176,15 @@ async def request_diagnostics(request: Request, call_next):
             )
             raise
         response.headers["X-Request-ID"] = correlation_id
+        if report is not None:
+            report.finish(
+                "succeeded" if response.status_code < 400 else "failed",
+                error=(
+                    "" if response.status_code < 400
+                    else f"HTTP {response.status_code}"
+                ),
+                outcome={"http_status": response.status_code},
+            )
         completion_level = (
             logging.ERROR if response.status_code >= 500
             else logging.WARNING if response.status_code >= 400
@@ -218,14 +275,19 @@ async def raster_document_page(
     """
 
     data = await file.read()
+    run_report.note(page=page, upload_bytes=len(data))
     try:
-        rendered = await run_in_threadpool(
-            render_source_page,
-            data,
-            page=page,
-            filename=file.filename or "",
-            content_type=file.content_type or "",
-        )
+        with run_report.run_step(
+            "raster-page",
+            "Validate the drawing and render the requested raster page.",
+        ):
+            rendered = await run_in_threadpool(
+                render_source_page,
+                data,
+                page=page,
+                filename=file.filename or "",
+                content_type=file.content_type or "",
+            )
     except SourceImageError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -261,15 +323,23 @@ async def cad_document_to_pdf(file: UploadFile = File(...)) -> Response:
         if runtime_config.dwg_converter_path is not None
         else None
     )
+    run_report.note(
+        upload_bytes=len(data),
+        cad_type=os.path.splitext(file.filename or "")[1].lower() or "unknown",
+    )
     try:
-        pdf, page_count = await run_in_threadpool(
-            convert_cad_to_pdf,
-            data,
-            file.filename or "",
-            max_bytes=max_bytes,
-            timeout_seconds=runtime_config.cad_convert_timeout_seconds,
-            converter_path=converter_path,
-        )
+        with run_report.run_step(
+            "cad-conversion",
+            "Validate CAD input, convert DWG to DXF when needed, and render vector PDF.",
+        ):
+            pdf, page_count = await run_in_threadpool(
+                convert_cad_to_pdf,
+                data,
+                file.filename or "",
+                max_bytes=max_bytes,
+                timeout_seconds=runtime_config.cad_convert_timeout_seconds,
+                converter_path=converter_path,
+            )
     except CadDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -307,6 +377,9 @@ def startup() -> None:
             "details": {
                 **runtime_config.public_summary(),
                 "log_file": str(log_path),
+                "run_reports_dir": (
+                    str(run_reports_dir) if run_reports_dir is not None else "disabled"
+                ),
             },
         },
     )
@@ -476,15 +549,20 @@ async def recognize_region(
     truthy = {"1", "true", "yes", "on"}
     req_dump = debug_dump or (x_debug_dump or "").strip().lower() in truthy
     req_force = debug_dump_force or (x_debug_dump_force or "").strip().lower() in truthy
-    result = await run_in_threadpool(
-        partial(
-            pipeline.recognize,
-            image,
-            image_bytes=raw,
-            debug_dump=req_dump,
-            debug_dump_force=req_force,
+    run_report.note(image=f"{image.width} x {image.height} px")
+    with run_report.run_step(
+        "recognize",
+        "OCR the drawn box and compose its engineering symbols.",
+    ):
+        result = await run_in_threadpool(
+            partial(
+                pipeline.recognize,
+                image,
+                image_bytes=raw,
+                debug_dump=req_dump,
+                debug_dump_force=req_force,
+            )
         )
-    )
     dim_type = result.get("type") or classify_dimension(result["text"]).value
 
     response: dict[str, Any] = {
@@ -501,12 +579,16 @@ async def recognize_region(
             import gdt_pipeline
             from gdt_routes import _ocr_hook
 
-            page_result = await run_in_threadpool(
-                gdt_pipeline.analyze_page,
-                image,
-                ocr_fn=_ocr_hook(),
-                source="ocr/recognize",
-            )
+            with run_report.run_step(
+                "gdt",
+                run_report.STEP_DESCRIPTIONS["gdt"],
+            ):
+                page_result = await run_in_threadpool(
+                    gdt_pipeline.analyze_page,
+                    image,
+                    ocr_fn=_ocr_hook(),
+                    source="ocr/recognize",
+                )
             response["gdt"] = page_result.to_dict()
         except Exception as exc:  # noqa: BLE001
             response["gdt"] = {
@@ -580,15 +662,20 @@ async def segment_region(
 
     title_keywords = [k.strip() for k in keywords.split(",") if k.strip()]
 
-    seg = await run_in_threadpool(
-        partial(
-            pipeline.segment,
-            image,
-            debug_dump=req_dump,
-            debug_dump_force=req_force,
-            title_keywords=title_keywords,
+    run_report.note(image=f"{image.width} x {image.height} px")
+    with run_report.run_step(
+        "segment",
+        "Split the selection into candidate values and OCR each one.",
+    ):
+        seg = await run_in_threadpool(
+            partial(
+                pipeline.segment,
+                image,
+                debug_dump=req_dump,
+                debug_dump_force=req_force,
+                title_keywords=title_keywords,
+            )
         )
-    )
 
     return _serialize_segment_result(seg)
 
@@ -1207,7 +1294,12 @@ async def read_reference_points(
     # rendered for point names, and run inline it stops the server answering
     # anything — including the progress polls of the scan that just finished
     # and asked for this, which then looks like the app has hung.
-    result = await run_in_threadpool(get_pipeline().reference_points, image)
+    run_report.note(image=f"{image.width} x {image.height} px")
+    with run_report.run_step(
+        "reference-points",
+        "Find the coordinate reference table and locate its point names.",
+    ):
+        result = await run_in_threadpool(get_pipeline().reference_points, image)
 
     def box(layout: Any) -> dict[str, float]:
         return {
@@ -1333,17 +1425,30 @@ async def read_pdf_text_layer(
     if not data:
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
 
+    run_report.note(
+        page=page,
+        refine="on" if refine else "off",
+        gdt="on" if gdt else "off",
+    )
     try:
-        result = await run_in_threadpool(
-            partial(
-                text_layer_regions,
-                data,
-                page - 1,
-                dpi=72.0 * render_scale,
-                refine=refine,
-                read_frames=gdt,
+        with run_report.run_step(
+            "text-layer",
+            (
+                "Read callouts from the PDF text layer and recover drawn marks."
+                if refine
+                else "Read callouts from the PDF text layer without OCR refinement."
+            ),
+        ):
+            result = await run_in_threadpool(
+                partial(
+                    text_layer_regions,
+                    data,
+                    page - 1,
+                    dpi=72.0 * render_scale,
+                    refine=refine,
+                    read_frames=gdt,
+                )
             )
-        )
     except IndexError:
         raise HTTPException(status_code=400, detail="That page is not in the PDF")
     except Exception as error:  # a damaged or non-PDF upload
@@ -1352,19 +1457,23 @@ async def read_pdf_text_layer(
         )
 
     wanted = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
-    title_fields = (
-        await run_in_threadpool(
-            partial(
-                native_title_fields,
-                data,
-                page - 1,
-                wanted,
-                dpi=72.0 * render_scale,
+    with run_report.run_step(
+        "title-fields",
+        "Read configured title-block fields from native PDF text.",
+    ):
+        title_fields = (
+            await run_in_threadpool(
+                partial(
+                    native_title_fields,
+                    data,
+                    page - 1,
+                    wanted,
+                    dpi=72.0 * render_scale,
+                )
             )
+            if result["usable"] and wanted
+            else []
         )
-        if result["usable"] and wanted
-        else []
-    )
 
     width, height = result["page_size"]
     serialized = _serialize_segment_result(
@@ -1408,11 +1517,16 @@ async def read_title_fields(
 
     raw = await file.read()
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    fields = await run_in_threadpool(
-        get_pipeline().title_fields,
-        image,
-        wanted,
-    )
+    run_report.note(image=f"{image.width} x {image.height} px", keywords=len(wanted))
+    with run_report.run_step(
+        "title-fields",
+        "OCR the sheet title block for configured keywords.",
+    ):
+        fields = await run_in_threadpool(
+            get_pipeline().title_fields,
+            image,
+            wanted,
+        )
 
     return {"fields": _serialize_title_fields(fields)}
 
@@ -1456,4 +1570,5 @@ if __name__ == "__main__":
         reload=runtime_config.backend_reload,
         **tls_arguments,
     )
+
 

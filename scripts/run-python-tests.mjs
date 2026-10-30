@@ -31,6 +31,7 @@ const fastTests = [
   "backend/test_auth_routes.py",
   "backend/test_manage_auth.py",
   "backend/test_config_env.py",
+  "backend/test_cad_documents.py",
   "backend/test_transport_security.py",
   "backend/test_cors_config.py",
   "backend/test_app_logging.py",
@@ -57,7 +58,9 @@ const fastTests = [
   "backend/test_pdf_text_layer.py",
   "backend/test_region_cluster.py",
   "backend/test_scan_jobs.py",
+  "backend/test_scan_gdt_option.py",
   "backend/test_scan_progress.py",
+  "backend/test_run_report.py",
   "backend/test_segment_fused_split.py",
   "backend/test_segment_quality.py",
   "backend/test_source_images.py",
@@ -112,3 +115,4 @@ for (const command of commands) {
     process.exit(1);
   }
 }
+

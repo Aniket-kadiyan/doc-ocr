@@ -11,9 +11,11 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Condition
+from time import perf_counter
 from typing import Any, Iterator, Literal
 
 from ocr_capacity import AUTO_BALLOON_SCAN_CAPACITY
+import run_report
 
 
 InferencePriority = Literal["interactive", "background"]
@@ -78,6 +80,7 @@ class InferenceCapacityGate:
         if self._slots == 0:
             raise RuntimeError("No OCR model bundle is available for inference")
 
+        wait_started = perf_counter()
         with self._condition:
             self._waiting[selected] += 1
             try:
@@ -104,10 +107,13 @@ class InferenceCapacityGate:
             self._active_operations[operation] = (
                 self._active_operations.get(operation, 0) + 1
             )
+        acquired_at = perf_counter()
+        waited = acquired_at - wait_started
 
         try:
             yield
         finally:
+            held = perf_counter() - acquired_at
             with self._condition:
                 self._active_calls -= 1
                 remaining = self._active_operations.get(operation, 0) - 1
@@ -116,6 +122,7 @@ class InferenceCapacityGate:
                 else:
                     self._active_operations.pop(operation, None)
                 self._condition.notify_all()
+            run_report.model_call(waited, held)
 
     def status(self) -> dict[str, Any]:
         """Return live counts without request content or drawing data."""
@@ -143,3 +150,4 @@ def get_inference_gate() -> InferenceCapacityGate:
     """Return the one-slot default used before a model pool is loaded."""
 
     return _inference_gate
+
