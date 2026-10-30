@@ -5196,6 +5196,7 @@ class OcrPipeline:
         cluster_margin: float = 0.72,
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
+        read_frames: bool = True,
     ) -> dict[str, Any]:
         """Scan a whole page through the bounded technical-value route.
 
@@ -6696,20 +6697,24 @@ class OcrPipeline:
         # OCR could read. The frames are found from their rules and read
         # structurally; everything the scan produced inside one gives way to
         # it. Same accounting as the notes blocks above.
-        report(
-            stage="gdt",
-            message="Reading feature control frames",
-            percent=99,
-            completed=detected_count,
-            total=detected_count,
-            candidate_count=len(regions),
-            operation_label="Feature control frames",
-        )
-        frame_regions = [
-            region
-            for region in self._frame_regions(image)
-            if not overlaps_existing_value(region["bbox"], existing_value_boxes)
-        ]
+        frame_regions: list[dict[str, Any]] = []
+        if read_frames:
+            report(
+                stage="gdt",
+                message="Reading feature control frames",
+                percent=99,
+                completed=detected_count,
+                total=detected_count,
+                candidate_count=len(regions),
+                operation_label="Feature control frames",
+            )
+            frame_regions = [
+                region
+                for region in self._frame_regions(image)
+                if not overlaps_existing_value(
+                    region["bbox"], existing_value_boxes
+                )
+            ]
         if frame_regions:
             from gdt_pipeline import absorb_frames, attach_adjacent_text
 

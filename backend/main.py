@@ -887,6 +887,10 @@ async def create_scan_job(
     scope_width: float = Form(...),
     scope_height: float = Form(...),
     existing_value_boxes: str = Form("[]"),
+    gdt: bool = Form(
+        True,
+        description="Read feature control frames during this scan",
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -961,6 +965,7 @@ async def create_scan_job(
                     source_pdf_data,
                     page - 1,
                     dpi=72.0 * pdf_render_scale,
+                    read_frames=gdt,
                 )
             except Exception as error:  # damaged PDF falls back to page OCR
                 logger.warning(
@@ -1039,6 +1044,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_progress,
                 existing_value_boxes=saved_value_boxes,
+                read_frames=gdt,
             )
             seg["coordinate_space"] = "page"
         else:
@@ -1084,6 +1090,7 @@ async def create_scan_job(
                 debug_dump_force=req_force,
                 progress_callback=report_section_progress,
                 existing_value_boxes=section_existing_boxes,
+                read_frames=gdt,
             )
             seg, section_overlay_candidates = _map_section_result_to_page(
                 seg,
@@ -1118,6 +1125,7 @@ async def create_scan_job(
         owner_id=authenticated.user.id,
         metadata={
             "scope_kind": scope_kind,
+            "gdt": gdt,
             "page": page,
             "scope_bbox": scope_bbox,
             # Liveness thresholds scale with the actual selected drawing area.
@@ -1269,6 +1277,7 @@ async def read_pdf_text_layer(
             "pixels its annotations already use"
         ),
     ),
+    gdt: bool = Form(True, description="Read feature control frames"),
 ) -> dict[str, Any]:
     """
     Read one page's callouts from the PDF's own text layer.
@@ -1296,6 +1305,7 @@ async def read_pdf_text_layer(
                 data,
                 page - 1,
                 dpi=72.0 * render_scale,
+                read_frames=gdt,
             )
         )
     except IndexError:

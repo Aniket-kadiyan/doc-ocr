@@ -188,5 +188,6 @@ describe("scan overlay coordinates", () => {
     expect(submitted).toBeInstanceOf(FormData);
     expect(submitted.get("source_pdf")).toBeInstanceOf(Blob);
     expect(submitted.get("pdf_render_scale")).toBe(String(250 / 72));
+    expect(submitted.get("gdt")).toBe("true");
   });
 });

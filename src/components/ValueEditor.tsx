@@ -36,6 +36,18 @@ export function ValueEditor({
     setTool(annotation.tool ?? "");
   }, [annotation.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Escape closes without saving, regardless of which editor control has
+  // focus.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   const updateValue = (nextValue: string) => {
     setValue(nextValue);
     setRange(deriveRange(nextValue));

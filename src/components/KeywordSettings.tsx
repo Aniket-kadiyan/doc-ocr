@@ -7,6 +7,11 @@ import {
   parseKeywords,
   setTitleKeywords,
 } from "@/lib/titleKeywords";
+import {
+  SCAN_SETTINGS_EVENT,
+  isGdtScanEnabled,
+  setGdtScanEnabled,
+} from "@/lib/scanSettings";
 
 /**
  * "Keywords to look for": the title-block labels to pull off each drawing.
@@ -19,10 +24,18 @@ export function KeywordSettings() {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [saved, setSaved] = useState(false);
+  const [readGdt, setReadGdt] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Load the stored list when the panel opens (localStorage is client-only, so
   // this cannot run during render).
+  useEffect(() => {
+    const sync = () => setReadGdt(isGdtScanEnabled());
+    sync();
+    window.addEventListener(SCAN_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(SCAN_SETTINGS_EVENT, sync);
+  }, []);
+
   useEffect(() => {
     if (open) {
       setDraft(getTitleKeywords().join(", "));
@@ -102,6 +115,22 @@ export function KeywordSettings() {
               ))
             )}
           </div>
+
+          <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-slate-100 pt-3 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={readGdt}
+              onChange={(event) => setGdtScanEnabled(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-emerald-600"
+            />
+            <span>
+              <span className="font-medium">Read GD&amp;T frames</span>
+              <span className="block text-[11px] leading-snug text-slate-400">
+                Include feature control frames during Auto Balloon scans.
+                Turn this off for drawings that do not contain GD&amp;T.
+              </span>
+            </span>
+          </label>
 
           <div className="mt-3 flex items-center gap-2">
             <button

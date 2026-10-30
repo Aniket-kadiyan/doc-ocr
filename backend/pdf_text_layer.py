@@ -43,8 +43,19 @@ SYMBOL_GLYPHS = {"P": "Ø", "B": "±", "n": "Ø"}
 # is safe and leaves anything else untouched.
 # ``0x91`` is the diameter: AutoCAD's "%%c" written in a text font rather
 # than in AIGDT, which left "Ø37.5 +0.2" published as a value opening with a
-# control character.
-CONTROL_GLYPHS = {"\x83": "°", "\x91": "Ø"}
+# control character. ``0x93`` is the plus-minus ("%%p"): pdfium can return
+# no text for it, so ``_page_chars`` recovers it from the Unicode code point.
+CONTROL_GLYPHS = {"\x83": "°", "\x91": "Ø", "\x93": "±"}
+
+# Some CAD exports shift into a symbol set for one character:
+# ``\x01#\x02`` is ± and ``\x01$\x02`` is °.
+SHIFTED_GLYPHS = {"#": "±", "$": "°"}
+
+# Special-characteristic marks can precede a measurable value. They remain
+# visible to the user, but are ignored while classifying the value itself.
+CHARACTERISTIC_MARKS = "*●•"
+_MISMAPPED_BULLET_RE = re.compile(r"ł(?=\s*[Ø⌀(\d]|\s*$)")
+_LEADING_MARK_RE = re.compile(rf"[{re.escape(CHARACTERISTIC_MARKS)}]\s*(?=[Ø⌀(\dR])")
 
 # Fonts used by "searchable scan" tools to hide OCR text behind the image.
 # That text IS OCR output, and worse than our own, so a page carrying it is
@@ -85,6 +96,37 @@ def _decode_symbols(char: str, font: str) -> str:
     if font in SYMBOL_FONTS:
         return SYMBOL_GLYPHS.get(char, char)
     return CONTROL_GLYPHS.get(char, char)
+
+
+def _decode_bullets(text: str) -> str:
+    return _MISMAPPED_BULLET_RE.sub("●", text)
+
+
+def without_marks(text: str) -> str:
+    """Return callout text without a leading characteristic mark."""
+    return _LEADING_MARK_RE.sub("", text or "")
+
+
+def _page_chars(text_page: Any, count: int) -> list[str | None]:
+    """Read page characters, recovering CAD control and shifted glyphs."""
+    chars: list[str | None] = []
+    for index in range(count):
+        char = text_page.get_text_range(index, 1)
+        if not char:
+            code = pdfium_raw.FPDFText_GetUnicode(text_page.raw, index)
+            if 0x80 <= code <= 0x9F:
+                char = chr(code)
+        chars.append(char)
+    for index in range(count - 2):
+        if (
+            chars[index] == "\x01"
+            and chars[index + 1] in SHIFTED_GLYPHS
+            and pdfium_raw.FPDFText_GetUnicode(text_page.raw, index + 2) == 0x02
+        ):
+            chars[index] = None
+            chars[index + 1] = SHIFTED_GLYPHS[chars[index + 1]]
+            chars[index + 2] = None
+    return chars
 
 
 # Sub-pixel precision for FPDF_PageToDevice, which only returns integers:
@@ -155,10 +197,16 @@ def page_text_runs(
             x, y = current["x0"], current["y0"]
             width = current["x1"] - x
             height = current["y1"] - y
-            lx, ly, lw, lh = _level_box(x, y, width, height, theta)
+            if _off_axis(current["angle"]):
+                # Use the union of the glyph-level boxes. Levelling a rotated
+                # run's axis-aligned hull inflates its height a second time.
+                lx, ly = current["lx"], current["ly"]
+                lw, lh = current["lx1"] - lx, current["ly1"] - ly
+            else:
+                lx, ly, lw, lh = _level_box(x, y, width, height, theta)
             runs.append(
                 TextRun(
-                    text=current["text"].strip(),
+                    text=_decode_bullets(current["text"].strip()),
                     x=x,
                     y=y,
                     width=width,
@@ -174,9 +222,12 @@ def page_text_runs(
             )
         current = None
 
+    chars = _page_chars(text_page, count)
     for index in range(count):
-        char = text_page.get_text_range(index, 1)
-        if char in "\r\n":
+        char = chars[index]
+        if char is None:
+            continue
+        if not char or char in "\r\n":
             flush()
             continue
         is_space = char.isspace()
@@ -223,7 +274,9 @@ def page_text_runs(
         if angle >= 359.95:
             angle = 0.0
         font_size = pdfium_raw.FPDFText_GetFontSize(text_page.raw, index) * scale
-        lx, ly, lw, lh = _level_box(x0, y0, x1 - x0, y1 - y0, math.radians(angle))
+        lx, ly, lw, lh = _level_glyph(
+            x0, y0, x1 - x0, y1 - y0, angle, font_size
+        )
 
         if current is not None:
             broken = abs(angle - current["angle"]) > 1.0
@@ -313,10 +366,9 @@ BOX_PADDING = 0.3
 # at that height, which is usually nothing to do with the callout.
 SAME_LINE_SIZE_RATIO = 1.4
 
-# A deviation is a signed number and nothing else. Requiring the shape keeps
-# the rule below from sweeping up a title-block label that happens to be set
-# in smaller type beside a value ("23-11-2018" next to "Dat.:").
-_DEVIATION_RE = re.compile(r"^[+\-\u2212\u00b1]?\s*\d*\.?\d+$")
+# A deviation is a signed number and nothing else. An angular deviation can
+# carry its degree or minute mark, for example ``+1°`` or ``30'``.
+_DEVIATION_RE = re.compile(r"^[+\-\u2212\u00b1]?\s*\d*\.?\d+[\u00b0'\u2032]?$")
 
 # Marks that make a number a measurement on their own.
 _VALUE_MARKS = "\u00d8\u2300\u00f8\u03c6\u03a6\u00b0\u00b1\u2032\u2033'\""
@@ -326,6 +378,12 @@ _QUALIFIER_RE = re.compile(r"(MIN|MAX|REF|TYP|THK|DEEP)", re.I)
 # A word, as opposed to the single letters of a datum or a feature control
 # frame ("Ø0.5 A B C"), which belong to the callout they sit in.
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
+# A title block's general tolerance table states defaults for the sheet; its
+# numeric fragments are not inspection values of their own.
+_GENERAL_TOLERANCE_RE = re.compile(
+    r"(?<![A-Za-z0-9])X*\.X+\b|±\s*NA\b"
+    r"|(?<![A-Za-z])(?:ANG|ANGLES?|FRAC|FRACTIONS?|DECIMALS?)\b"
+)
 # A signed value standing entirely on its own: "+0.5", "-0.8".
 _SIGNED_ALONE_RE = re.compile(r"^[+\-\u2212\u00b1]\s*\d+(?:[.,]\d+)?$")
 
@@ -352,6 +410,15 @@ def _is_value_shaped(members: Iterable[TextRun]) -> bool:
     return sum(character.isdigit() for character in text) >= 2
 
 
+def _carries_its_own_value(members: Iterable[TextRun]) -> bool:
+    """Whether a group is a whole value rather than only a deviation."""
+    members = list(members)
+    if all(_DEVIATION_RE.match(member.text.strip()) for member in members):
+        return False
+    text = without_marks("".join(member.text for member in members))
+    return any(mark in text for mark in "Ø⌀°") or bool(_RADIUS_RE.search(text))
+
+
 def is_callout(text: str) -> bool:
     """
     Whether one piece of exact text is a callout worth a balloon.
@@ -373,7 +440,9 @@ def is_callout(text: str) -> bool:
     """
     from segment_quality import has_dimension_value
 
-    stripped = (text or "").strip()
+    stripped = without_marks(text).strip()
+    if _GENERAL_TOLERANCE_RE.search(stripped):
+        return False
     if not has_dimension_value(stripped) and not _SIGNED_ALONE_RE.match(stripped):
         return False
     digits = sum(character.isdigit() for character in stripped)
@@ -389,6 +458,17 @@ def is_callout(text: str) -> bool:
     return digits >= 2
 
 
+def _still_a_measurement(members: Iterable[TextRun], text: str) -> bool:
+    """Keep an unfamiliar but clearly measurable value for user review."""
+    if not any(character.isdigit() for character in text):
+        return False
+    if _GENERAL_TOLERANCE_RE.search(text):
+        return False
+    if _is_prose(members):
+        return False
+    return any(mark in text for mark in "Ø⌀±°") or bool(_RADIUS_RE.search(text))
+
+
 def is_bare_number(text: str) -> bool:
     """
     Whether a callout carries no mark saying what it measures.
@@ -397,7 +477,7 @@ def is_bare_number(text: str) -> bool:
     value has probably lost one, so it is published for the inspector to
     confirm rather than dropped or presented as certain.
     """
-    stripped = (text or "").strip()
+    stripped = without_marks(text).strip()
     # A lone deviation says how much, never of what. Whatever it qualifies is
     # drawn rather than written, so it always goes to the inspector.
     if _SIGNED_ALONE_RE.match(stripped):
@@ -469,6 +549,42 @@ def _level_box(
     )
 
 
+OFF_AXIS_DEGREES = 3.0
+
+
+def _off_axis(angle: float) -> bool:
+    off = angle % 90.0
+    return min(off, 90.0 - off) >= OFF_AXIS_DEGREES
+
+
+def _level_glyph(
+    x: float, y: float, width: float, height: float, angle: float, size: float
+) -> tuple[float, float, float, float]:
+    """Map one rotated glyph's own box into its levelled text frame."""
+    if not _off_axis(angle):
+        return _level_box(x, y, width, height, math.radians(angle))
+    theta = math.radians(angle)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    a, b = abs(cos_t), abs(sin_t)
+    det = a * a - b * b
+    if abs(det) > 0.25:
+        glyph_w = (a * width - b * height) / det
+        glyph_h = (a * height - b * width) / det
+    else:
+        glyph_h = min(0.73 * size, max(width, height) / max(a, b))
+        glyph_w = (max(width, height) - min(a, b) * glyph_h) / max(a, b)
+    glyph_w, glyph_h = max(glyph_w, 1.0), max(glyph_h, 1.0)
+    centre_x, centre_y = x + width / 2.0, y + height / 2.0
+    level_x = centre_x * cos_t + centre_y * sin_t
+    level_y = -centre_x * sin_t + centre_y * cos_t
+    return (
+        level_x - glyph_w / 2.0,
+        level_y - glyph_h / 2.0,
+        glyph_w,
+        glyph_h,
+    )
+
+
 def _unlevel(x: float, y: float, theta: float) -> tuple[float, float]:
     cos_t, sin_t = math.cos(theta), math.sin(theta)
     return x * cos_t - y * sin_t, x * sin_t + y * cos_t
@@ -515,9 +631,25 @@ def _reading_order(members: list[TextRun]) -> list[TextRun]:
         else:
             rows.append([run])
     rows.sort(key=lambda row: min(r.ly for r in row))
-    return sorted(lead, key=lambda r: r.lx) + [
-        run for row in rows for run in sorted(row, key=lambda r: r.lx)
-    ]
+    small = [run for row in rows for run in sorted(row, key=lambda r: r.lx)]
+    lead.sort(key=lambda r: r.lx)
+    if len(lead) < 2 or not all(
+        _DEVIATION_RE.match(run.text.strip()) or run.text.strip() in "+-−±"
+        for run in small
+    ):
+        return lead + small
+    # Keep each deviation immediately after the value it qualifies. Without
+    # this, ``R0.3 +0.05 (34x)`` was reordered as ``R0.3 (34x) +0.05``.
+    ordered: list[TextRun] = []
+    for index, value in enumerate(lead):
+        ordered.append(value)
+        following = lead[index + 1].lx if index + 1 < len(lead) else math.inf
+        ordered.extend(
+            run
+            for run in small
+            if (index == 0 or run.lx >= value.lx) and run.lx < following
+        )
+    return ordered
 
 
 def _join_runs(ordered: list[TextRun], line: float) -> str:
@@ -671,6 +803,16 @@ def group_runs(
                         continue
                     if not _is_value_shaped(upper):
                         continue
+                    # Adjacent characteristic values often form a column
+                    # (before/after pressing). Each already carries its own
+                    # Ø/radius/angle and must remain a separate callout.
+                    if (
+                        _carries_its_own_value(upper)
+                        and _carries_its_own_value(lower)
+                        and max(r.size for r in lower)
+                        >= 0.9 * max(r.size for r in upper)
+                    ):
+                        continue
                     # Rows of a deviation column can overlap slightly, and the
                     # line height here is a median over text of two sizes.
                     if not -0.3 * line <= ly0 - uy1 <= 0.7 * line:
@@ -790,6 +932,7 @@ def text_layer_regions(
     *,
     dpi: float = 250.0,
     recover_symbols: bool = True,
+    read_frames: bool = True,
 ) -> dict[str, Any]:
     """
     Read one page's callouts from its text layer.
@@ -882,18 +1025,23 @@ def text_layer_regions(
                             )
                         ]
                     )
+        held_back = False
         if not is_callout(text):
-            excluded.append(
-                {
-                    "text": text,
-                    "bbox": bbox,
-                    "rule": "pdf_text_non_callout",
-                    "reason": "Native PDF text does not match an engineering callout",
-                }
-            )
-            continue
-        review = is_bare_number(text)
-        if review and recover_symbols:
+            if not _still_a_measurement(group["runs"], text):
+                excluded.append(
+                    {
+                        "text": text,
+                        "bbox": bbox,
+                        "rule": "pdf_text_non_callout",
+                        "reason": "Native PDF text does not match an engineering callout",
+                    }
+                )
+                continue
+            # Exact native text with an unfamiliar shape is safer in review
+            # than silently discarded. It cannot be an OCR hallucination.
+            held_back = True
+        review = held_back or is_bare_number(text)
+        if review and not held_back and recover_symbols:
             # A number with no mark has probably lost one the drawing drew
             # instead of writing: "1 × 45°" reaches the text layer as "1" and
             # "45" with nothing between them. Reading that ink recovers the
@@ -933,12 +1081,17 @@ def text_layer_regions(
                         ]
                     )
         feature = classify_feature(text)
+        kind = composed.kind
+        if without_marks(text) != text:
+            kind = compose_engineering_dimension(
+                without_marks(text), None, DetectedSymbols()
+            ).kind
         upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
         region = {
             "bbox": bbox,
             "text": text,
             "confidence": 1.0,
-            "type": composed.kind,
+            "type": kind,
             "category": feature.category,
             "subtype": feature.subtype,
             "label": feature.label,
@@ -959,7 +1112,7 @@ def text_layer_regions(
     # "0.2", which was published as a plain linear dimension. Frames are found
     # on the rendered page and read the way a scan reads them, and absorb the
     # bare values inside them.
-    if recover_symbols:
+    if recover_symbols and read_frames:
         regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
 
     # A mixed page: vector text over an embedded picture that carries text of

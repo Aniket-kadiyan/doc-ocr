@@ -8,14 +8,12 @@ import {
   normalizeDocumentMetadata,
   type DocumentMetadata,
 } from "@/types/documentMetadata";
+import { deriveRange, hasToleranceIntent } from "@/lib/valueFields";
 import type { PageReferenceTable } from "@/types/referencePoint";
 
 const TOLERANCE_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const VALID_TOLERANCE = new RegExp(
   String.raw`^(?:${TOLERANCE_NUMBER}|±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
-);
-const VALID_EMBEDDED_TOLERANCE = new RegExp(
-  String.raw`^[-+]?\d+(?:\.\d+)?\s*(?:±\s*${TOLERANCE_NUMBER}|\+\s*${TOLERANCE_NUMBER}\s*,?\s*-\s*${TOLERANCE_NUMBER})$`
 );
 
 /**
@@ -35,15 +33,8 @@ export function findMalformedToleranceAnnotations(
     ).trim();
     if (tolerance) return !VALID_TOLERANCE.test(tolerance);
 
-    const value = annotation.value.trim();
-    const nominal = value.match(/[-+]?\d+(?:\.\d+)?/);
-    if (!nominal || nominal.index == null) {
-      return /[±+-]/.test(value);
-    }
-
-    const remainder = value.slice(nominal.index + nominal[0].length);
-    const hasToleranceIntent = /[±+-]/.test(remainder);
-    return hasToleranceIntent && !VALID_EMBEDDED_TOLERANCE.test(value);
+    return deriveRange(annotation.value) === "" &&
+      hasToleranceIntent(annotation.value);
   });
 }
 /** In-memory form of the inspection JSON export. */

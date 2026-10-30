@@ -199,7 +199,13 @@ def normalize_cad_number_string(t: str) -> str:
     if dms is not None:
         return dms
 
-    s = _strip_dimension_spaces(s).replace("'", "").replace('"', "")
+    s = _strip_dimension_spaces(s)
+    if "°" in s:
+        # Toleranced angles are not bare DMS triples, but their minute and
+        # second marks are still meaningful.
+        s = re.sub(r"(?<!\d)['\"]", "", s)
+    else:
+        s = s.replace("'", "").replace('"', "")
 
     # European comma decimals in short dims only (215,37 → 215.37)
     m = _COMMA_DEC_RE.match(s)
