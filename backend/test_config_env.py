@@ -26,6 +26,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIsNone(config.tls_cert_file)
         self.assertIsNone(config.tls_key_file)
         self.assertEqual(config.auth_session_hours, 8)
+        self.assertEqual(config.run_report_keep, 300)
         self.assertEqual(
             config.public_summary()["cors_policy"], "allow_all_origins"
         )
@@ -44,6 +45,7 @@ class RuntimeConfigTests(unittest.TestCase):
             "DATABASE_URL": "postgresql://user:secret@db/qtracx",
             "QTRACX_LOG_LEVEL": "warning", "QTRACX_LOG_MAX_MB": "50",
             "QTRACX_LOG_BACKUP_COUNT": "20",
+            "QTRACX_RUN_REPORT_KEEP": "450",
             "AUTH_SESSION_HOURS": "12",
         }
         with patch.dict(os.environ, values, clear=True):
@@ -63,6 +65,7 @@ class RuntimeConfigTests(unittest.TestCase):
             )
         )
         self.assertEqual(config.log_level, "WARNING")
+        self.assertEqual(config.run_report_keep, 450)
         self.assertEqual(config.auth_session_hours, 12)
         self.assertTrue(config.https_enabled)
         self.assertTrue(
@@ -93,6 +96,13 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(os.environ, {"CAD_MAX_DOCUMENT_MB": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_RUN_REPORT_KEEP": "10001"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(

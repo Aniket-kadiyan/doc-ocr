@@ -61,6 +61,7 @@ from page_layout import (
 )
 from page_layout_cache import PageLayoutCache
 from page_value_filters import normalize_page_value_text
+import run_report
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
 from text_layer_scan import scan_result_from_text_layer
@@ -72,6 +73,10 @@ load_env_files()
 runtime_config = load_runtime_config()
 transport_security = resolve_transport_security(runtime_config)
 log_path = configure_logging(runtime_config)
+run_reports_dir = run_report.configure_run_reports(
+    runtime_config.log_dir,
+    keep=runtime_config.run_report_keep,
+)
 logger = get_logger("api")
 
 app = FastAPI(
@@ -309,6 +314,7 @@ def startup() -> None:
             "details": {
                 **runtime_config.public_summary(),
                 "log_file": str(log_path),
+                "run_reports_dir": str(run_reports_dir),
             },
         },
     )
@@ -384,6 +390,7 @@ def health() -> dict[str, Any]:
             "configured": auth_database_manager is not None,
         },
         "debug_dump": dump_status(),
+        "run_reports": run_report.report_status(),
     }
 
 

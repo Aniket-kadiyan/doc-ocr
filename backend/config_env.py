@@ -93,6 +93,7 @@ class RuntimeConfig:
     log_level: str
     log_max_mb: int
     log_backup_count: int
+    run_report_keep: int
 
     def public_summary(self) -> dict[str, object]:
         """Return startup facts without exposing connection secrets."""
@@ -120,6 +121,7 @@ class RuntimeConfig:
             "log_level": self.log_level,
             "log_max_mb": self.log_max_mb,
             "log_backup_count": self.log_backup_count,
+            "run_report_keep": self.run_report_keep,
         }
 
 
@@ -218,5 +220,8 @@ def load_runtime_config() -> RuntimeConfig:
         ),
         log_backup_count=_strict_int(
             "QTRACX_LOG_BACKUP_COUNT", 10, minimum=1, maximum=1000
+        ),
+        run_report_keep=_strict_int(
+            "QTRACX_RUN_REPORT_KEEP", 300, minimum=1, maximum=10000
         ),
     )
