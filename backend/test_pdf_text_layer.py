@@ -11,6 +11,7 @@ and skips when that file is not present.
 from __future__ import annotations
 
 import math
+import zlib
 from pathlib import Path
 
 import pytest
@@ -626,6 +627,7 @@ def _pdf_with_image(texts, image_rect, size=(600, 400)):
     """A vector page with text, plus one embedded grey picture at ``image_rect`` (x, y, w, h in pt)."""
     width, height = 40, 20
     pixels = bytes([90] * (width * height))
+    compressed_pixels = zlib.compress(pixels)
     x, y, w, h = image_rect
     content = (
         f"q {w} 0 0 {h} {x} {y} cm /Im1 Do Q\n"
@@ -642,9 +644,10 @@ def _pdf_with_image(texts, image_rect, size=(600, 400)):
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         (
             f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
-            f"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length {len(pixels)} >>\nstream\n"
+            "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(compressed_pixels)} >>\nstream\n"
         ).encode()
-        + pixels
+        + compressed_pixels
         + b"\nendstream",
     ]
     out, offsets = bytearray(b"%PDF-1.7\n"), []
