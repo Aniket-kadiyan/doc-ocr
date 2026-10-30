@@ -20,7 +20,13 @@ installation, repair and upgrade modes.
 - tests that prevent passwords, ports and deployment bindings from being
   rendered incorrectly; and
 - a pinned Windows x64 prerequisite catalog with exact vendor download URLs
-  and optional hash-locked offline installer packaging.
+  and optional hash-locked offline installer packaging;
+- a bundled, self-contained MIT-licensed ACadSharp DWG converter with its
+  required third-party notice;
+- recoverable Windows startup tasks for the backend and frontend;
+- backend/frontend health verification and bounded service-host logs;
+- private/domain LAN firewall rules only for central-server mode; and
+- non-destructive start, stop, status, repair and unregister operations.
 
 ## Clean-machine host bootstrap
 
@@ -151,9 +157,11 @@ It reads the predefined HTTPS repository and branch from
 removes Git metadata from the deployed copy. This keeps release-source control
 with the installer build while still allowing a connected installation.
 
-The current development build default is branch `deployment-readiness`. Change
-that build default to the approved immutable release branch or tag before
-producing a customer installer.
+The connected source default remains the isolated
+`mvp2-chitra-final-port` branch while this port is being validated. Customer
+release media is produced by the release-readiness workflow from one reviewed
+commit and includes the self-contained Windows CAD converter. The source
+default can move to `MVP2` only after a separately approved merge.
 
 ## Graphical deployment wizard
 
@@ -169,11 +177,19 @@ configuration, runtime, frontend-build, database-migration and final-verificatio
 sequence. Passwords are passed to Python through standard input and are not
 placed in command arguments or installer logs.
 
-See [INSTALLER_WIZARD.md](INSTALLER_WIZARD.md) for the current workflow and
-the remaining service-registration boundary.
+See [INSTALLER_WIZARD.md](INSTALLER_WIZARD.md) for the complete workflow and
+[SERVICE_OPERATIONS.md](SERVICE_OPERATIONS.md) for on-demand operations. The
+automated and hardware-specific release gates are in
+[DEPLOYMENT_ACCEPTANCE.md](DEPLOYMENT_ACCEPTANCE.md).
 
-## Next installer layer
+## Startup, recovery and repair
 
-The next layer will register the installed backend and frontend for automatic
-Windows startup, add recovery/health checks and provide repair/uninstall
-operations.
+The wizard registers two Task Scheduler jobs that run as `SYSTEM` at startup,
+restart after failure and write bounded logs under
+`backend/logs/service`. Before registration, the installation directory is
+restricted to `SYSTEM` and local Administrators so an unprivileged user cannot
+replace code that later runs with machine privileges. `Uninstall` in the
+service manager is intentionally an alias for non-destructive `Unregister`:
+it removes startup/firewall integration but never deletes application source,
+configuration, logs, checksheets or database data.
+

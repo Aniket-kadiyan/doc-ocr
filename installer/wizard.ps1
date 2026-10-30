@@ -582,7 +582,7 @@ function Get-QTracXPayload {
 function Update-QTracXReview {
     $sourceDescription = $(
         if ($sourceMode.SelectedIndex -eq 0) { $sourceArchive.Text.Trim() }
-        else { "Predefined deployment-readiness branch" }
+        else { "Predefined mvp2-chitra-final-port branch" }
     )
     $protocol = $(if ($httpsEnabled.Checked) { "HTTPS" } else { "HTTP" })
     $reviewSummary.Text = @"
@@ -715,10 +715,12 @@ function Invoke-QTracXInstallation {
         $installedBootstrap = Join-Path $installedInstaller "bootstrap.ps1"
         $installedConfiguration = Join-Path $installedInstaller "setup_config.py"
         $installedDatabase = Join-Path $installedInstaller "database_bootstrap.py"
+        $installedServices = Join-Path $installedInstaller "service_manager.ps1"
         foreach ($requiredScript in @(
             $installedBootstrap,
             $installedConfiguration,
-            $installedDatabase
+            $installedDatabase,
+            $installedServices
         )) {
             if (-not (Test-Path -LiteralPath $requiredScript -PathType Leaf)) {
                 throw "The acquired source is missing installer module: $requiredScript"
@@ -789,12 +791,26 @@ function Invoke-QTracXInstallation {
             -FilePath $powershell `
             -Arguments $verifyArguments)
 
+        [void](Invoke-QTracXStage `
+            -Name "Registering automatic startup and verifying health" `
+            -FilePath $powershell `
+            -Arguments @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $installedServices,
+                "-Mode", "Install",
+                "-ApplicationRoot", $destination,
+                "-Runtime", (Get-QTracXRuntimeName),
+                "-HealthTimeoutSeconds", "600"
+            ))
+
         $progressLabel.Text = "Installation completed successfully."
         Add-QTracXLog "QTracX installation completed successfully."
         [System.Windows.Forms.MessageBox]::Show(
-            "QTracX was installed and verified successfully.`r`n`r`n" +
-            "Windows service registration and automatic startup will be added " +
-            "in the next installer slice.",
+            "QTracX was installed, registered for automatic Windows startup, " +
+            "and passed backend/frontend health checks.`r`n`r`n" +
+            "Repair and non-destructive unregister commands are available in " +
+            "installer\SERVICE_OPERATIONS.md.",
             "QTracX installation complete",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
@@ -902,3 +918,4 @@ Set-QTracXDeploymentState
 $backButton.Enabled = $false
 Update-QTracXReview
 [void]$form.ShowDialog()
+

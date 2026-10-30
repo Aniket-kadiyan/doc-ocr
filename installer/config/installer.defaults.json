@@ -5,7 +5,7 @@
   "codeSource": {
     "mode": "archive",
     "repositoryUrl": "https://github.com/Aniket-kadiyan/doc-ocr.git",
-    "branch": "deployment-readiness"
+    "branch": "mvp2-chitra-final-port"
   },
   "prerequisites": {
     "python": {
@@ -65,5 +65,16 @@
   "storage": {
     "checksheetDataDirectory": "backend/data/checksheets",
     "logDirectory": "backend/logs"
+  },
+  "cad": {
+    "maxDocumentMb": 128,
+    "convertTimeoutSeconds": 180,
+    "converterPath": "tools/dwg2dxf/dist/win-x64/dwg2dxf-acadsharp.exe"
+  },
+  "reporting": {
+    "enabled": true,
+    "keep": 300,
+    "sampleMs": 500
   }
 }
+

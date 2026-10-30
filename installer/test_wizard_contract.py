@@ -53,6 +53,20 @@ class WizardContractTests(unittest.TestCase):
         )
         self.assertLess(database_stage, verify_stage)
 
+    def test_installation_registers_startup_only_after_runtime_verification(self) -> None:
+        verify_stage = self.script.index(
+            "Verifying the completed QTracX installation"
+        )
+        service_stage = self.script.index(
+            "Registering automatic startup and verifying health"
+        )
+        self.assertLess(verify_stage, service_stage)
+        self.assertIn(
+            '$installedServices = Join-Path $installedInstaller "service_manager.ps1"',
+            self.script,
+        )
+        self.assertIn('"-Mode", "Install"', self.script)
+
     def test_acquired_source_drives_application_setup(self) -> None:
         self.assertIn(
             '$installedBootstrap = Join-Path $installedInstaller "bootstrap.ps1"',
@@ -72,3 +86,4 @@ class WizardContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

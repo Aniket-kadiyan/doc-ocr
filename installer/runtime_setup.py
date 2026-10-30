@@ -82,6 +82,18 @@ class RuntimeSetupRequest:
             return self.environment / "Scripts" / "python.exe"
         return self.environment / "bin" / "python"
 
+    @property
+    def cad_project(self) -> Path:
+        return self.root / "tools" / "dwg2dxf" / "Dwg2Dxf.csproj"
+
+    @property
+    def cad_runtime_dir(self) -> Path:
+        return self.root / "tools" / "dwg2dxf" / "dist" / "win-x64"
+
+    @property
+    def cad_converter(self) -> Path:
+        return self.cad_runtime_dir / "dwg2dxf-acadsharp.exe"
+
     def validate_layout(self) -> None:
         if self.runtime not in {"cpu", "gpu"}:
             raise RuntimeSetupError("validation", "runtime must be cpu or gpu")
@@ -90,6 +102,7 @@ class RuntimeSetupRequest:
             self.requirements,
             self.root / "package.json",
             self.root / "package-lock.json",
+            self.cad_project,
         ]
         missing = [str(path) for path in required if not path.exists()]
         if missing:
@@ -230,6 +243,17 @@ def _environment_action(request: RuntimeSetupRequest) -> str:
     return "create"
 
 
+def _cad_action(request: RuntimeSetupRequest) -> tuple[str, str | None]:
+    """Return how the permissively licensed DWG helper will be supplied."""
+
+    if request.cad_converter.is_file():
+        return "reuse-bundled", None
+    dotnet = shutil.which("dotnet")
+    if dotnet:
+        return "build", dotnet
+    return "blocked-missing-runtime", None
+
+
 def _npm_command(node: Mapping[str, object]) -> list[str]:
     command = node.get("npm_command")
     if not isinstance(command, list) or not command or not all(
@@ -252,6 +276,28 @@ def _commands(
     environment_action = _environment_action(request)
     if environment_action == "blocked-invalid-directory":
         return []
+    cad_action, dotnet = _cad_action(request)
+    if cad_action == "build" and dotnet is not None:
+        actions.append((
+            "cad-converter",
+            [
+                dotnet,
+                "publish",
+                str(request.cad_project),
+                "--configuration",
+                "Release",
+                "--runtime",
+                "win-x64",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:DebugType=None",
+                "-p:DebugSymbols=false",
+                "--output",
+                str(request.cad_runtime_dir),
+            ],
+            request.root,
+        ))
     if environment_action == "create":
         actions.append((
             "python-environment",
@@ -305,6 +351,7 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
     python = host_python_status()
     node = node_status()
     environment_action = _environment_action(request)
+    cad_action, _dotnet = _cad_action(request)
     blockers: list[str] = []
     if not python["supported"]:
         blockers.append("CPython 3.13 x64 is not available")
@@ -314,6 +361,10 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
         blockers.append(
             "the selected environment directory exists but is not a valid "
             "Python virtual environment"
+        )
+    if cad_action == "blocked-missing-runtime":
+        blockers.append(
+            "the bundled Windows DWG converter is missing and a .NET SDK is not available to build it"
         )
     return {
         "status": "ready" if not blockers else "blocked",
@@ -329,6 +380,8 @@ def plan_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
         "environment": str(request.environment),
         "environment_exists": request.environment_python.is_file(),
         "environment_action": environment_action,
+        "cad_converter": str(request.cad_converter),
+        "cad_converter_action": cad_action,
         "configuration_exists": (request.root / ".env.local").is_file(),
         "requirements": str(request.requirements),
         "python": python,
@@ -476,6 +529,11 @@ def verify_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
             "verification",
             "the production frontend build was not found",
         )
+    if not request.cad_converter.is_file():
+        raise RuntimeSetupError(
+            "verification",
+            "the self-contained Windows DWG converter was not found",
+        )
     return {
         "status": "ok",
         "mode": "verify",
@@ -488,6 +546,8 @@ def verify_runtime_setup(request: RuntimeSetupRequest) -> dict[str, object]:
         "frontend_build": (
             "verified" if request.build_frontend else "not-requested"
         ),
+        "cad_converter": str(request.cad_converter),
+        "cad_converter_status": "verified",
     }
 
 
@@ -507,6 +567,36 @@ def install_runtime_setup(
         )
     node = node_status()
     npm = _npm_command(node)
+
+    cad_action, dotnet = _cad_action(request)
+    if cad_action == "blocked-missing-runtime":
+        raise RuntimeSetupError(
+            "cad-converter",
+            "the release does not contain the DWG converter and dotnet is unavailable",
+        )
+    if cad_action == "build" and dotnet is not None:
+        request.cad_runtime_dir.mkdir(parents=True, exist_ok=True)
+        _run_stage(
+            "cad-converter",
+            runner,
+            [
+                dotnet,
+                "publish",
+                str(request.cad_project),
+                "--configuration",
+                "Release",
+                "--runtime",
+                "win-x64",
+                "--self-contained",
+                "true",
+                "-p:PublishSingleFile=true",
+                "-p:DebugType=None",
+                "-p:DebugSymbols=false",
+                "--output",
+                str(request.cad_runtime_dir),
+            ],
+            request.root,
+        )
 
     if request.environment.exists() and not request.environment_python.is_file():
         raise RuntimeSetupError(
@@ -582,6 +672,9 @@ def install_runtime_setup(
         "runtime": request.runtime,
         "environment": str(request.environment),
         "requirements": str(request.requirements),
+        "cad_converter": (
+            "bundled" if cad_action == "reuse-bundled" else "built"
+        ),
         "frontend_build": (
             "created" if request.build_frontend else "not-requested"
         ),
@@ -638,3 +731,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

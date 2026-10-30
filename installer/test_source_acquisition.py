@@ -20,7 +20,7 @@ class SourceAcquisitionTests(unittest.TestCase):
             defaults.repository_url,
             "https://github.com/Aniket-kadiyan/doc-ocr.git",
         )
-        self.assertEqual(defaults.branch, "deployment-readiness")
+        self.assertEqual(defaults.branch, "mvp2-chitra-final-port")
 
     def test_source_archive_extracts_a_single_root_folder(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -72,4 +72,5 @@ class SourceAcquisitionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -23,9 +23,16 @@ proprietary CAD SDK is used by this implementation.
 - Include generated third-party notices from the final Python and .NET
   dependency lock/build outputs in the deployment package.
 
+The Windows release workflow copies the following beside the CAD executable:
+
+- `ACADSHARP_NOTICE.md` from the reviewed upstream MIT notice;
+- `DOTNET_LICENSE.txt`; and
+- `DOTNET_THIRD_PARTY_NOTICES.txt` from the exact .NET runtime used to publish
+  the self-contained executable.
+
 This inventory is an engineering compatibility review, not legal advice.
 A final customer release should retain the exact notices produced from the
-versions actually bundled by deployment-readiness.
+versions actually bundled by the release-readiness workflow.
 
 ## Authoritative references
 

@@ -23,6 +23,12 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertEqual(defaults["ocr"]["modelInstances"], 1)
         self.assertEqual(defaults["ocr"]["scanWorkers"], 2)
         self.assertEqual(
+            defaults["codeSource"]["branch"],
+            "mvp2-chitra-final-port",
+        )
+        self.assertEqual(defaults["cad"]["maxDocumentMb"], 128)
+        self.assertTrue(defaults["reporting"]["enabled"])
+        self.assertEqual(
             defaults["prerequisites"]["python"]["wingetId"],
             "Python.Python.3.13",
         )
@@ -41,6 +47,13 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertIn("NEXT_PUBLIC_OCR_API_URL=http://localhost:8000", text)
         self.assertIn("OCR_MODEL_INSTANCES=1", text)
         self.assertIn("OCR_SCAN_WORKERS=2", text)
+        self.assertIn("CAD_MAX_DOCUMENT_MB=128", text)
+        self.assertIn(
+            "DWG2DXF_ACADSHARP=tools/dwg2dxf/dist/win-x64/dwg2dxf-acadsharp.exe",
+            text,
+        )
+        self.assertIn("QTRACX_RUN_REPORTS_ENABLED=true", text)
+        self.assertIn("QTRACX_RUN_REPORT_KEEP=300", text)
 
     def test_lan_mode_binds_all_interfaces_but_advertises_server(self) -> None:
         setup = InstallerSetup(
@@ -140,4 +153,5 @@ class InstallerSetupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

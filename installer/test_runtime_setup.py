@@ -27,6 +27,12 @@ def _source_tree(root: Path) -> None:
     (backend / "run_ocr.py").write_text("pass\n", encoding="utf-8")
     (root / "package.json").write_text("{}\n", encoding="utf-8")
     (root / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    cad = root / "tools" / "dwg2dxf"
+    cad.mkdir(parents=True)
+    (cad / "Dwg2Dxf.csproj").write_text("<Project />\n", encoding="utf-8")
+    converter = cad / "dist" / "win-x64" / "dwg2dxf-acadsharp.exe"
+    converter.parent.mkdir(parents=True)
+    converter.write_bytes(b"test converter")
 
 
 def _supported_python() -> dict[str, object]:
@@ -92,6 +98,7 @@ class RuntimeSetupTests(unittest.TestCase):
                     "frontend-dependencies",
                 ],
             )
+            self.assertEqual(result["cad_converter_action"], "reuse-bundled")
 
     def test_gpu_defaults_to_a_separate_environment_that_will_be_created(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -270,6 +277,56 @@ class RuntimeSetupTests(unittest.TestCase):
                     install_runtime_setup(request, runner=lambda *_args: None)
             self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
 
+    def test_plan_blocks_when_cad_binary_and_dotnet_are_both_missing(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source_tree(root)
+            request = RuntimeSetupRequest(application_root=root)
+            request.cad_converter.unlink()
+            with (
+                patch(
+                    "installer.runtime_setup.host_python_status",
+                    return_value=_supported_python(),
+                ),
+                patch(
+                    "installer.runtime_setup.node_status",
+                    return_value=_supported_node(),
+                ),
+                patch("installer.runtime_setup.shutil.which", return_value=None),
+            ):
+                result = plan_runtime_setup(request)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(
+                result["cad_converter_action"],
+                "blocked-missing-runtime",
+            )
+
+    def test_plan_builds_missing_cad_binary_when_dotnet_is_available(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source_tree(root)
+            request = RuntimeSetupRequest(application_root=root)
+            request.cad_converter.unlink()
+            with (
+                patch(
+                    "installer.runtime_setup.host_python_status",
+                    return_value=_supported_python(),
+                ),
+                patch(
+                    "installer.runtime_setup.node_status",
+                    return_value=_supported_node(),
+                ),
+                patch(
+                    "installer.runtime_setup.shutil.which",
+                    side_effect=lambda name: "dotnet.exe" if name == "dotnet" else None,
+                ),
+            ):
+                result = plan_runtime_setup(request)
+
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["actions"][0]["stage"], "cad-converter")
+
     def test_frontend_build_requires_generated_environment(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -319,3 +376,4 @@ class RuntimeSetupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

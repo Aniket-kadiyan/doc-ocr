@@ -129,6 +129,14 @@ class InstallerSetup:
     private_key_file: str = ""
     checksheet_data_directory: str = "backend/data/checksheets"
     log_directory: str = "backend/logs"
+    cad_max_document_mb: int = 128
+    cad_convert_timeout_seconds: int = 180
+    dwg_converter_path: str = (
+        "tools/dwg2dxf/dist/win-x64/dwg2dxf-acadsharp.exe"
+    )
+    run_reports_enabled: bool = True
+    run_report_keep: int = 300
+    run_report_sample_ms: int = 500
     database: DatabaseSetup = field(default_factory=DatabaseSetup)
 
     def validate(self) -> None:
@@ -154,6 +162,16 @@ class InstallerSetup:
             raise SetupConfigurationError("checksheet data directory is required")
         if not self.log_directory.strip():
             raise SetupConfigurationError("log directory is required")
+        if not 1 <= self.cad_max_document_mb <= 2048:
+            raise SetupConfigurationError("CAD document limit must be 1-2048 MB")
+        if not 10 <= self.cad_convert_timeout_seconds <= 3600:
+            raise SetupConfigurationError("CAD timeout must be 10-3600 seconds")
+        if not self.dwg_converter_path.strip():
+            raise SetupConfigurationError("DWG converter path is required")
+        if not 1 <= self.run_report_keep <= 10000:
+            raise SetupConfigurationError("run-report retention must be 1-10000")
+        if not 100 <= self.run_report_sample_ms <= 60000:
+            raise SetupConfigurationError("run-report sample interval must be 100-60000 ms")
         self.database.validate()
 
     @property
@@ -209,6 +227,19 @@ class InstallerSetup:
             f"CHECKSHEET_DATA_DIR={self.checksheet_data_directory}",
             "CHECKSHEET_MAX_DOCUMENT_MB=200",
             "",
+            "# CAD conversion",
+            f"CAD_MAX_DOCUMENT_MB={self.cad_max_document_mb}",
+            f"CAD_CONVERT_TIMEOUT_SECONDS={self.cad_convert_timeout_seconds}",
+            f"DWG2DXF_ACADSHARP={self.dwg_converter_path}",
+            "",
+            "# Privacy-safe per-run performance reports",
+            (
+                "QTRACX_RUN_REPORTS_ENABLED="
+                f"{'true' if self.run_reports_enabled else 'false'}"
+            ),
+            f"QTRACX_RUN_REPORT_KEEP={self.run_report_keep}",
+            f"QTRACX_RUN_REPORT_SAMPLE_MS={self.run_report_sample_ms}",
+            "",
             "# Logging",
             f"QTRACX_LOG_DIR={self.log_directory}",
             "QTRACX_LOG_LEVEL=INFO",
@@ -230,6 +261,8 @@ class InstallerSetup:
             "ocr_device": self.ocr_device,
             "model_instances": self.model_instances,
             "scan_workers": self.scan_workers,
+            "cad_converter": self.dwg_converter_path,
+            "run_reports_enabled": self.run_reports_enabled,
             "database_engine": self.database.engine,
             "database_host": self.database.host,
             "database_port": self.database.port,
@@ -242,6 +275,8 @@ class InstallerSetup:
         database_payload = _mapping(payload, "database")
         https_payload = _mapping(payload, "https")
         storage_payload = _mapping(payload, "storage")
+        cad_payload = _mapping(payload, "cad")
+        reporting_payload = _mapping(payload, "reporting")
         engine = str(database_payload.get("engine", "mssql")).strip().lower()
         runtime = str(payload.get("runtime", "cpu")).strip().lower()
         ocr_device = str(
@@ -306,6 +341,25 @@ class InstallerSetup:
             log_directory=str(
                 storage_payload.get("logDirectory", "backend/logs")
             ).strip(),
+            cad_max_document_mb=_integer(cad_payload, "maxDocumentMb", 128),
+            cad_convert_timeout_seconds=_integer(
+                cad_payload,
+                "convertTimeoutSeconds",
+                180,
+            ),
+            dwg_converter_path=str(
+                cad_payload.get(
+                    "converterPath",
+                    "tools/dwg2dxf/dist/win-x64/dwg2dxf-acadsharp.exe",
+                )
+            ).strip(),
+            run_reports_enabled=_boolean(reporting_payload, "enabled", True),
+            run_report_keep=_integer(reporting_payload, "keep", 300),
+            run_report_sample_ms=_integer(
+                reporting_payload,
+                "sampleMs",
+                500,
+            ),
             database=database,
         )
         setup.validate()
@@ -357,4 +411,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

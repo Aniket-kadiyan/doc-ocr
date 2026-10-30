@@ -172,6 +172,34 @@ def collect_preflight(
         {"missing": missing} if missing else None,
     ))
 
+    converter = (
+        root / "tools" / "dwg2dxf" / "dist" / "win-x64" /
+        "dwg2dxf-acadsharp.exe"
+    )
+    project = root / "tools" / "dwg2dxf" / "Dwg2Dxf.csproj"
+    dotnet_ok, dotnet_version = _command_version("dotnet", "--version")
+    if converter.is_file():
+        checks.append(Check(
+            "cad_converter",
+            "ok",
+            "The self-contained ACadSharp DWG converter is bundled.",
+            {"path": str(converter), "target": "win-x64"},
+        ))
+    elif project.is_file() and dotnet_ok:
+        checks.append(Check(
+            "cad_converter",
+            "warning",
+            "The DWG converter is not bundled; setup will build it with dotnet.",
+            {"dotnet_version": dotnet_version, "project": str(project)},
+        ))
+    else:
+        checks.append(Check(
+            "cad_converter",
+            "warning",
+            "The release must bundle the Windows DWG converter before installation.",
+            {"converter": str(converter), "dotnet": dotnet_version},
+        ))
+
     is_windows = platform.system().lower() == "windows"
     checks.append(Check(
         "operating_system",
@@ -335,4 +363,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

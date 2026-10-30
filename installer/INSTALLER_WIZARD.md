@@ -62,24 +62,32 @@ After final confirmation, `Install QTracX` performs these stages:
 6. optionally warm the OCR models;
 7. create/verify the database account, apply migrations and create the first
    QTracX administrator; and
-8. verify the completed application runtime and frontend build.
+8. verify the completed application runtime, frontend build and bundled CAD
+   converter;
+9. restrict the installed source/configuration to `SYSTEM` and local
+   Administrators;
+10. register backend/frontend startup tasks with restart recovery;
+11. add private/domain inbound firewall rules only in central-LAN mode; and
+12. start both components and wait for backend/frontend health checks.
 
 After source acquisition, the wizard uses the runtime, configuration and
 database installer modules from the acquired Git branch or ZIP. This keeps the
 installed application and its setup logic on the same revision.
 
 The source ZIP path is validated and unsafe/generated content is rejected. Git
-mode is fixed by `config/installer.defaults.json`; this development build uses
-the `deployment-readiness` branch.
+mode is fixed by `config/installer.defaults.json`; this validation build uses
+the isolated `mvp2-chitra-final-port` branch.
 
-## Current boundary
+## Operations after installation
 
-This slice installs and verifies the application but does not yet register the
-backend/frontend as Windows services, add startup recovery, create firewall
-rules, or add repair/uninstall behavior. Those operations belong to the next
-installer slice. Until then, continue using the existing backend and frontend
-start commands after installation.
+The installation is automatically available after Windows startup. The
+installer uses Task Scheduler instead of a third-party service wrapper, so no
+additional service-host license is introduced. Startup tasks run as `SYSTEM`,
+restart after failure and keep bounded stdout/stderr logs. See
+`SERVICE_OPERATIONS.md` for status, verification, start, stop, repair and
+non-destructive unregister commands.
 
 Full installation should be tested in Windows Sandbox or a disposable Windows
 11 VM. Use `Check plan` rather than `Install QTracX` on the development machine
 unless a separate empty destination and disposable database are available.
+
