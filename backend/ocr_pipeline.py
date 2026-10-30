@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-chitra-detection-notes-queued-pdf"
+OCR_CHANGESET_ID = "mvp2-postprocessing-progress"
 #: A section-scan value read below this confidence is excluded rather than
 #: ballooned. See the gate in ``segment`` for the measurement behind it.
 SECTION_MIN_CONFIDENCE = 0.6
@@ -4005,6 +4005,7 @@ class OcrPipeline:
         margin_frac: float = 1.0,
         expand_frac: float = 0.2,
         whole_image: bool = True,
+        progress_callback: Callable[..., None] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Recover slanted callouts (chamfers ``0.5×45°``, angled fits) that the
@@ -4018,25 +4019,50 @@ class OcrPipeline:
         Results are deduped against ``base_regions`` so a value already read
         upright is not reported twice.
         """
+        from region_detect import detect_leader_lines
+
+        leaders = detect_leader_lines(image)
+        neighbourhoods = list(
+            self._slant_neighbourhoods(
+                image,
+                det_boxes or [],
+                margin_frac=margin_frac,
+                expand_frac=expand_frac,
+                max_rois=max_rois,
+            )
+        )
+        total_reads = (1 if whole_image else 0) + 2 * len(neighbourhoods)
+        completed_reads = 0
+
+        def progress(label: str, *, state: str) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    completed=completed_reads,
+                    total=total_reads,
+                    state=state,
+                    label=label,
+                    candidate_count=len(found),
+                )
+
         # A zoomed selection benefits from a whole-image angle. A full sheet
         # often contains several unrelated slants, making that expensive pass
         # ineffective; its neighbourhood reads still run below.
-        found = self._angled_in_roi(image) if whole_image else []
+        found: list[dict[str, Any]] = []
+        if whole_image:
+            progress("whole-page slanted-text read", state="running")
+            found.extend(self._angled_in_roi(image))
+            completed_reads += 1
+            progress("whole-page slanted-text read", state="completed")
+
         # Then each diagonal neighbourhood, always — not only when the pass
         # above came back empty. On a large selection the slant vote is diluted
         # by the rest of the drawing and names one angle, so it recovers one
         # leader's callout and misses its neighbour on the next leader. Working
         # neighbourhood by neighbourhood picks up the rest; anything found
         # twice is reconciled by the dedupe below.
-        from region_detect import detect_leader_lines
-
-        leaders = detect_leader_lines(image)
-        for x0, y0, x1, y1 in self._slant_neighbourhoods(
-            image,
-            det_boxes or [],
-            margin_frac=margin_frac,
-            expand_frac=expand_frac,
-            max_rois=max_rois,
+        for neighbourhood_index, (x0, y0, x1, y1) in enumerate(
+            neighbourhoods,
+            start=1,
         ):
             sign = self._neighbourhood_sign(det_boxes or [], (x0, y0, x1, y1))
             roi = image.crop((x0, y0, x1, y1))
@@ -4046,6 +4072,11 @@ class OcrPipeline:
             # each is read cleanly at a different one — so gather both and
             # let the quality ranking in ``_dedupe_angled`` choose.
             for zoom in (1.0, 1.5):
+                label = (
+                    f"slanted neighbourhood {neighbourhood_index} of "
+                    f"{len(neighbourhoods)} at {zoom:g}x"
+                )
+                progress(label, state="running")
                 if zoom == 1.0:
                     view = roi
                 else:
@@ -4072,6 +4103,8 @@ class OcrPipeline:
                         box["width"] = round(box["width"] / zoom, 1)
                         box["height"] = round(box["height"] / zoom, 1)
                     found.append(region)
+                completed_reads += 1
+                progress(label, state="completed")
 
         superseded = self._supersede_fused_base(found, base_regions)
         return self._dedupe_angled(
@@ -4259,7 +4292,12 @@ class OcrPipeline:
             return 0.0
         return float(shorts[len(shorts) // 2])
 
-    def _frame_regions(self, image: Image.Image) -> list[dict[str, Any]]:
+    def _frame_regions(
+        self,
+        image: Image.Image,
+        *,
+        progress_callback: Callable[..., None] | None = None,
+    ) -> list[dict[str, Any]]:
         """Every feature control frame on the page, as scan regions.
 
         Fails soft: the frame pass is additive to a scan that already works
@@ -4273,9 +4311,27 @@ class OcrPipeline:
             if not get_config().enabled:
                 return []
 
+            ocr_calls = 0
+
             def ocr_fn(crop: Image.Image) -> tuple[str, float]:
+                nonlocal ocr_calls
+                ocr_calls += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        completed=ocr_calls - 1,
+                        total=0,
+                        label=f"Reading GD&T frame cell {ocr_calls}",
+                        candidate_count=ocr_calls - 1,
+                    )
                 try:
                     result = self.recognize(crop)
+                    if progress_callback is not None:
+                        progress_callback(
+                            completed=ocr_calls,
+                            total=0,
+                            label=f"Read GD&T frame cell {ocr_calls}",
+                            candidate_count=ocr_calls,
+                        )
                     return (
                         result.get("text") or "",
                         float(result.get("confidence") or 0.0),
@@ -4294,6 +4350,7 @@ class OcrPipeline:
         *,
         debug_dump: bool = False,
         debug_dump_force: bool = False,
+        progress_callback: Callable[..., None] | None = None,
     ) -> list[dict[str, Any]]:
         """Every note on the sheet, each read as one region.
 
@@ -4325,10 +4382,26 @@ class OcrPipeline:
             reading_quality,
         )
 
+        def progress(
+            completed: int,
+            label: str,
+            *,
+            candidate_count: int = 0,
+        ) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    completed=completed,
+                    total=5,
+                    label=label,
+                    candidate_count=candidate_count,
+                )
+
+        progress(0, "Detecting note text lines")
         try:
             boxes = self._detect_regions_ocr(image)
         except Exception:
             return []
+        progress(1, f"Detected {len(boxes)} note text lines", candidate_count=len(boxes))
         # Where the sheet is ruled: table rows and cells must not be read as
         # the lines of a paragraph.
         ink = InkMap(image)
@@ -4336,6 +4409,7 @@ class OcrPipeline:
             boxes = self._repair_note_boxes(image, boxes, ink)
         except Exception:  # noqa: BLE001 - the page pass is still usable
             logger.exception("note box repair failed; notes continue")
+        progress(2, "Repaired note lines around drawing rules", candidate_count=len(boxes))
 
         def to_fragment(b: dict[str, Any]) -> Fragment:
             return Fragment(
@@ -4390,7 +4464,13 @@ class OcrPipeline:
 
         found: list[dict[str, Any]] = []
         consumed: set[int] = set()
-        for region, indices in self._detect_notes_blocks(boxes):
+        numbered_blocks = list(self._detect_notes_blocks(boxes))
+        for block_index, (region, indices) in enumerate(numbered_blocks, start=1):
+            progress(
+                2,
+                f"Reading numbered note block {block_index} of {len(numbered_blocks)}",
+                candidate_count=len(found),
+            )
             bounds = region.pop("_bounds", None)
             line_h = region.pop("_line_h", 0.0)
             consumed.update(indices)
@@ -4403,6 +4483,7 @@ class OcrPipeline:
                 height = bounds[3] - bounds[1]
                 region = finish(region, lines, bounds, line_h, 0.7 * height, True)
             found.append(region)
+        progress(3, "Read numbered note blocks", candidate_count=len(found))
 
         def inside_found(b: dict[str, Any]) -> bool:
             box = {"x": b["x"], "y": b["y"], "width": b["w"], "height": b["h"]}
@@ -4417,15 +4498,22 @@ class OcrPipeline:
         except Exception:  # noqa: BLE001 - upright notes must survive it
             logger.exception("vertical text pass failed; notes continue")
             turned, replaced = [], set()
+        progress(4, "Read vertical note text", candidate_count=len(found))
         pool = [b for i, b in enumerate(rest) if i not in replaced] + turned
         fragments = [
             to_fragment(b)
             for b in pool
             if float(b.get("conf") or 0.0) >= NOTE_MIN_FRAGMENT_CONFIDENCE
         ]
-        for block in note_blocks((f for f in fragments if f.text), ink):
+        paragraph_blocks = list(note_blocks((f for f in fragments if f.text), ink))
+        for block_index, block in enumerate(paragraph_blocks, start=1):
             if block.category != "note":
                 continue
+            progress(
+                4,
+                f"Reading note paragraph {block_index} of {len(paragraph_blocks)}",
+                candidate_count=len(found),
+            )
             box = block.page_box()
             upright = abs(block.angle) < 1.0
             region = {
@@ -4457,7 +4545,9 @@ class OcrPipeline:
             )
             region["_line_h"] = line_h
             found.append(region)
-        return self._reconcile_notes(found, ink)
+        reconciled = self._reconcile_notes(found, ink)
+        progress(5, f"Prepared {len(reconciled)} note regions", candidate_count=len(reconciled))
+        return reconciled
 
     @staticmethod
     def _reconcile_notes(found: list[dict[str, Any]], ink: Any | None) -> list[dict[str, Any]]:
@@ -6262,7 +6352,7 @@ class OcrPipeline:
                     f"Checking page policy for object {filter_index} of "
                     f"{detected_count}"
                 ),
-                percent=94 + int(filter_index / max(detected_count, 1)),
+                percent=94,
                 completed=filter_index,
                 total=detected_count,
                 object_current=filter_index,
@@ -6302,7 +6392,7 @@ class OcrPipeline:
                 percent=(
                     95
                     + int(
-                        3
+                        2
                         * (reread_index - 1)
                         / max(authoritative_total, 1)
                     )
@@ -6370,7 +6460,7 @@ class OcrPipeline:
                 percent=(
                     95
                     + int(
-                        3 * reread_index / max(authoritative_total, 1)
+                        2 * reread_index / max(authoritative_total, 1)
                     )
                 ),
                 completed=reread_index,
@@ -6415,7 +6505,7 @@ class OcrPipeline:
                     f"Resolving final state for object {filter_index} of "
                     f"{detected_count}"
                 ),
-                percent=98 + int(filter_index / max(detected_count, 1)),
+                percent=97,
                 completed=filter_index,
                 total=detected_count,
                 object_current=filter_index,
@@ -6563,7 +6653,19 @@ class OcrPipeline:
         # pass runs here, replacing a region only when the finer look actually
         # resolves two or more worthy values.
         split_regions: list[dict[str, Any]] = []
-        for region in regions:
+        split_total = len(regions)
+        report(
+            stage="splitting",
+            message=f"Checking {split_total} values for stacked callouts",
+            percent=97,
+            completed=0,
+            total=split_total,
+            object_current=0,
+            object_total=split_total,
+            operation_label="Stacked-value splitting",
+            candidate_count=split_total,
+        )
+        for split_index, region in enumerate(regions, start=1):
             text = str(region.get("text") or "")
             box = region["bbox"]
             tall = box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(
@@ -6571,6 +6673,17 @@ class OcrPipeline:
             )
             if count_dimension_values(text) < 2 and not tall:
                 split_regions.append(region)
+                report(
+                    stage="splitting",
+                    message=f"Checked stacked value {split_index} of {split_total}",
+                    percent=97,
+                    completed=split_index,
+                    total=split_total,
+                    object_current=split_index,
+                    object_total=split_total,
+                    operation_label="Stacked-value splitting",
+                    candidate_count=len(split_regions),
+                )
                 continue
             margin = 6
             coords = (
@@ -6599,6 +6712,17 @@ class OcrPipeline:
                 detected_count += len(pieces) - 1
             else:
                 split_regions.append(region)
+            report(
+                stage="splitting",
+                message=f"Checked stacked value {split_index} of {split_total}",
+                percent=97,
+                completed=split_index,
+                total=split_total,
+                object_current=split_index,
+                object_total=split_total,
+                operation_label="Stacked-value splitting",
+                candidate_count=len(split_regions),
+            )
         regions = split_regions
 
         # Slanted callouts (chamfers, angled fits) that this route cannot read:
@@ -6610,6 +6734,30 @@ class OcrPipeline:
         # only ADDS a value the upright passes missed; detected_count moves with
         # it so the state invariant below still balances.
         try:
+            report(
+                stage="slanted",
+                message="Finding slanted callout neighbourhoods",
+                percent=98,
+                completed=0,
+                total=0,
+                operation_label="Slanted-callout recovery",
+                candidate_count=len(regions),
+            )
+
+            def report_slanted_progress(**progress: Any) -> None:
+                label = str(progress.get("label") or "slanted callout read")
+                report(
+                    stage="slanted",
+                    message=label,
+                    percent=98,
+                    completed=int(progress.get("completed") or 0),
+                    total=int(progress.get("total") or 0),
+                    operation_label="Slanted-callout recovery",
+                    candidate_count=int(
+                        progress.get("candidate_count") or len(regions)
+                    ),
+                )
+
             # The defaults are tuned for a zoomed-in selection, where every
             # diagonal callout belongs to one neighbourhood and a generous
             # merge margin is what keeps a value with its deviation stack. A
@@ -6634,11 +6782,21 @@ class OcrPipeline:
                 whole_image=(
                     max(image.size) <= PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE
                 ),
+                progress_callback=report_slanted_progress,
             )
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
             # recovery must never discard them.
             angled_regions = []
+        report(
+            stage="slanted",
+            message=f"Recovered {len(angled_regions)} slanted callouts",
+            percent=98,
+            completed=1,
+            total=1,
+            operation_label="Slanted-callout recovery",
+            candidate_count=len(angled_regions),
+        )
         if angled_regions:
             regions.extend(angled_regions)
             detected_count += len(angled_regions)
@@ -6663,8 +6821,32 @@ class OcrPipeline:
         # were each ballooned. One sheet's two note blocks produced forty
         # balloons that way. Nothing inside a paragraph is a dimension, so
         # every region the block covers is dropped in favour of the block.
+        report(
+            stage="notes",
+            message="Finding and reading drawing notes",
+            percent=98,
+            completed=0,
+            total=5,
+            operation_label="Drawing note OCR",
+            candidate_count=0,
+        )
+
+        def report_notes_progress(**progress: Any) -> None:
+            report(
+                stage="notes",
+                message=str(progress.get("label") or "Reading drawing notes"),
+                percent=98,
+                completed=int(progress.get("completed") or 0),
+                total=int(progress.get("total") or 0),
+                operation_label="Drawing note OCR",
+                candidate_count=int(progress.get("candidate_count") or 0),
+            )
+
         notes_regions = self._notes_regions(
-            image, debug_dump=debug_dump, debug_dump_force=debug_dump_force
+            image,
+            debug_dump=debug_dump,
+            debug_dump_force=debug_dump_force,
+            progress_callback=report_notes_progress,
         )
         page_area = float(image.width) * float(image.height)
         for notes_region in notes_regions:
@@ -6715,13 +6897,40 @@ class OcrPipeline:
                 candidate_count=len(regions),
                 operation_label="Feature control frames",
             )
+
+            def report_gdt_progress(**progress: Any) -> None:
+                report(
+                    stage="gdt",
+                    message=str(
+                        progress.get("label")
+                        or "Reading feature control frames"
+                    ),
+                    percent=99,
+                    completed=int(progress.get("completed") or 0),
+                    total=int(progress.get("total") or 0),
+                    candidate_count=int(progress.get("candidate_count") or 0),
+                    operation_label="Feature control frames",
+                )
+
             frame_regions = [
                 region
-                for region in self._frame_regions(image)
+                for region in self._frame_regions(
+                    image,
+                    progress_callback=report_gdt_progress,
+                )
                 if not overlaps_existing_value(
                     region["bbox"], existing_value_boxes
                 )
             ]
+            report(
+                stage="gdt",
+                message=f"Prepared {len(frame_regions)} feature control frames",
+                percent=99,
+                completed=1,
+                total=1,
+                candidate_count=len(frame_regions),
+                operation_label="Feature control frames",
+            )
         if frame_regions:
             from gdt_pipeline import absorb_frames, attach_adjacent_text
 
@@ -6747,8 +6956,26 @@ class OcrPipeline:
         # section route has always deduped its regions; this route did not.
         # detected_count drops with them so the state invariant still balances.
         before_dedupe = len(regions)
+        report(
+            stage="deduplicating",
+            message=f"Removing duplicate values from {before_dedupe} results",
+            percent=99,
+            completed=0,
+            total=before_dedupe,
+            operation_label="Final duplicate removal",
+            candidate_count=before_dedupe,
+        )
         regions = dedupe_regions(regions)
         detected_count -= before_dedupe - len(regions)
+        report(
+            stage="deduplicating",
+            message=f"Prepared {len(regions)} unique results",
+            percent=99,
+            completed=before_dedupe,
+            total=before_dedupe,
+            operation_label="Final duplicate removal",
+            candidate_count=len(regions),
+        )
 
         recognized_count = sum(
             1 for record in ocr_records if record["recognized"]
