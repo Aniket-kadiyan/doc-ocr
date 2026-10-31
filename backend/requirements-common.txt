@@ -12,8 +12,16 @@ python-multipart>=0.0.12,<1.0
 # Authentication persistence
 -r requirements-auth.txt
 
+# Human-readable per-scan diagnostics. psutil is BSD-3-Clause licensed.
+psutil>=5.9,<8
+
 # Image processing
 Pillow>=11,<13
+
+# CAD drawings: DXF renders directly; DWG is first converted with the
+# MIT-licensed ACadSharp helper under tools/dwg2dxf.
+ezdxf>=1.3,<2
+matplotlib>=3.8,<4
 
 # PaddleX 3.7.2 requires NumPy >=1.24,<2.4.
 # Pinning prevents pip from installing the incompatible NumPy 2.5.x release.

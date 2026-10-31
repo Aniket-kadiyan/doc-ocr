@@ -22,6 +22,10 @@ import {
   isOcrDebugDumpForce,
 } from "@/lib/ocrDebugDump";
 import {
+  isGdtScanEnabled,
+  isSlantedScanEnabled,
+} from "@/lib/scanSettings";
+import {
   apiRequestError,
   ApiRequestError,
   appendRequestReference,
@@ -342,6 +346,8 @@ export async function runScanJob({
   }
   form.append("scope_kind", scopeKind);
   form.append("page", String(page));
+  form.append("gdt", String(isGdtScanEnabled()));
+  form.append("slanted", String(isSlantedScanEnabled()));
   // The uploaded image is the crop taken at displayScale, so everything
   // describing it has to be in those same pixels. The scope and the existing
   // balloons arrive in viewer units; sending them unscaled while scanning a

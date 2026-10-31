@@ -361,6 +361,7 @@ def analyze_page(
     config: GdtConfig | None = None,
     detect_loose_symbols: bool = True,
     deskew: bool = True,
+    progress_callback: Callable[..., None] | None = None,
 ) -> PageResult:
     """Run the whole GD&T pass over one rendered page.
 
@@ -373,6 +374,16 @@ def analyze_page(
     the rest of the page still returns.
     """
     cfg = config or get_config()
+
+    def progress(label: str, completed: int, total: int) -> None:
+        if progress_callback is not None:
+            progress_callback(
+                label=label,
+                completed=completed,
+                total=total,
+                candidate_count=0,
+            )
+
     started = time.perf_counter()
     result = PageResult(page=page, width=image.width, height=image.height)
     result.provenance = {
@@ -399,6 +410,7 @@ def analyze_page(
     work = image
     inverse = None
     skew = None
+    progress("Checking GD&T page alignment", 0, 1)
     if deskew:
         try:
             skew = estimate_page_skew(image)
@@ -409,6 +421,7 @@ def analyze_page(
                 {"stage": "deskew", "error": f"{type(exc).__name__}: {exc}"}
             )
             work, inverse, skew = image, None, None
+    progress("Checked GD&T page alignment", 1, 1)
     result.provenance["deskew_deg"] = round(skew, 3) if skew is not None else None
 
     # A small raster page is read enlarged — for its frames. The loose-symbol
@@ -438,7 +451,19 @@ def analyze_page(
 
     all_symbols: list[Detection] = []
 
-    for index, (tx, ty, tw, th) in enumerate(tiles_for(work.width, work.height, config=cfg)):
+    frame_tiles = tiles_for(work.width, work.height, config=cfg)
+    frame_tile_total = len(frame_tiles)
+    progress(
+        f"Prepared {frame_tile_total} GD&T frame detection tiles",
+        0,
+        frame_tile_total,
+    )
+    for index, (tx, ty, tw, th) in enumerate(frame_tiles):
+        progress(
+            f"Detecting GD&T frames in tile {index + 1} of {frame_tile_total}",
+            index,
+            frame_tile_total,
+        )
         tile = work.crop((tx, ty, tx + tw, ty + th))
         transform = Transform(offset_x=float(tx), offset_y=float(ty))
         try:
@@ -469,6 +494,11 @@ def analyze_page(
                     "traceback": traceback.format_exc(limit=3),
                 }
             )
+        progress(
+            f"Completed GD&T frame tile {index + 1} of {frame_tile_total}",
+            index + 1,
+            frame_tile_total,
+        )
 
     if detect_loose_symbols:
         for index, (tx, ty, tw, th) in enumerate(tiles_for(base.width, base.height, config=cfg)):
@@ -502,8 +532,18 @@ def analyze_page(
 
     # Drop composite frames that duplicate across a tile seam, and boxes a
     # frame's own contents made that a seam separated from their frame.
+    progress(
+        f"Consolidating {len(result.frames)} GD&T frame candidates",
+        frame_tile_total,
+        frame_tile_total,
+    )
     result.frames = fcf_parse.drop_nested_frames(
         _dedupe_frames(result.frames, config=cfg)
+    )
+    progress(
+        f"Prepared {len(result.frames)} GD&T feature control frames",
+        frame_tile_total,
+        frame_tile_total,
     )
 
     # Everything so far is in deskewed-page coordinates. Put it back.
@@ -794,6 +834,8 @@ def scan_regions(
     ocr_fn: OcrFn | None,
     page: int = 1,
     config: GdtConfig | None = None,
+    deskew: bool = True,
+    progress_callback: Callable[..., None] | None = None,
 ) -> list[dict[str, Any]]:
     """Every feature control frame on a page, as whole-page scan regions.
 
@@ -807,6 +849,10 @@ def scan_regions(
 
     The segments of a composite frame are one region: they are one
     requirement, and an inspector balloons them once.
+
+    ``deskew=False`` is used for vector-PDF renders, whose geometry is already
+    square to the page. It avoids an expensive skew estimate without changing
+    the normal scanned-image path.
     """
     result = analyze_page(
         image,
@@ -815,6 +861,8 @@ def scan_regions(
         source="page_scan",
         config=config,
         detect_loose_symbols=False,
+        deskew=deskew,
+        progress_callback=progress_callback,
     )
     groups: dict[str, list[FeatureControlFrame]] = {}
     order: list[str] = []

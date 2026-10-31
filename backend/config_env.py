@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+
+from demo_lock import parse_demo_duration, parse_demo_start
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -85,12 +88,19 @@ class RuntimeConfig:
     tls_key_file: Path | None = field(repr=False)
     checksheet_data_dir: Path
     checksheet_max_document_mb: int
+    cad_max_document_mb: int
+    cad_convert_timeout_seconds: int
+    dwg_converter_path: Path | None = field(repr=False)
     database_url: str = field(repr=False)
     auth_session_hours: int
+    demo_lock_enabled: bool
+    demo_start_at: datetime | None
+    demo_duration_hours: float
     log_dir: Path
     log_level: str
     log_max_mb: int
     log_backup_count: int
+    run_report_keep: int
 
     def public_summary(self) -> dict[str, object]:
         """Return startup facts without exposing connection secrets."""
@@ -110,12 +120,23 @@ class RuntimeConfig:
             "cors_policy": "allow_all_origins",
             "checksheet_data_dir": str(self.checksheet_data_dir),
             "checksheet_max_document_mb": self.checksheet_max_document_mb,
+            "cad_max_document_mb": self.cad_max_document_mb,
+            "cad_convert_timeout_seconds": self.cad_convert_timeout_seconds,
+            "dwg_converter_configured": self.dwg_converter_path is not None,
             "database_configured": bool(self.database_url),
             "auth_session_hours": self.auth_session_hours,
+            "demo_lock_enabled": self.demo_lock_enabled,
+            "demo_start_at": (
+                self.demo_start_at.isoformat(timespec="seconds")
+                if self.demo_start_at is not None
+                else None
+            ),
+            "demo_duration_hours": self.demo_duration_hours,
             "log_dir": str(self.log_dir),
             "log_level": self.log_level,
             "log_max_mb": self.log_max_mb,
             "log_backup_count": self.log_backup_count,
+            "run_report_keep": self.run_report_keep,
         }
 
 
@@ -174,6 +195,20 @@ def load_runtime_config() -> RuntimeConfig:
             "QTRACX_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
         )
 
+    demo_lock_enabled = _strict_bool("QTRACX_DEMO_LOCK_ENABLED", False)
+    demo_start_raw = os.environ.get("QTRACX_DEMO_START_AT", "").strip()
+    try:
+        demo_start_at = parse_demo_start(demo_start_raw) if demo_start_raw else None
+        demo_duration_hours = parse_demo_duration(
+            os.environ.get("QTRACX_DEMO_DURATION_HOURS", "").strip() or "48"
+        )
+    except ValueError as error:
+        raise RuntimeConfigurationError(str(error)) from error
+    if demo_lock_enabled and demo_start_at is None:
+        raise RuntimeConfigurationError(
+            "QTRACX_DEMO_START_AT is required when demo lock is enabled"
+        )
+
     return RuntimeConfig(
         environment=environment,
         ui_host=get_str("UI_HOST", "127.0.0.1"),
@@ -197,10 +232,20 @@ def load_runtime_config() -> RuntimeConfig:
         checksheet_max_document_mb=_strict_int(
             "CHECKSHEET_MAX_DOCUMENT_MB", 200, minimum=1, maximum=2048
         ),
+        cad_max_document_mb=_strict_int(
+            "CAD_MAX_DOCUMENT_MB", 128, minimum=1, maximum=2048
+        ),
+        cad_convert_timeout_seconds=_strict_int(
+            "CAD_CONVERT_TIMEOUT_SECONDS", 180, minimum=5, maximum=1800
+        ),
+        dwg_converter_path=_optional_configured_path("DWG2DXF_ACADSHARP"),
         database_url=os.environ.get("DATABASE_URL", "").strip(),
         auth_session_hours=_strict_int(
             "AUTH_SESSION_HOURS", 8, minimum=1, maximum=168
         ),
+        demo_lock_enabled=demo_lock_enabled,
+        demo_start_at=demo_start_at,
+        demo_duration_hours=demo_duration_hours,
         log_dir=_configured_path(
             "QTRACX_LOG_DIR", _REPO_ROOT / "backend" / "logs"
         ),
@@ -210,5 +255,8 @@ def load_runtime_config() -> RuntimeConfig:
         ),
         log_backup_count=_strict_int(
             "QTRACX_LOG_BACKUP_COUNT", 10, minimum=1, maximum=1000
+        ),
+        run_report_keep=_strict_int(
+            "QTRACX_RUN_REPORT_KEEP", 300, minimum=1, maximum=10000
         ),
     )

@@ -18,13 +18,17 @@ import {
   logoutUser,
   readAuthenticatedUser,
 } from "@/lib/authClient";
-import { AUTHENTICATION_REQUIRED_EVENT } from "@/lib/requestDiagnostics";
+import {
+  AUTHENTICATION_REQUIRED_EVENT,
+  DEMO_EXPIRED_EVENT,
+} from "@/lib/requestDiagnostics";
 
 type AuthenticationState =
   | "loading"
   | "authenticated"
   | "unauthenticated"
-  | "unavailable";
+  | "unavailable"
+  | "demo_expired";
 
 interface AuthenticationContextValue {
   user: AuthenticatedUser;
@@ -184,6 +188,33 @@ function LoadingScreen() {
           Checking your QTraX session…
         </p>
       </div>
+    </main>
+  );
+}
+
+function DemoExpiredScreen() {
+  return (
+    <main className="qtracx-auth min-h-screen bg-white text-black lg:grid lg:grid-cols-[48.4%_51.6%]">
+      <BrandPanel />
+      <section className="flex min-h-screen items-center px-6 py-12 sm:px-10">
+        <div className="mx-auto w-full max-w-[501px]">
+          <MobileBrand />
+          <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-[#fff1ef] text-[#a23a30]">
+            <LockIcon className="h-7 w-7" />
+          </div>
+          <h1 className="text-[38px] font-medium leading-tight tracking-[-0.025em] sm:text-[46px]">
+            Demo period expired
+          </h1>
+          <p className="mt-5 text-[18px] leading-7 text-[#666d76]">
+            This temporary QTraX demonstration has ended. Authentication and
+            application functions are no longer available.
+          </p>
+          <p className="mt-4 text-[15px] leading-6 text-[#666d76]">
+            Contact your QTraX representative or system administrator if you
+            need continued access.
+          </p>
+        </div>
+      </section>
     </main>
   );
 }
@@ -463,9 +494,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const restored = await readAuthenticatedUser();
       setUser(restored);
       setState(restored ? "authenticated" : "unauthenticated");
-    } catch {
+    } catch (caught) {
       setUser(null);
-      setState("unavailable");
+      setState(
+        caught instanceof AuthenticationApiError && caught.status === 423
+          ? "demo_expired"
+          : "unavailable"
+      );
     }
   }, []);
 
@@ -475,8 +510,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setState("unauthenticated");
     };
+    const demoExpired = () => {
+      setUser(null);
+      setState("demo_expired");
+    };
     window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, expire);
-    return () => window.removeEventListener(AUTHENTICATION_REQUIRED_EVENT, expire);
+    window.addEventListener(DEMO_EXPIRED_EVENT, demoExpired);
+    return () => {
+      window.removeEventListener(AUTHENTICATION_REQUIRED_EVENT, expire);
+      window.removeEventListener(DEMO_EXPIRED_EVENT, demoExpired);
+    };
   }, [restore]);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -494,6 +537,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const context = useMemo(() => (user ? { user, logout } : null), [logout, user]);
 
   if (state === "loading") return <LoadingScreen />;
+  if (state === "demo_expired") return <DemoExpiredScreen />;
   if (state !== "authenticated" || !context) {
     return (
       <LoginScreen

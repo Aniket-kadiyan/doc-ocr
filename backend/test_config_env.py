@@ -17,6 +17,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.ui_host, "127.0.0.1")
         self.assertEqual(config.backend_host, "127.0.0.1")
         self.assertEqual(config.backend_port, 8000)
+        self.assertEqual(config.cad_max_document_mb, 128)
+        self.assertEqual(config.cad_convert_timeout_seconds, 180)
+        self.assertIsNone(config.dwg_converter_path)
         self.assertTrue(config.backend_reload)
         self.assertEqual(config.ocr_model_instances, 1)
         self.assertEqual(config.ocr_scan_workers, 2)
@@ -24,6 +27,10 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIsNone(config.tls_cert_file)
         self.assertIsNone(config.tls_key_file)
         self.assertEqual(config.auth_session_hours, 8)
+        self.assertFalse(config.demo_lock_enabled)
+        self.assertIsNone(config.demo_start_at)
+        self.assertEqual(config.demo_duration_hours, 48)
+        self.assertEqual(config.run_report_keep, 300)
         self.assertEqual(
             config.public_summary()["cors_policy"], "allow_all_origins"
         )
@@ -34,13 +41,20 @@ class RuntimeConfigTests(unittest.TestCase):
             "OCR_HOST": "0.0.0.0", "OCR_PORT": "8100", "OCR_RELOAD": "false",
             "OCR_MODEL_INSTANCES": "3",
             "OCR_SCAN_WORKERS": "4",
+            "CAD_MAX_DOCUMENT_MB": "256",
+            "CAD_CONVERT_TIMEOUT_SECONDS": "240",
+            "DWG2DXF_ACADSHARP": "tools/dwg2dxf/custom-converter",
             "HTTPS_ENABLED": "true",
             "TLS_CERT_FILE": "certificates/qtracx.crt",
             "TLS_KEY_FILE": "certificates/qtracx.key",
             "DATABASE_URL": "postgresql://user:secret@db/qtracx",
             "QTRACX_LOG_LEVEL": "warning", "QTRACX_LOG_MAX_MB": "50",
             "QTRACX_LOG_BACKUP_COUNT": "20",
+            "QTRACX_RUN_REPORT_KEEP": "450",
             "AUTH_SESSION_HOURS": "12",
+            "QTRACX_DEMO_LOCK_ENABLED": "true",
+            "QTRACX_DEMO_START_AT": "2026-11-01T10:00:00",
+            "QTRACX_DEMO_DURATION_HOURS": "0.25",
         }
         with patch.dict(os.environ, values, clear=True):
             config = load_runtime_config()
@@ -52,8 +66,23 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.ocr_scan_workers, 4)
         self.assertEqual(config.public_summary()["ocr_model_instances"], 3)
         self.assertEqual(config.public_summary()["ocr_scan_workers"], 4)
+        self.assertEqual(config.cad_max_document_mb, 256)
+        self.assertEqual(config.cad_convert_timeout_seconds, 240)
+        self.assertTrue(config.public_summary()["dwg_converter_configured"])
+        self.assertTrue(
+            config.dwg_converter_path.as_posix().endswith(
+                "tools/dwg2dxf/custom-converter"
+            )
+        )
         self.assertEqual(config.log_level, "WARNING")
+        self.assertEqual(config.run_report_keep, 450)
         self.assertEqual(config.auth_session_hours, 12)
+        self.assertTrue(config.demo_lock_enabled)
+        self.assertEqual(config.demo_duration_hours, 0.25)
+        self.assertEqual(
+            config.demo_start_at.isoformat(timespec="seconds"),
+            "2026-11-01T10:00:00+05:30",
+        )
         self.assertTrue(config.https_enabled)
         self.assertTrue(
             config.tls_cert_file.as_posix().endswith(
@@ -80,6 +109,27 @@ class RuntimeConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"AUTH_SESSION_HOURS": "0"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_LOCK_ENABLED": "true"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "START_AT"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_DURATION_HOURS": "zero"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "positive number"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_START_AT": "tomorrow morning"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "ISO date/time"):
+                load_runtime_config()
         with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "0"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
@@ -90,6 +140,23 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(os.environ, {"OCR_SCAN_WORKERS": "33"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"CAD_MAX_DOCUMENT_MB": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_RUN_REPORT_KEEP": "10001"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"CAD_CONVERT_TIMEOUT_SECONDS": "1801"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
 

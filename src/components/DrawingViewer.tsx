@@ -59,6 +59,7 @@ import {
   loadPdfDocument,
   renderPdfPage,
   loadImageFile,
+  openableDrawing,
   PDF_RENDER_SCALE,
   displayRenderScale,
 } from "@/lib/pdfLoader";
@@ -651,7 +652,8 @@ export function DrawingViewer() {
     void restoreLastProject();
   }, [restoreLastProject]);
 
-  const handleFile = async (file: File) => {
+  const handleFile = async (selected: File) => {
+    const file = await openableDrawing(selected);
     const sourceKind = await detectSourceFileKind(file);
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
@@ -832,6 +834,15 @@ export function DrawingViewer() {
       if (ann && ann.page !== currentPage) setCurrentPage(ann.page);
     },
     [annotations, currentPage, setCurrentPage]
+  );
+
+  // A click on the value rectangle opens the same editor as its sidebar row.
+  const handleOpen = useCallback(
+    (id: string) => {
+      handleSelect(id);
+      setEditingValueId(id);
+    },
+    [handleSelect, setEditingValueId]
   );
 
   // Clear the local selection with the deleted value so the remaining balloons
@@ -1875,7 +1886,7 @@ export function DrawingViewer() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.webp,application/pdf,image/png,image/jpeg,image/tiff,image/webp"
+        accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg,.tif,.tiff,.webp,application/pdf,image/vnd.dwg,image/vnd.dxf,application/dxf,image/png,image/jpeg,image/tiff,image/webp"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -2118,7 +2129,7 @@ export function DrawingViewer() {
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-white text-slate-500">
                 <p className="text-lg font-medium">No drawing loaded</p>
                 <p className="mt-2 text-sm">
-                  Open a PDF or image to start annotating dimensions.
+                  Open a PDF, CAD drawing, or image to start annotating dimensions.
                 </p>
                 <button
                   type="button"
@@ -2327,7 +2338,7 @@ export function DrawingViewer() {
                           selectedScanCandidateId !== null
                         }
                         listening={!drawingActive}
-                        onSelect={handleSelect}
+                        onSelect={handleOpen}
                       />
                     ))}
                   </Layer>
@@ -2381,10 +2392,7 @@ export function DrawingViewer() {
           onMetadataChange={handleMetadataChange}
           onMetadataSelect={handleMetadataSelect}
           onMetadataClear={handleMetadataClear}
-          onEdit={(id) => {
-            handleSelect(id);
-            setEditingValueId(id);
-          }}
+          onEdit={handleOpen}
         />
       </div>
 

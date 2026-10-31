@@ -63,6 +63,10 @@ PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS = 24
 # deviation stack at a margin this tight.
 PAGE_SCAN_SLANT_MERGE_MARGIN = 0.08
 PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
+# Large sheets contain several unrelated slant directions. Levelling the
+# entire image by one angle adds multiple full-page OCR calls but finds no
+# extra values; the neighbourhood pass below remains enabled.
+PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE = 3000
 
 
 def bbox_overlap_fraction(
@@ -100,6 +104,38 @@ def overlaps_existing_value(
     return any(
         bbox_overlap_fraction(bbox, existing) >= threshold
         for existing in existing_value_boxes
+    )
+
+
+def bbox_intersects_scope(
+    bbox: Mapping[str, float],
+    scope: Mapping[str, float],
+) -> bool:
+    """Whether two page-coordinate rectangles have positive overlap."""
+
+    return (
+        float(bbox["x"]) < float(scope["x"]) + float(scope["width"])
+        and float(scope["x"]) < float(bbox["x"]) + float(bbox["width"])
+        and float(bbox["y"]) < float(scope["y"]) + float(scope["height"])
+        and float(scope["y"]) < float(bbox["y"]) + float(bbox["height"])
+    )
+
+
+def bbox_center_in_scope(
+    bbox: Mapping[str, float],
+    scope: Mapping[str, float],
+) -> bool:
+    """Whether an object's centre belongs to the requested page scope."""
+
+    centre_x = float(bbox["x"]) + float(bbox["width"]) / 2.0
+    centre_y = float(bbox["y"]) + float(bbox["height"]) / 2.0
+    return (
+        float(scope["x"])
+        <= centre_x
+        <= float(scope["x"]) + float(scope["width"])
+        and float(scope["y"])
+        <= centre_y
+        <= float(scope["y"]) + float(scope["height"])
     )
 
 

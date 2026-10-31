@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from auth_routes import require_protected_request, router as auth_router
 from auth_service import AuthenticatedSession
+from cad_documents import CadDocumentError, convert_cad_to_pdf
 from checksheet_converter import (
     ChecksheetConfigurationError,
     save_checksheet_template,
@@ -50,16 +51,14 @@ from config_env import load_env_files, load_runtime_config
 from cors_config import install_unrestricted_cors
 from debug_dump import dump_status
 from database import DatabaseManager
+from demo_lock import DemoAccessWindow, DemoLockMiddleware
 from gdt_routes import router as gdt_router
 from inference_gate import inference_priority
 from ocr_capacity import build_ocr_capacity_status
 from ocr_pipeline import get_pipeline
-from page_layout import (
-    analyze_page_layout,
-    crop_section,
-)
+from page_layout import analyze_page_layout
 from page_layout_cache import PageLayoutCache
-from page_value_filters import normalize_page_value_text
+import run_report
 from scan_jobs import ProgressReporter, ScanJobManager
 from source_images import SourceImageError, render_source_page
 from text_layer_scan import scan_result_from_text_layer
@@ -71,6 +70,10 @@ load_env_files()
 runtime_config = load_runtime_config()
 transport_security = resolve_transport_security(runtime_config)
 log_path = configure_logging(runtime_config)
+run_reports_dir = run_report.configure_run_reports(
+    runtime_config.log_dir,
+    keep=runtime_config.run_report_keep,
+)
 logger = get_logger("api")
 
 app = FastAPI(
@@ -78,6 +81,15 @@ app = FastAPI(
     description="Self-hosted engineering drawing OCR",
     version="0.2.0",
 )
+demo_access_window = DemoAccessWindow(
+    enabled=runtime_config.demo_lock_enabled,
+    start_at=runtime_config.demo_start_at,
+    duration_hours=runtime_config.demo_duration_hours,
+)
+# Install this before diagnostics and CORS. Those outer layers still attach
+# request IDs, logs and browser CORS headers to a blocked response.
+app.add_middleware(DemoLockMiddleware, access_window=demo_access_window)
+app.state.demo_access_window = demo_access_window
 auth_database_manager = (
     DatabaseManager(runtime_config.database_url)
     if runtime_config.database_url
@@ -240,6 +252,45 @@ async def raster_document_page(
     )
 
 
+@app.post("/documents/cad-to-pdf", dependencies=protected_request)
+async def cad_document_to_pdf(file: UploadFile = File(...)) -> Response:
+    """Convert a validated DWG or DXF drawing to a vector PDF."""
+
+    max_bytes = runtime_config.cad_max_document_mb * 1024 * 1024
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "The CAD file is larger than the "
+                f"{runtime_config.cad_max_document_mb} MB limit"
+            ),
+        )
+
+    converter_path = (
+        str(runtime_config.dwg_converter_path)
+        if runtime_config.dwg_converter_path is not None
+        else None
+    )
+    try:
+        pdf, page_count = await run_in_threadpool(
+            convert_cad_to_pdf,
+            data,
+            file.filename or "",
+            max_bytes=max_bytes,
+            timeout_seconds=runtime_config.cad_convert_timeout_seconds,
+            converter_path=converter_path,
+        )
+    except CadDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"X-Document-Page-Count": str(page_count)},
+    )
+
+
 def classify_dimension(text: str) -> DimensionType:
     t = text.strip()
     if re.search(r"[Øø]", t):
@@ -267,9 +318,16 @@ def startup() -> None:
             "details": {
                 **runtime_config.public_summary(),
                 "log_file": str(log_path),
+                "run_reports_dir": str(run_reports_dir),
             },
         },
     )
+    if runtime_config.demo_lock_enabled:
+        demo_status = demo_access_window.snapshot()
+        logger.warning(
+            f"QTracX demo access is {demo_status['state']}",
+            extra={"event": "demo_lock_status", "details": demo_status},
+        )
     if transport_security.requested and not transport_security.active:
         logger.warning(
             "HTTPS was requested but is unavailable; using HTTP",
@@ -341,7 +399,9 @@ def health() -> dict[str, Any]:
         "authentication": {
             "configured": auth_database_manager is not None,
         },
+        "demo": demo_access_window.snapshot(),
         "debug_dump": dump_status(),
+        "run_reports": run_report.report_status(),
     }
 
 
@@ -662,113 +722,6 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _map_section_result_to_page(
-    seg: dict[str, Any],
-    *,
-    origin: tuple[int, int],
-) -> tuple[dict[str, Any], list[dict[str, object]]]:
-    """Restore light-filtered section values to page coordinates."""
-
-    origin_x, origin_y = origin
-    mapped_regions: list[dict[str, Any]] = []
-    overlay_candidates: list[dict[str, object]] = []
-    source_regions = list(seg.get("regions", []))
-
-    for region in source_regions:
-        local = dict(region.get("bbox", {}))
-        page_bbox = {
-            "x": round(origin_x + float(local.get("x", 0.0)), 1),
-            "y": round(origin_y + float(local.get("y", 0.0)), 1),
-            "width": round(float(local.get("width", 0.0)), 1),
-            "height": round(float(local.get("height", 0.0)), 1),
-        }
-        text = normalize_page_value_text(str(region.get("text") or ""))
-        if not text:
-            continue
-        rule = str(region.get("page_filter_rule") or "section_engineering_value")
-        reason = str(
-            region.get("page_filter_reason")
-            or "Matches the light section engineering-value syntax gate"
-        )
-        overlay_candidates.append(
-            {
-                "bbox": page_bbox,
-                "state": "eligible",
-                "text": text,
-                "reason": reason,
-                "rule": rule,
-            }
-        )
-        mapped_regions.append(
-            {
-                **region,
-                "bbox": page_bbox,
-                "text": text,
-                "page_filter_rule": rule,
-                "page_filter_reason": reason,
-            }
-        )
-
-    mapped_outcomes: list[dict[str, Any]] = []
-    for outcome in list(seg.get("candidate_outcomes", [])):
-        local = dict(outcome.get("bbox", {}))
-        mapped_outcome = {
-            **outcome,
-            "bbox": {
-                "x": round(origin_x + float(local.get("x", 0.0)), 1),
-                "y": round(origin_y + float(local.get("y", 0.0)), 1),
-                "width": round(float(local.get("width", 0.0)), 1),
-                "height": round(float(local.get("height", 0.0)), 1),
-            },
-        }
-        oriented = outcome.get("oriented_box")
-        if isinstance(oriented, dict):
-            mapped_outcome["oriented_box"] = {
-                **oriented,
-                "x": round(origin_x + float(oriented.get("x", 0.0)), 1),
-                "y": round(origin_y + float(oriented.get("y", 0.0)), 1),
-            }
-        mapped_outcomes.append(mapped_outcome)
-
-    # Review candidates carry geometry too. They were always empty while the
-    # section scan used the light pipeline, so passing them through untouched
-    # was harmless; the page pipeline produces real ones and they would
-    # otherwise reach the client still in section coordinates.
-    mapped_reviews: list[dict[str, Any]] = []
-    for candidate in list(seg.get("review_candidates", [])):
-        local = dict(candidate.get("bbox", {}))
-        mapped_candidate = {
-            **candidate,
-            "bbox": {
-                "x": round(origin_x + float(local.get("x", 0.0)), 1),
-                "y": round(origin_y + float(local.get("y", 0.0)), 1),
-                "width": round(float(local.get("width", 0.0)), 1),
-                "height": round(float(local.get("height", 0.0)), 1),
-            },
-        }
-        oriented = candidate.get("oriented_box")
-        if isinstance(oriented, dict):
-            mapped_candidate["oriented_box"] = {
-                **oriented,
-                "x": round(origin_x + float(oriented.get("x", 0.0)), 1),
-                "y": round(origin_y + float(oriented.get("y", 0.0)), 1),
-            }
-        mapped_reviews.append(mapped_candidate)
-
-    return (
-        {
-            **seg,
-            "count": len(mapped_regions),
-            "eligible_count": len(mapped_regions),
-            "coordinate_space": "page",
-            "regions": mapped_regions,
-            "candidate_outcomes": mapped_outcomes,
-            "review_candidates": mapped_reviews,
-        },
-        overlay_candidates,
-    )
-
-
 def _parse_existing_value_boxes(payload: str) -> list[dict[str, float]]:
     """Validate saved balloon geometry supplied for pre-OCR exclusion."""
 
@@ -845,6 +798,14 @@ async def create_scan_job(
     scope_width: float = Form(...),
     scope_height: float = Form(...),
     existing_value_boxes: str = Form("[]"),
+    gdt: bool = Form(
+        True,
+        description="Read feature control frames during this scan",
+    ),
+    slanted: bool = Form(
+        True,
+        description="Read dimensions drawn along angled leaders",
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -919,6 +880,7 @@ async def create_scan_job(
                     source_pdf_data,
                     page - 1,
                     dpi=72.0 * pdf_render_scale,
+                    read_frames=gdt,
                 )
             except Exception as error:  # damaged PDF falls back to page OCR
                 logger.warning(
@@ -989,80 +951,18 @@ async def create_scan_job(
         )
 
         pipeline = get_pipeline()
-        if scope_kind == "page":
-            seg = pipeline.segment_page(
-                image,
-                layout=layout,
-                debug_dump=req_dump,
-                debug_dump_force=req_force,
-                progress_callback=report_progress,
-                existing_value_boxes=saved_value_boxes,
-            )
-            seg["coordinate_space"] = "page"
-        else:
-            section_image, section_origin, _clipped_scope = crop_section(
-                image,
-                scope_bbox,
-            )
-            section_existing_boxes = [
-                {
-                    "x": box["x"] - section_origin[0],
-                    "y": box["y"] - section_origin[1],
-                    "width": box["width"],
-                    "height": box["height"],
-                }
-                for box in saved_value_boxes
-                if (
-                    box["x"] + box["width"] > section_origin[0]
-                    and box["y"] + box["height"] > section_origin[1]
-                    and box["x"] < section_origin[0] + section_image.width
-                    and box["y"] < section_origin[1] + section_image.height
-                )
-            ]
-
-            def report_section_progress(**event: Any) -> None:
-                # Keep the section detector/recognizer unchanged while fitting
-                # its existing 1–99% progress into the post-layout range.
-                raw_percent = int(event.pop("percent", 0))
-                report_progress(
-                    **event,
-                    percent=max(10, 10 + int(raw_percent * 0.88)),
-                )
-
-            # Both scopes run the same pipeline. Measured on the benchmark
-            # drawings at fixture resolution, the page route reads far more of
-            # the same sheet than the light section route does — 16/19 against
-            # 11/19 on 47630, 16/24 against 10/24 on 56103-0182B, 11/12 against
-            # 8/12 on BS1801006.020 — and it is the route that now matches or
-            # beats the pre-merge pipeline. A section scan is the same problem
-            # on a smaller image, so it gets the same treatment.
-            seg = pipeline.segment_page(
-                section_image,
-                debug_dump=req_dump,
-                debug_dump_force=req_force,
-                progress_callback=report_section_progress,
-                existing_value_boxes=section_existing_boxes,
-            )
-            seg, section_overlay_candidates = _map_section_result_to_page(
-                seg,
-                origin=section_origin,
-            )
-            report_progress(
-                stage="finalizing",
-                message=(
-                    f"Prepared {seg['eligible_count']} section values; "
-                    f"ignored {seg['excluded_count']} non-value OCR objects"
-                ),
-                percent=99,
-                completed=int(seg["detected_count"]),
-                total=int(seg["detected_count"]),
-                candidate_count=int(seg["eligible_count"]),
-                operation_label="Section light filtering complete",
-                overlay=layout.overlay(
-                    scope_kind="section",
-                    candidates=section_overlay_candidates,
-                ),
-            )
+        seg = pipeline.segment_page(
+            image,
+            layout=layout,
+            debug_dump=req_dump,
+            debug_dump_force=req_force,
+            progress_callback=report_progress,
+            existing_value_boxes=saved_value_boxes,
+            read_frames=gdt,
+            read_slanted=slanted,
+            scope_bbox=scope_bbox if scope_kind == "section" else None,
+        )
+        seg["coordinate_space"] = "page"
         return _serialize_segment_result(seg)
 
     def run_background_scan(
@@ -1076,6 +976,8 @@ async def create_scan_job(
         owner_id=authenticated.user.id,
         metadata={
             "scope_kind": scope_kind,
+            "gdt": gdt,
+            "slanted": slanted,
             "page": page,
             "scope_bbox": scope_bbox,
             # Liveness thresholds scale with the actual selected drawing area.
@@ -1227,6 +1129,7 @@ async def read_pdf_text_layer(
             "pixels its annotations already use"
         ),
     ),
+    gdt: bool = Form(True, description="Read feature control frames"),
 ) -> dict[str, Any]:
     """
     Read one page's callouts from the PDF's own text layer.
@@ -1254,6 +1157,7 @@ async def read_pdf_text_layer(
                 data,
                 page - 1,
                 dpi=72.0 * render_scale,
+                read_frames=gdt,
             )
         )
     except IndexError:
