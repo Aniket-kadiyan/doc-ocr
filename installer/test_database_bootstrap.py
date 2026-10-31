@@ -10,6 +10,8 @@ from installer.database_bootstrap import (
     DatabaseBootstrapRequest,
     _parser,
     _detected_mssql_driver,
+    _diagnose_database_error,
+    _mssql_connection_string,
     _odbc_value,
     _postgresql_string,
     _sql_string,
@@ -83,6 +85,48 @@ class DatabaseBootstrapTests(unittest.TestCase):
         self.assertEqual(request.provisioning_mode, "preconfigured")
         self.assertEqual(request.administrator_user, "")
         self.assertNotIn("admin-secret", repr(request))
+
+    def test_named_instance_connection_omits_a_fake_none_port(self) -> None:
+        payload = _payload()
+        payload["database"]["host"] = r"jains\SQLEXPRESS"
+        payload["database"]["port"] = None
+        request = DatabaseBootstrapRequest.from_mapping(payload)
+
+        connection_string = _mssql_connection_string(
+            request,
+            database="master",
+        )
+
+        self.assertIn(r"SERVER={jains\SQLEXPRESS}", connection_string)
+        self.assertNotIn("None", connection_string)
+        self.assertIsNone(request.safe_summary()["port"])
+
+    def test_explicit_mssql_port_uses_odbc_host_comma_port_syntax(self) -> None:
+        payload = _payload()
+        payload["database"]["host"] = "sql-server"
+        payload["database"]["port"] = 51433
+        request = DatabaseBootstrapRequest.from_mapping(payload)
+
+        connection_string = _mssql_connection_string(
+            request,
+            database="master",
+        )
+
+        self.assertIn("SERVER={sql-server,51433}", connection_string)
+
+    def test_common_database_errors_get_actionable_sanitized_guidance(self) -> None:
+        cases = (
+            (RuntimeError("IM002 selected driver missing"), "OdbcDriverUnavailable"),
+            (RuntimeError("08001 ERROR 26"), "DatabaseServerUnreachable"),
+            (RuntimeError("28000 18456"), "DatabaseLoginRejected"),
+            (PermissionError("secret detail"), "DatabasePermissionDenied"),
+        )
+        for error, expected_type in cases:
+            with self.subTest(expected_type=expected_type):
+                error_type, guidance = _diagnose_database_error(error)
+                self.assertEqual(error_type, expected_type)
+                self.assertTrue(guidance)
+                self.assertNotIn("secret detail", guidance)
 
     def test_sql_secret_quoting_does_not_break_literals(self) -> None:
         self.assertEqual(_sql_string("pa'ss"), "N'pa''ss'")

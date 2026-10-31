@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from urllib.parse import unquote_plus
 
 from installer.setup_config import (
     DatabaseSetup,
@@ -59,6 +60,39 @@ class InstallerSetupTests(unittest.TestCase):
     def test_database_password_is_url_encoded(self) -> None:
         database = DatabaseSetup(application_password="a b@c/1")
         self.assertIn("a+b%40c%2F1", database.url())
+
+    def test_mssql_named_instance_can_use_sql_browser_without_a_port(self) -> None:
+        database = DatabaseSetup(
+            host=r"jains\SQLEXPRESS",
+            port=None,
+            application_password="safe password",
+            odbc_driver="ODBC Driver 17 for SQL Server",
+        )
+
+        decoded = unquote_plus(database.url())
+
+        self.assertEqual(database.mssql_server, r"jains\SQLEXPRESS")
+        self.assertIn(r"SERVER={jains\SQLEXPRESS}", decoded)
+        self.assertNotIn(r"SQLEXPRESS,None", decoded)
+
+    def test_mssql_explicit_port_is_preserved_in_odbc_target(self) -> None:
+        database = DatabaseSetup(
+            host="sql-server",
+            port=51433,
+            application_password="safe password",
+        )
+
+        self.assertIn("SERVER={sql-server,51433}", unquote_plus(database.url()))
+
+    def test_postgresql_requires_a_port(self) -> None:
+        database = DatabaseSetup(
+            engine="postgresql",
+            port=None,
+            application_password="safe password",
+        )
+
+        with self.assertRaisesRegex(SetupConfigurationError, "port is required"):
+            database.validate()
 
     def test_postgresql_uses_permissive_pg8000_driver(self) -> None:
         database = DatabaseSetup(
@@ -124,7 +158,27 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertIn("NEXT_PUBLIC_OCR_API_URL=http://10.10.20.15:8000", text)
         self.assertIn("OCR_DEVICE=gpu:0", text)
         self.assertIn("OCR_MODEL_INSTANCES=2", text)
-        self.assertIn("driver=ODBC+Driver+17+for+SQL+Server", text)
+        self.assertIn("odbc_connect=", text)
+        self.assertIn(
+            "DRIVER={ODBC Driver 17 for SQL Server}",
+            unquote_plus(text),
+        )
+
+    def test_wizard_mapping_accepts_a_named_instance_without_a_port(self) -> None:
+        setup = InstallerSetup.from_mapping({
+            "database": {
+                "engine": "mssql",
+                "host": r"jains\SQLEXPRESS",
+                "port": None,
+                "applicationPassword": "safe password",
+            },
+        })
+
+        self.assertIsNone(setup.database.port)
+        self.assertIn(
+            r"SERVER={jains\SQLEXPRESS}",
+            unquote_plus(setup.database.url()),
+        )
 
     def test_safe_summary_never_contains_database_password(self) -> None:
         password = "do-not-show-this"

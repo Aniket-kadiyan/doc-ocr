@@ -89,6 +89,18 @@ Two provisioning modes are available:
   verifies its schema-migration permissions, and never asks for `sa` or a
   PostgreSQL superuser password.
 
+MSSQL accepts either a normal host with an explicit TCP port or a named
+instance such as `jains\SQLEXPRESS` with no explicit port. Named-instance
+discovery depends on SQL Server Browser/UDP 1434; where that is unavailable,
+configure the instance with a fixed TCP port and enter it explicitly. The
+generated SQLAlchemy URL carries a complete URL-encoded ODBC connection string
+so backslashes, passwords and driver names are handled consistently.
+
+Connection failures are classified into actionable, credential-safe
+diagnostics for missing ODBC drivers, unreachable servers, rejected logins,
+missing databases and insufficient privileges. Raw connection strings and
+driver exception text are not written to installer output.
+
 Database-administrator credentials are used only in process memory. The CLI
 accepts them through hidden prompts or JSON stdin, never command arguments.
 An existing `qtracx_app` password is preserved unless password reset is

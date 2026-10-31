@@ -30,6 +30,7 @@ The wizard collects:
 - model-instance and scan-worker counts;
 - normal HTTP or optional HTTPS certificate/key paths;
 - MSSQL or PostgreSQL and installer-managed or preconfigured provisioning;
+- an MSSQL hostname/fixed TCP port or `server\instance` named instance;
 - the dedicated QTracX database account; and
 - the initial in-application QTracX administrator.
 
@@ -39,6 +40,12 @@ standard input. They are not included in process arguments or the installer
 log. The dedicated application database password is necessarily persisted in
 the generated `.env.local` connection string so the backend can connect after
 restart.
+
+For a named MSSQL instance, enter a value such as `jains\SQLEXPRESS` in
+**Database server / instance** and clear **Use explicit TCP port**. This uses
+SQL Server Browser discovery. If Browser/UDP 1434 is not available, ask IT for
+the instance's fixed TCP port and enable the checkbox. PostgreSQL always uses
+an explicit port.
 
 ## Check Plan
 

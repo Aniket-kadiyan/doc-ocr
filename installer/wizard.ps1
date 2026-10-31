@@ -352,10 +352,16 @@ $databaseMode = Add-QTracXComboBox $databaseTab 250 72 @(
     "Installer creates database/user",
     "Preconfigured database/user"
 ) 320
-Add-QTracXLabel $databaseTab "Database host" 28 124 | Out-Null
+Add-QTracXLabel $databaseTab "Database server / instance" 28 124 | Out-Null
 $databaseHost = Add-QTracXTextBox $databaseTab 250 120 300 "localhost"
-Add-QTracXLabel $databaseTab "Port" 570 124 80 | Out-Null
-$databasePort = Add-QTracXNumeric $databaseTab 650 120 1433 1 65535 120
+$explicitDatabasePort = [System.Windows.Forms.CheckBox]::new()
+$explicitDatabasePort.Text = "Use explicit TCP port"
+$explicitDatabasePort.Location = [Drawing.Point]::new(570, 116)
+$explicitDatabasePort.Size = [Drawing.Size]::new(250, 28)
+$explicitDatabasePort.Checked = $true
+$databaseTab.Controls.Add($explicitDatabasePort)
+Add-QTracXLabel $databaseTab "Port" 570 154 80 | Out-Null
+$databasePort = Add-QTracXNumeric $databaseTab 650 150 1433 1 65535 120
 Add-QTracXLabel $databaseTab "Database name" 28 172 | Out-Null
 $databaseName = Add-QTracXTextBox $databaseTab 250 168 300 "QTracX"
 Add-QTracXLabel $databaseTab "Application DB user" 28 220 | Out-Null
@@ -368,13 +374,19 @@ Add-QTracXLabel $databaseTab "Database administrator" 28 364 | Out-Null
 $databaseAdministratorUser = Add-QTracXTextBox $databaseTab 250 360 300 "sa"
 Add-QTracXLabel $databaseTab "Administrator password" 28 412 | Out-Null
 $databaseAdministratorPassword = Add-QTracXTextBox $databaseTab 250 408 300 "" -Password
-Add-QTracXLabel $databaseTab "MSSQL ODBC driver" 570 172 160 | Out-Null
-$odbcDriver = Add-QTracXTextBox $databaseTab 570 200 240 (Get-QTracXMssqlDriver)
+Add-QTracXLabel $databaseTab "MSSQL ODBC driver" 570 205 200 | Out-Null
+$odbcDriver = Add-QTracXTextBox $databaseTab 570 233 240 (Get-QTracXMssqlDriver)
 $resetDatabasePassword = [System.Windows.Forms.CheckBox]::new()
 $resetDatabasePassword.Text = "Reset existing QTracX DB-user password"
-$resetDatabasePassword.Location = [Drawing.Point]::new(570, 264)
+$resetDatabasePassword.Location = [Drawing.Point]::new(570, 280)
 $resetDatabasePassword.Size = [Drawing.Size]::new(270, 48)
 $databaseTab.Controls.Add($resetDatabasePassword)
+$databaseConnectionNote = Add-QTracXLabel $databaseTab `
+    "Named MSSQL instance example: jains\SQLEXPRESS. Leave explicit TCP port unchecked to use SQL Server Browser, or check it when IT provides a fixed port." `
+    570 340 250
+$databaseConnectionNote.AutoSize = $false
+$databaseConnectionNote.Height = 100
+$databaseConnectionNote.ForeColor = [Drawing.Color]::DimGray
 
 Add-QTracXLabel $adminTab "Initial QTracX administrator" 28 35 310 | Out-Null
 Add-QTracXLabel $adminTab "Username" 28 95 | Out-Null
@@ -433,18 +445,29 @@ function Set-QTracXDatabaseState {
     $databaseAdministratorUser.Enabled = $installerManaged
     $databaseAdministratorPassword.Enabled = $installerManaged
     $resetDatabasePassword.Enabled = $installerManaged
+    $explicitDatabasePort.Enabled = $mssql
     if ($mssql) {
         if ([int]$databasePort.Value -eq 5432) { $databasePort.Value = 1433 }
+        if ($databaseHost.Text.Contains("\")) {
+            $explicitDatabasePort.Checked = $false
+        }
         if ($databaseAdministratorUser.Text -eq "postgres") {
             $databaseAdministratorUser.Text = "sa"
         }
     }
     else {
+        $explicitDatabasePort.Checked = $true
         if ([int]$databasePort.Value -eq 1433) { $databasePort.Value = 5432 }
         if ($databaseAdministratorUser.Text -eq "sa") {
             $databaseAdministratorUser.Text = "postgres"
         }
     }
+    Set-QTracXDatabasePortState
+}
+
+function Set-QTracXDatabasePortState {
+    $mssql = $databaseEngine.SelectedIndex -eq 0
+    $databasePort.Enabled = (-not $mssql) -or $explicitDatabasePort.Checked
 }
 
 function Set-QTracXDeploymentState {
@@ -473,6 +496,10 @@ function Test-QTracXSelections {
         -not $databaseName.Text.Trim() -or
         -not $databaseApplicationUser.Text.Trim()) {
         throw "Complete the database host, name, and application user."
+    }
+    if ((Get-QTracXDatabaseEngine) -eq "mssql" -and
+        -not $odbcDriver.Text.Trim()) {
+        throw "Select an installed 64-bit MSSQL ODBC driver."
     }
     if (-not $applicationAdminUser.Text.Trim() -or
         -not $applicationAdminDisplayName.Text.Trim()) {
@@ -534,11 +561,19 @@ function Get-QTracXProvisioningMode {
 
 function Get-QTracXPayload {
     $engine = Get-QTracXDatabaseEngine
+    $portValue = $(
+        if ($engine -eq "mssql" -and -not $explicitDatabasePort.Checked) {
+            $null
+        }
+        else {
+            [int]$databasePort.Value
+        }
+    )
     $database = [ordered]@{
         engine = $engine
         provisioningMode = Get-QTracXProvisioningMode
         host = $databaseHost.Text.Trim()
-        port = [int]$databasePort.Value
+        port = $portValue
         name = $databaseName.Text.Trim()
         applicationUser = $databaseApplicationUser.Text.Trim()
         applicationPassword = $databaseApplicationPassword.Text
@@ -585,13 +620,18 @@ function Update-QTracXReview {
         else { "Predefined deployment-readiness branch" }
     )
     $protocol = $(if ($httpsEnabled.Checked) { "HTTPS" } else { "HTTP" })
+    $databaseTarget = $databaseHost.Text.Trim()
+    if ((Get-QTracXDatabaseEngine) -eq "postgresql" -or
+        $explicitDatabasePort.Checked) {
+        $databaseTarget += ":$([int]$databasePort.Value)"
+    }
     $reviewSummary.Text = @"
 Source: $sourceDescription
 Install to: $($installDirectory.Text.Trim())
 Deployment: $($deploymentMode.SelectedItem) at $($serverAddress.Text.Trim())
 UI / backend: $protocol ports $([int]$uiPort.Value) / $([int]$backendPort.Value)
 OCR: $(Get-QTracXRuntimeName), $([int]$modelInstances.Value) model instance(s), $([int]$scanWorkers.Value) scan worker(s)
-Database: $(Get-QTracXDatabaseEngine) on $($databaseHost.Text.Trim()):$([int]$databasePort.Value), mode $(Get-QTracXProvisioningMode)
+Database: $(Get-QTracXDatabaseEngine) on $databaseTarget, mode $(Get-QTracXProvisioningMode)
 Database: $($databaseName.Text.Trim()) / application user $($databaseApplicationUser.Text.Trim())
 Initial QTracX administrator: $($applicationAdminUser.Text.Trim())
 
@@ -842,6 +882,13 @@ $sourceMode.Add_SelectedIndexChanged({ Set-QTracXSourceState })
 $httpsEnabled.Add_CheckedChanged({ Set-QTracXHttpsState })
 $databaseEngine.Add_SelectedIndexChanged({ Set-QTracXDatabaseState })
 $databaseMode.Add_SelectedIndexChanged({ Set-QTracXDatabaseState })
+$explicitDatabasePort.Add_CheckedChanged({ Set-QTracXDatabasePortState })
+$databaseHost.Add_TextChanged({
+    if ($databaseEngine.SelectedIndex -eq 0 -and
+        $databaseHost.Text.Contains("\")) {
+        $explicitDatabasePort.Checked = $false
+    }
+})
 $deploymentMode.Add_SelectedIndexChanged({ Set-QTracXDeploymentState })
 $tabs.Add_SelectedIndexChanged({
     $script:CurrentPage = $tabs.SelectedIndex

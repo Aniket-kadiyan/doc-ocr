@@ -44,6 +44,13 @@ class WizardContractTests(unittest.TestCase):
         self.assertNotIn('"--application-password"', self.script)
         self.assertIn("UseSystemPasswordChar", self.script)
 
+    def test_mssql_named_instances_can_omit_an_explicit_port(self) -> None:
+        self.assertIn("Database server / instance", self.script)
+        self.assertIn("Use explicit TCP port", self.script)
+        self.assertIn(r"jains\SQLEXPRESS", self.script)
+        self.assertIn("$null", self.script)
+        self.assertIn("SQL Server Browser", self.script)
+
     def test_installation_finishes_with_verification(self) -> None:
         database_stage = self.script.index(
             "Creating and migrating the QTracX database"

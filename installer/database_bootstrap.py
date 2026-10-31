@@ -40,12 +40,21 @@ ProgressCallback = Callable[[str, str], None]
 
 
 class DatabaseBootstrapError(RuntimeError):
-    """A sanitized database-setup failure safe to show in the installer."""
+    """A sanitized, actionable database failure safe for installer output."""
 
-    def __init__(self, stage: str, error_type: str) -> None:
+    def __init__(
+        self,
+        stage: str,
+        error_type: str,
+        guidance: str = "",
+    ) -> None:
         self.stage = stage
         self.error_type = error_type
-        super().__init__(f"{stage} failed ({error_type})")
+        self.guidance = guidance
+        message = f"{stage} failed ({error_type})"
+        if guidance:
+            message += f": {guidance}"
+        super().__init__(message)
 
 
 def _required_string(payload: Mapping[str, Any], key: str, label: str) -> str:
@@ -55,14 +64,22 @@ def _required_string(payload: Mapping[str, Any], key: str, label: str) -> str:
     return value
 
 
-def _integer(payload: Mapping[str, Any], key: str, default: int) -> int:
+def _optional_integer(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int | None,
+) -> int | None:
     value = payload.get(key, default)
+    if value is None:
+        return None
     if isinstance(value, bool):
-        raise SetupConfigurationError(f"{key} must be an integer")
+        raise SetupConfigurationError(f"{key} must be an integer or null")
     try:
         return int(value)
     except (TypeError, ValueError) as error:
-        raise SetupConfigurationError(f"{key} must be an integer") from error
+        raise SetupConfigurationError(
+            f"{key} must be an integer or null"
+        ) from error
 
 
 def _boolean(payload: Mapping[str, Any], key: str, default: bool) -> bool:
@@ -162,7 +179,7 @@ class DatabaseBootstrapRequest:
         database = DatabaseSetup(
             engine=engine,
             host=str(database_payload.get("host", "localhost")).strip(),
-            port=_integer(
+            port=_optional_integer(
                 database_payload,
                 "port",
                 1433 if engine == "mssql" else 5432,
@@ -277,7 +294,7 @@ def _mssql_connection_string(
     trust = "yes" if setup.trust_server_certificate else "no"
     return ";".join([
         f"DRIVER={_odbc_value(setup.odbc_driver)}",
-        f"SERVER={_odbc_value(f'{setup.host},{setup.port}')}",
+        f"SERVER={_odbc_value(setup.mssql_server)}",
         f"DATABASE={_odbc_value(database)}",
         f"UID={_odbc_value(user)}",
         f"PWD={_odbc_value(password)}",
@@ -611,13 +628,79 @@ def _ensure_initial_admin(
         manager.dispose()
 
 
+def _diagnose_database_error(error: Exception) -> tuple[str, str]:
+    """Classify common driver failures without returning secret-bearing text."""
+
+    fragments = [str(getattr(error, "sqlstate", "") or "")]
+    for value in getattr(error, "args", ()):
+        fragments.append(str(value))
+    evidence = " ".join(fragments).upper()
+
+    if "IM002" in evidence:
+        return (
+            "OdbcDriverUnavailable",
+            "The selected 64-bit SQL Server ODBC driver is not installed. "
+            "Run the installer prerequisite check or select a detected Driver 18/17.",
+        )
+    if any(code in evidence for code in ("28000", "18456", "28P01")):
+        return (
+            "DatabaseLoginRejected",
+            "Verify the database username and password. For a SQL Server "
+            "login, also confirm that SQL Server authentication is enabled.",
+        )
+    if any(code in evidence for code in ("4060", "3D000")):
+        return (
+            "DatabaseUnavailable",
+            "The selected database is unavailable to this account. Verify "
+            "the database name and the account's access.",
+        )
+    if any(
+        code in evidence
+        for code in ("42501", "42000", " 262 ", "15247", "229")
+    ) or isinstance(error, PermissionError):
+        return (
+            "DatabasePermissionDenied",
+            "The supplied account lacks the required database or schema "
+            "permissions. Use a provisioning administrator or prepare the "
+            "QTracX account as documented.",
+        )
+    if any(
+        code in evidence
+        for code in (
+            "08001",
+            "08004",
+            "08S01",
+            "HYT00",
+            "HYT01",
+            "CONNECTION REFUSED",
+            "TIMED OUT",
+            "TIMEOUT",
+            "ERROR 26",
+            "ERROR 53",
+            "10060",
+            "10061",
+        )
+    ):
+        return (
+            "DatabaseServerUnreachable",
+            "Verify the server name and network access. For an MSSQL named "
+            "instance, enable SQL Server Browser/UDP 1434 or configure a "
+            "fixed TCP port and select explicit TCP port in the installer.",
+        )
+    return (
+        error.__class__.__name__,
+        "Review the database selection and account permissions, then retry.",
+    )
+
+
 def _run_stage(stage: str, operation: Callable[[], Any]) -> Any:
     try:
         return operation()
     except (SetupConfigurationError, DatabaseBootstrapError):
         raise
     except Exception as error:
-        raise DatabaseBootstrapError(stage, error.__class__.__name__) from error
+        error_type, guidance = _diagnose_database_error(error)
+        raise DatabaseBootstrapError(stage, error_type, guidance) from error
 
 
 def check_database_connection(
@@ -747,17 +830,27 @@ def _interactive_request() -> DatabaseBootstrapRequest:
     engine = _prompt("Database engine (mssql/postgresql)", "mssql").lower()
     if engine not in {"mssql", "postgresql"}:
         raise SetupConfigurationError("database engine must be mssql or postgresql")
-    port_default = "1433" if engine == "mssql" else "5432"
     admin_default = "sa" if engine == "mssql" else "postgres"
     provisioning_mode = _prompt(
         "Database setup mode (installer/preconfigured)",
         "installer",
     ).lower()
+    database_host = _prompt("Database server", "localhost")
+    if engine == "mssql" and "\\" in database_host:
+        port_text = input(
+            "Database TCP port (blank uses named-instance discovery): "
+        ).strip()
+        database_port = int(port_text) if port_text else None
+    else:
+        database_port = int(_prompt(
+            "Database port",
+            "1433" if engine == "mssql" else "5432",
+        ))
     database_payload: dict[str, object] = {
         "engine": engine,
         "provisioningMode": provisioning_mode,
-        "host": _prompt("Database server", "localhost"),
-        "port": int(_prompt("Database port", port_default)),
+        "host": database_host,
+        "port": database_port,
         "name": _prompt("Database name", "QTracX"),
         "applicationUser": _prompt(
             "QTracX database user",

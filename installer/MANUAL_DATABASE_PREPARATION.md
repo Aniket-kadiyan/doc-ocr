@@ -65,10 +65,31 @@ In the installer select:
 
 - Database engine: `mssql`
 - Setup mode: `preconfigured`
+- Database server/instance:
+  - default or fixed-port instance: enter its hostname/IP and enable **Use
+    explicit TCP port**;
+  - named instance: enter `server\instance` (for example,
+    `jains\SQLEXPRESS`) and leave **Use explicit TCP port** unchecked;
 - Database name: `QTracX`
 - Database user: `qtracx_app`
 - The password used above
 - An ODBC driver actually installed on the QTracX server
+
+Named-instance discovery requires the SQL Server Browser service and network
+access to UDP 1434. If client IT disables SQL Browser, ask for the instance's
+fixed TCP port, enable **Use explicit TCP port**, and enter that port instead.
+`Test-NetConnection` accepts a numeric TCP port only; `SQLEXPRESS` is an
+instance name, not a port number.
+
+Typical installer diagnostics are intentionally credential-safe:
+
+- **ODBC driver unavailable**: install/detect 64-bit Driver 18 or 17;
+- **server unreachable**: check the server name, TCP/firewall settings, and
+  SQL Browser or the fixed instance port;
+- **login rejected**: check the account/password and SQL Server authentication
+  mode; and
+- **permission denied**: grant the account the provisioning or migration
+  permissions described above.
 
 ## PostgreSQL
 

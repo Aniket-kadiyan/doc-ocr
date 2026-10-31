@@ -18,7 +18,7 @@ from urllib.parse import quote_plus
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,62}$")
-_HOST = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_HOST = re.compile(r"^[A-Za-z0-9_.:\\-]+$")
 
 
 class SetupConfigurationError(ValueError):
@@ -53,6 +53,24 @@ def _integer(payload: Mapping[str, Any], key: str, default: int) -> int:
         raise SetupConfigurationError(f"{key} must be an integer") from error
 
 
+def _optional_integer(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int | None,
+) -> int | None:
+    value = payload.get(key, default)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise SetupConfigurationError(f"{key} must be an integer or null")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise SetupConfigurationError(
+            f"{key} must be an integer or null"
+        ) from error
+
+
 def _boolean(payload: Mapping[str, Any], key: str, default: bool) -> bool:
     value = payload.get(key, default)
     if not isinstance(value, bool):
@@ -67,11 +85,15 @@ def _mapping(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value
 
 
+def _odbc_value(value: str) -> str:
+    return "{" + value.replace("}", "}}") + "}"
+
+
 @dataclass(frozen=True)
 class DatabaseSetup:
     engine: str = "mssql"
     host: str = "localhost"
-    port: int = 1433
+    port: int | None = 1433
     name: str = "QTracX"
     application_user: str = "qtracx_app"
     application_password: str = field(default="", repr=False)
@@ -85,7 +107,13 @@ class DatabaseSetup:
                 "database engine must be mssql or postgresql"
             )
         _require_host("database host", self.host)
-        _require_port("database port", self.port)
+        if self.port is None:
+            if self.engine == "postgresql":
+                raise SetupConfigurationError(
+                    "a PostgreSQL database port is required"
+                )
+        else:
+            _require_port("database port", self.port)
         _require_identifier("database name", self.name)
         _require_identifier("application database user", self.application_user)
         if len(self.application_password) < 4:
@@ -95,24 +123,38 @@ class DatabaseSetup:
         if self.engine == "mssql" and not self.odbc_driver.strip():
             raise SetupConfigurationError("an MSSQL ODBC driver is required")
 
+    @property
+    def mssql_server(self) -> str:
+        """Return an ODBC SERVER value for a host or named instance."""
+
+        if self.engine != "mssql":
+            raise SetupConfigurationError(
+                "an MSSQL server target is available only for MSSQL"
+            )
+        return self.host if self.port is None else f"{self.host},{self.port}"
+
     def url(self) -> str:
         self.validate()
-        user = quote_plus(self.application_user)
-        password = quote_plus(self.application_password)
-        host = self.host
-        database = quote_plus(self.name)
         if self.engine == "postgresql":
+            user = quote_plus(self.application_user)
+            password = quote_plus(self.application_password)
+            database = quote_plus(self.name)
             return (
-                f"postgresql+pg8000://{user}:{password}@{host}:{self.port}/"
+                f"postgresql+pg8000://{user}:{password}@{self.host}:{self.port}/"
                 f"{database}"
             )
-        driver = quote_plus(self.odbc_driver)
         encrypt = "yes" if self.encrypt else "no"
         trust = "yes" if self.trust_server_certificate else "no"
-        return (
-            f"mssql+pyodbc://{user}:{password}@{host}:{self.port}/{database}"
-            f"?driver={driver}&Encrypt={encrypt}&TrustServerCertificate={trust}"
-        )
+        connection_string = ";".join([
+            f"DRIVER={_odbc_value(self.odbc_driver)}",
+            f"SERVER={_odbc_value(self.mssql_server)}",
+            f"DATABASE={_odbc_value(self.name)}",
+            f"UID={_odbc_value(self.application_user)}",
+            f"PWD={_odbc_value(self.application_password)}",
+            f"Encrypt={encrypt}",
+            f"TrustServerCertificate={trust}",
+        ])
+        return "mssql+pyodbc:///?odbc_connect=" + quote_plus(connection_string)
 
 
 @dataclass(frozen=True)
@@ -253,7 +295,7 @@ class InstallerSetup:
         database = DatabaseSetup(
             engine=engine,
             host=str(database_payload.get("host", "localhost")).strip(),
-            port=_integer(
+            port=_optional_integer(
                 database_payload,
                 "port",
                 1433 if engine == "mssql" else 5432,
