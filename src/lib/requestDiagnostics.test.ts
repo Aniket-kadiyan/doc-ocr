@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  apiRequestError, ApiRequestError, fetchWithRequestId, responseRequestId,
+  apiRequestError, ApiRequestError, DEMO_EXPIRED_EVENT, fetchWithRequestId,
+  responseRequestId,
 } from "@/lib/requestDiagnostics";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -61,5 +62,24 @@ describe("request diagnostics", () => {
     await expect(fetchWithRequestId(
       "http://localhost:8000/ocr/segment", {}, { operation: "ocr.segment" }
     )).rejects.not.toThrow("12.5");
+  });
+
+  it("notifies the application when the demo window has expired", async () => {
+    const events = new EventTarget();
+    const heard = vi.fn();
+    events.addEventListener(DEMO_EXPIRED_EVENT, heard);
+    vi.stubGlobal("window", events);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 423 }))
+    );
+
+    await fetchWithRequestId(
+      "http://localhost:8000/ocr/segment",
+      { method: "POST" },
+      { operation: "ocr.segment" }
+    );
+
+    expect(heard).toHaveBeenCalledOnce();
   });
 });

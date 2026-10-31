@@ -5,6 +5,7 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const responseRequestIds = new WeakMap<object, string>();
 
 export const AUTHENTICATION_REQUIRED_EVENT = "qtracx:authentication-required";
+export const DEMO_EXPIRED_EVENT = "qtracx:demo-expired";
 
 export interface DiagnosticFetchOptions {
   operation: string;
@@ -122,6 +123,9 @@ export async function fetchWithRequestId(
       typeof window !== "undefined"
     ) {
       window.dispatchEvent(new Event(AUTHENTICATION_REQUIRED_EVENT));
+    }
+    if (response.status === 423 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(DEMO_EXPIRED_EVENT));
     }
     return response;
   } catch {

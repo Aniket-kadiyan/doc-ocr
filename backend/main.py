@@ -51,6 +51,7 @@ from config_env import load_env_files, load_runtime_config
 from cors_config import install_unrestricted_cors
 from debug_dump import dump_status
 from database import DatabaseManager
+from demo_lock import DemoAccessWindow, DemoLockMiddleware
 from gdt_routes import router as gdt_router
 from inference_gate import inference_priority
 from ocr_capacity import build_ocr_capacity_status
@@ -80,6 +81,15 @@ app = FastAPI(
     description="Self-hosted engineering drawing OCR",
     version="0.2.0",
 )
+demo_access_window = DemoAccessWindow(
+    enabled=runtime_config.demo_lock_enabled,
+    start_at=runtime_config.demo_start_at,
+    duration_hours=runtime_config.demo_duration_hours,
+)
+# Install this before diagnostics and CORS. Those outer layers still attach
+# request IDs, logs and browser CORS headers to a blocked response.
+app.add_middleware(DemoLockMiddleware, access_window=demo_access_window)
+app.state.demo_access_window = demo_access_window
 auth_database_manager = (
     DatabaseManager(runtime_config.database_url)
     if runtime_config.database_url
@@ -314,6 +324,12 @@ def startup() -> None:
             },
         },
     )
+    if runtime_config.demo_lock_enabled:
+        demo_status = demo_access_window.snapshot()
+        logger.warning(
+            f"QTracX demo access is {demo_status['state']}",
+            extra={"event": "demo_lock_status", "details": demo_status},
+        )
     if transport_security.requested and not transport_security.active:
         logger.warning(
             "HTTPS was requested but is unavailable; using HTTP",
@@ -385,6 +401,7 @@ def health() -> dict[str, Any]:
         "authentication": {
             "configured": auth_database_manager is not None,
         },
+        "demo": demo_access_window.snapshot(),
         "debug_dump": dump_status(),
         "run_reports": run_report.report_status(),
     }
