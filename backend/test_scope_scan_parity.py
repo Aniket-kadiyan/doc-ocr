@@ -60,7 +60,9 @@ def test_section_and_page_return_the_same_value_from_the_same_panel() -> None:
 
     pipeline.recognize = authoritative
     pipeline.detect_regions = lambda *_args, **_kwargs: []
-    pipeline._detect_angled_regions = lambda *_args, **_kwargs: []
+    pipeline._detect_angled_regions = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("slanted analysis should be skipped when disabled")
+    )
     pipeline._notes_regions = lambda *_args, **_kwargs: []
     pipeline._frame_regions = lambda *_args, **_kwargs: []
 
@@ -80,6 +82,7 @@ def test_section_and_page_return_the_same_value_from_the_same_panel() -> None:
         image,
         layout=layout,
         read_frames=False,
+        read_slanted=False,
     )
     page_detector_calls = len(detector_sizes)
     detector_sizes.clear()
@@ -89,6 +92,7 @@ def test_section_and_page_return_the_same_value_from_the_same_panel() -> None:
         layout=layout,
         scope_bbox={"x": 140, "y": 10, "width": 55, "height": 80},
         read_frames=False,
+        read_slanted=False,
     )
 
     assert section_result["coordinate_space"] == "page"

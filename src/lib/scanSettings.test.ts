@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SCAN_SETTINGS_EVENT,
   isGdtScanEnabled,
+  isSlantedScanEnabled,
   setGdtScanEnabled,
+  setSlantedScanEnabled,
 } from "@/lib/scanSettings";
 
 function stubBrowser(storage: Storage | null) {
@@ -54,6 +56,26 @@ describe("GD&T scan setting", () => {
   it("keeps the page-local value when storage is blocked", () => {
     stubBrowser(null);
     setGdtScanEnabled(false);
+    expect(isGdtScanEnabled()).toBe(false);
+    setGdtScanEnabled(true);
+  });
+});
+
+describe("slanted-callout scan setting", () => {
+  it("defaults to on and persists changes", () => {
+    stubBrowser(memoryStorage());
+    expect(isSlantedScanEnabled()).toBe(true);
+    setSlantedScanEnabled(false);
+    expect(isSlantedScanEnabled()).toBe(false);
+    setSlantedScanEnabled(true);
+    expect(isSlantedScanEnabled()).toBe(true);
+  });
+
+  it("does not change the GD&T setting", () => {
+    stubBrowser(memoryStorage());
+    setGdtScanEnabled(false);
+    setSlantedScanEnabled(false);
+    setSlantedScanEnabled(true);
     expect(isGdtScanEnabled()).toBe(false);
     setGdtScanEnabled(true);
   });

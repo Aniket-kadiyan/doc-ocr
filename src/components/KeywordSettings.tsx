@@ -10,7 +10,9 @@ import {
 import {
   SCAN_SETTINGS_EVENT,
   isGdtScanEnabled,
+  isSlantedScanEnabled,
   setGdtScanEnabled,
+  setSlantedScanEnabled,
 } from "@/lib/scanSettings";
 
 /**
@@ -25,12 +27,16 @@ export function KeywordSettings() {
   const [draft, setDraft] = useState("");
   const [saved, setSaved] = useState(false);
   const [readGdt, setReadGdt] = useState(true);
+  const [readSlanted, setReadSlanted] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Load the stored list when the panel opens (localStorage is client-only, so
   // this cannot run during render).
   useEffect(() => {
-    const sync = () => setReadGdt(isGdtScanEnabled());
+    const sync = () => {
+      setReadGdt(isGdtScanEnabled());
+      setReadSlanted(isSlantedScanEnabled());
+    };
     sync();
     window.addEventListener(SCAN_SETTINGS_EVENT, sync);
     return () => window.removeEventListener(SCAN_SETTINGS_EVENT, sync);
@@ -128,6 +134,24 @@ export function KeywordSettings() {
               <span className="block text-[11px] leading-snug text-slate-400">
                 Include feature control frames during Auto Balloon scans.
                 Turn this off for drawings that do not contain GD&amp;T.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={readSlanted}
+              onChange={(event) =>
+                setSlantedScanEnabled(event.target.checked)
+              }
+              className="mt-0.5 h-4 w-4 accent-emerald-600"
+            />
+            <span>
+              <span className="font-medium">Read slanted callouts</span>
+              <span className="block text-[11px] leading-snug text-slate-400">
+                Analyse rotated neighbourhoods for dimensions drawn along
+                angled leaders. Turn this off for orthogonal-only drawings.
               </span>
             </span>
           </label>

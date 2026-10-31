@@ -1,9 +1,11 @@
 /** Browser-local options that alter automatic drawing scans. */
 
 const GDT_KEY = "doc_ocr_scan_gdt";
+const SLANTED_KEY = "doc_ocr_scan_slanted";
 export const SCAN_SETTINGS_EVENT = "scan-settings-changed";
 
 let gdtInMemory = true;
+let slantedInMemory = true;
 
 export function isGdtScanEnabled(): boolean {
   if (typeof window === "undefined") return true;
@@ -20,6 +22,27 @@ export function setGdtScanEnabled(enabled: boolean): void {
   gdtInMemory = enabled;
   try {
     localStorage.setItem(GDT_KEY, enabled ? "1" : "0");
+  } catch {
+    // Private/locked-down browsers retain the setting for this page only.
+  }
+  window.dispatchEvent(new CustomEvent(SCAN_SETTINGS_EVENT));
+}
+
+export function isSlantedScanEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const stored = localStorage.getItem(SLANTED_KEY);
+    return stored == null ? slantedInMemory : stored !== "0";
+  } catch {
+    return slantedInMemory;
+  }
+}
+
+export function setSlantedScanEnabled(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  slantedInMemory = enabled;
+  try {
+    localStorage.setItem(SLANTED_KEY, enabled ? "1" : "0");
   } catch {
     // Private/locked-down browsers retain the setting for this page only.
   }

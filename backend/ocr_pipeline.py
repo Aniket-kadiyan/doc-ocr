@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-scope-aware-scan-parity"
+OCR_CHANGESET_ID = "mvp2-scan-parity-closeout"
 #: A section-scan value read below this confidence is excluded rather than
 #: ballooned. See the gate in ``segment`` for the measurement behind it.
 SECTION_MIN_CONFIDENCE = 0.6
@@ -4339,7 +4339,11 @@ class OcrPipeline:
                 except Exception:  # noqa: BLE001 - one unreadable cell
                     return ("", 0.0)
 
-            return gdt_pipeline.scan_regions(image, ocr_fn=ocr_fn)
+            return gdt_pipeline.scan_regions(
+                image,
+                ocr_fn=ocr_fn,
+                progress_callback=progress_callback,
+            )
         except Exception:  # noqa: BLE001
             logger.exception("feature control frame pass failed; scan continues")
             return []
@@ -5290,6 +5294,7 @@ class OcrPipeline:
         progress_callback: Callable[..., None] | None = None,
         existing_value_boxes: Sequence[Mapping[str, float]] = (),
         read_frames: bool = True,
+        read_slanted: bool = True,
         scope_bbox: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         """Scan a page or page-coordinate section through one shared route.
@@ -6809,15 +6814,16 @@ class OcrPipeline:
         # only ADDS a value the upright passes missed; detected_count moves with
         # it so the state invariant below still balances.
         try:
-            report(
-                stage="slanted",
-                message="Finding slanted callout neighbourhoods",
-                percent=98,
-                completed=0,
-                total=0,
-                operation_label="Slanted-callout recovery",
-                candidate_count=len(regions),
-            )
+            if read_slanted:
+                report(
+                    stage="slanted",
+                    message="Finding slanted callout neighbourhoods",
+                    percent=98,
+                    completed=0,
+                    total=0,
+                    operation_label="Slanted-callout recovery",
+                    candidate_count=len(regions),
+                )
 
             def report_slanted_progress(**progress: Any) -> None:
                 label = str(progress.get("label") or "slanted callout read")
@@ -6847,18 +6853,21 @@ class OcrPipeline:
             # context without pooling it with its neighbours: the same page
             # goes from 8 neighbourhoods, one of them 21% of the sheet, to 16
             # that are each under 0.2% of it.
-            angled_regions = self._detect_angled_regions(
-                image,
-                regions,
-                det_boxes=self.detect_regions(image),
-                max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
-                margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
-                expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
-                whole_image=(
-                    max(image.size) <= PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE
-                ),
-                progress_callback=report_slanted_progress,
-            )
+            if read_slanted:
+                angled_regions = self._detect_angled_regions(
+                    image,
+                    regions,
+                    det_boxes=self.detect_regions(image),
+                    max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
+                    margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
+                    expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
+                    whole_image=(
+                        max(image.size) <= PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE
+                    ),
+                    progress_callback=report_slanted_progress,
+                )
+            else:
+                angled_regions = []
         except Exception:
             # The upright balloons are the point of the scan; a failed angled
             # recovery must never discard them.
@@ -6869,15 +6878,16 @@ class OcrPipeline:
                 for region in angled_regions
                 if bbox_center_in_scope(region["bbox"], scan_scope)
             ]
-        report(
-            stage="slanted",
-            message=f"Recovered {len(angled_regions)} slanted callouts",
-            percent=98,
-            completed=1,
-            total=1,
-            operation_label="Slanted-callout recovery",
-            candidate_count=len(angled_regions),
-        )
+        if read_slanted:
+            report(
+                stage="slanted",
+                message=f"Recovered {len(angled_regions)} slanted callouts",
+                percent=98,
+                completed=1,
+                total=1,
+                operation_label="Slanted-callout recovery",
+                candidate_count=len(angled_regions),
+            )
         if angled_regions:
             regions.extend(angled_regions)
             detected_count += len(angled_regions)

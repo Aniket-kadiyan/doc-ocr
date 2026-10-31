@@ -71,8 +71,9 @@ def test_gdt_scan_reports_each_frame_cell_ocr(monkeypatch) -> None:
         lambda: SimpleNamespace(enabled=True),
     )
 
-    def fake_scan_regions(image, *, ocr_fn):
+    def fake_scan_regions(image, *, ocr_fn, progress_callback=None):
         assert ocr_fn is not None
+        assert progress_callback is not None
         ocr_fn(image)
         ocr_fn(image)
         return []

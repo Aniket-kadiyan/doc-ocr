@@ -787,6 +787,10 @@ async def create_scan_job(
         True,
         description="Read feature control frames during this scan",
     ),
+    slanted: bool = Form(
+        True,
+        description="Read dimensions drawn along angled leaders",
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -940,6 +944,7 @@ async def create_scan_job(
             progress_callback=report_progress,
             existing_value_boxes=saved_value_boxes,
             read_frames=gdt,
+            read_slanted=slanted,
             scope_bbox=scope_bbox if scope_kind == "section" else None,
         )
         seg["coordinate_space"] = "page"
@@ -957,6 +962,7 @@ async def create_scan_job(
         metadata={
             "scope_kind": scope_kind,
             "gdt": gdt,
+            "slanted": slanted,
             "page": page,
             "scope_bbox": scope_bbox,
             # Liveness thresholds scale with the actual selected drawing area.

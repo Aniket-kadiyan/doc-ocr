@@ -49,6 +49,32 @@ def test_tiles_cover_the_whole_page():
     assert max(y + h for _, y, _, h in tiles) == height
 
 
+def test_frame_detection_reports_tile_progress(monkeypatch):
+    monkeypatch.setattr(pipeline, "tiles_for", lambda *_args, **_kwargs: [
+        (0, 0, 100, 100),
+        (100, 0, 100, 100),
+    ])
+    monkeypatch.setattr(
+        pipeline.fcf_parse,
+        "parse_frames",
+        lambda *_args, **_kwargs: [],
+    )
+    events: list[dict] = []
+
+    pipeline.analyze_page(
+        Image.new("RGB", (200, 100), "white"),
+        deskew=False,
+        detect_loose_symbols=False,
+        progress_callback=lambda **event: events.append(event),
+    )
+
+    labels = [event["label"] for event in events]
+    assert "Prepared 2 GD&T frame detection tiles" in labels
+    assert "Detecting GD&T frames in tile 1 of 2" in labels
+    assert "Completed GD&T frame tile 2 of 2" in labels
+    assert labels[-1] == "Prepared 0 GD&T feature control frames"
+
+
 # --- deskew ------------------------------------------------------------------
 
 
