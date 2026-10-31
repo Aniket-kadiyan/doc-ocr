@@ -181,6 +181,12 @@ configuration, runtime, frontend-build, database-migration and final-verificatio
 sequence. Passwords are passed to Python through standard input and are not
 placed in command arguments or installer logs.
 
+The review page includes determinate overall stage progress and streams child
+process output live instead of displaying it only after completion. A matching
+timestamped diagnostic log is stored under
+`%ProgramData%\QTracX\installer-logs` and its path is shown on completion or
+failure.
+
 See [INSTALLER_WIZARD.md](INSTALLER_WIZARD.md) for the current workflow and
 the remaining service-registration boundary.
 

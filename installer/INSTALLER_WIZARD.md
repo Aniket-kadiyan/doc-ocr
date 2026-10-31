@@ -71,6 +71,23 @@ After final confirmation, `Install QTracX` performs these stages:
    QTracX administrator; and
 8. verify the completed application runtime and frontend build.
 
+The review page shows overall progress across six executable stages. Output
+from PowerShell, Python, pip, npm, model warmup and database migration is
+appended to the on-screen log as each line is produced; the form remains
+responsive while a child process is running. Closing or starting another
+operation is blocked until the current stage finishes.
+
+Each installation also writes the same timestamped log to:
+
+```text
+%ProgramData%\QTracX\installer-logs\install-YYYYMMDD-HHMMSS.log
+```
+
+The completion or failure dialog displays the exact path. Password payloads
+are sent through standard input and are not written to this log. Tools that
+use stderr for ordinary progress are labelled `stderr` rather than being
+misreported as installer failures.
+
 After source acquisition, the wizard uses the runtime, configuration and
 database installer modules from the acquired Git branch or ZIP. This keeps the
 installed application and its setup logic on the same revision.

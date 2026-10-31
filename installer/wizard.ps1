@@ -44,6 +44,7 @@ $script:ConfigurationScript = Join-Path $PSScriptRoot "setup_config.py"
 $script:DatabaseScript = Join-Path $PSScriptRoot "database_bootstrap.py"
 $script:CurrentPage = 0
 $script:Busy = $false
+$script:InstallerLogPath = $null
 
 function ConvertTo-ProcessArguments {
     param([string[]]$Values)
@@ -63,7 +64,8 @@ function Invoke-QTracXProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$Arguments = @(),
-        [AllowNull()][string]$InputText = $null
+        [AllowNull()][string]$InputText = $null,
+        [AllowNull()][scriptblock]$OnOutput = $null
     )
 
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -80,17 +82,51 @@ function Invoke-QTracXProcess {
     if (-not $process.Start()) {
         throw "Could not start $FilePath"
     }
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
+    $stdout = [Text.StringBuilder]::new()
+    $stderr = [Text.StringBuilder]::new()
+    $stdoutTask = $process.StandardOutput.ReadLineAsync()
+    $stderrTask = $process.StandardError.ReadLineAsync()
     if ($null -ne $InputText) {
         $process.StandardInput.Write($InputText)
     }
     $process.StandardInput.Close()
+    while (-not $process.HasExited -or
+        $null -ne $stdoutTask -or
+        $null -ne $stderrTask) {
+        while ($null -ne $stdoutTask -and $stdoutTask.IsCompleted) {
+            $line = $stdoutTask.GetAwaiter().GetResult()
+            if ($null -eq $line) {
+                $stdoutTask = $null
+            }
+            else {
+                [void]$stdout.AppendLine($line)
+                if ($null -ne $OnOutput) {
+                    & $OnOutput $line $false
+                }
+                $stdoutTask = $process.StandardOutput.ReadLineAsync()
+            }
+        }
+        while ($null -ne $stderrTask -and $stderrTask.IsCompleted) {
+            $line = $stderrTask.GetAwaiter().GetResult()
+            if ($null -eq $line) {
+                $stderrTask = $null
+            }
+            else {
+                [void]$stderr.AppendLine($line)
+                if ($null -ne $OnOutput) {
+                    & $OnOutput $line $true
+                }
+                $stderrTask = $process.StandardError.ReadLineAsync()
+            }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+        [Threading.Thread]::Sleep(40)
+    }
     $process.WaitForExit()
     return [pscustomobject]@{
         ExitCode = $process.ExitCode
-        StandardOutput = $stdout.Result
-        StandardError = $stderr.Result
+        StandardOutput = $stdout.ToString()
+        StandardError = $stderr.ToString()
     }
 }
 
@@ -411,11 +447,19 @@ $reviewSummary.ReadOnly = $true
 $reviewSummary.Height = 170
 $checkPlan = Add-QTracXButton $reviewTab "Check plan" 22 208 130
 $startInstall = Add-QTracXButton $reviewTab "Install QTracX" 165 208 150
-$progressLabel = Add-QTracXLabel $reviewTab "Ready." 335 214 490
+$progressLabel = Add-QTracXLabel $reviewTab "Ready." 335 204 490
 $progressLabel.ForeColor = [Drawing.Color]::DarkSlateBlue
-$installLog = Add-QTracXTextBox $reviewTab 22 258 800 "" -Multiline
+$installProgress = [System.Windows.Forms.ProgressBar]::new()
+$installProgress.Location = [Drawing.Point]::new(335, 232)
+$installProgress.Size = [Drawing.Size]::new(487, 18)
+$installProgress.Minimum = 0
+$installProgress.Maximum = 100
+$installProgress.Value = 0
+$installProgress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+$reviewTab.Controls.Add($installProgress)
+$installLog = Add-QTracXTextBox $reviewTab 22 270 800 "" -Multiline
 $installLog.ReadOnly = $true
-$installLog.Height = 220
+$installLog.Height = 208
 
 $backButton = Add-QTracXButton $form "Back" 604 648 90
 $nextButton = Add-QTracXButton $form "Next" 704 648 90
@@ -640,11 +684,64 @@ Passwords are held only in this process and are not displayed or written to the 
 }
 
 function Add-QTracXLog {
-    param([string]$Message)
+    param(
+        [AllowEmptyString()][string]$Message,
+        [switch]$StandardError
+    )
     $stamp = Get-Date -Format "HH:mm:ss"
-    $installLog.AppendText("[$stamp] $Message`r`n")
+    # Installers such as pip and npm use stderr for progress and warnings too;
+    # label the stream without incorrectly declaring every line an error.
+    $prefix = $(if ($StandardError) { "stderr: " } else { "" })
+    $entry = "[$stamp] $prefix$Message`r`n"
+    $installLog.AppendText($entry)
     $installLog.SelectionStart = $installLog.TextLength
     $installLog.ScrollToCaret()
+    if ($script:InstallerLogPath) {
+        try {
+            [IO.File]::AppendAllText(
+                $script:InstallerLogPath,
+                $entry,
+                [Text.Encoding]::UTF8
+            )
+        }
+        catch {
+            # A log-file write problem must not stop an otherwise valid setup.
+        }
+    }
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Initialize-QTracXInstallerLog {
+    try {
+        $directory = Join-Path $env:ProgramData "QTracX\installer-logs"
+        [void](New-Item -ItemType Directory -Path $directory -Force)
+        $script:InstallerLogPath = Join-Path $directory (
+            "install-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss")
+        )
+        [IO.File]::WriteAllText(
+            $script:InstallerLogPath,
+            "",
+            [Text.Encoding]::UTF8
+        )
+        Add-QTracXLog "Installer log: $($script:InstallerLogPath)"
+    }
+    catch {
+        $script:InstallerLogPath = $null
+        Add-QTracXLog "Persistent installer log could not be created; the on-screen log remains available."
+    }
+}
+
+function Set-QTracXProgress {
+    param(
+        [int]$Value,
+        [string]$Status
+    )
+    $bounded = [Math]::Max(
+        $installProgress.Minimum,
+        [Math]::Min($installProgress.Maximum, $Value)
+    )
+    $installProgress.Value = $bounded
+    $progressLabel.Text = $Status
     [System.Windows.Forms.Application]::DoEvents()
 }
 
@@ -659,23 +756,29 @@ function Invoke-QTracXStage {
         [string]$Name,
         [string]$FilePath,
         [string[]]$Arguments,
-        [AllowNull()][string]$InputText = $null
+        [AllowNull()][string]$InputText = $null,
+        [int]$StartPercent = 0,
+        [int]$EndPercent = 100,
+        [int]$StageNumber = 1,
+        [int]$StageCount = 1
     )
-    $progressLabel.Text = $Name
-    Add-QTracXLog $Name
+    $status = "Stage $StageNumber of $StageCount: $Name"
+    Set-QTracXProgress -Value $StartPercent -Status $status
+    Add-QTracXLog $status
     $result = Invoke-QTracXProcess `
         -FilePath $FilePath `
         -Arguments $Arguments `
-        -InputText $InputText
-    if ($result.StandardOutput.Trim()) {
-        Add-QTracXLog $result.StandardOutput.Trim()
-    }
-    if ($result.StandardError.Trim()) {
-        Add-QTracXLog $result.StandardError.Trim()
-    }
+        -InputText $InputText `
+        -OnOutput {
+            param($Line, $IsError)
+            Add-QTracXLog -Message $Line -StandardError:$IsError
+        }
     if ($result.ExitCode -ne 0) {
         throw "$Name failed with exit code $($result.ExitCode)."
     }
+    Set-QTracXProgress `
+        -Value $EndPercent `
+        -Status "Completed stage $StageNumber of $StageCount: $Name"
     return $result
 }
 
@@ -697,12 +800,33 @@ function Get-QTracXBootstrapArguments {
 function Invoke-QTracXPlan {
     Test-QTracXSelections
     Update-QTracXReview
-    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
-    [void](Invoke-QTracXStage `
-        -Name "Checking host prerequisite plan" `
-        -FilePath $powershell `
-        -Arguments (Get-QTracXBootstrapArguments -Mode "Plan" -HostOnly))
-    $progressLabel.Text = "Plan complete. No changes were made."
+    $script:Busy = $true
+    $checkPlan.Enabled = $false
+    $startInstall.Enabled = $false
+    $backButton.Enabled = $false
+    $nextButton.Enabled = $false
+    try {
+        $script:InstallerLogPath = $null
+        $installLog.Clear()
+        Set-QTracXProgress -Value 0 -Status "Checking installation plan."
+        $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+        [void](Invoke-QTracXStage `
+            -Name "Checking host prerequisite plan" `
+            -FilePath $powershell `
+            -Arguments (Get-QTracXBootstrapArguments -Mode "Plan" -HostOnly) `
+            -StartPercent 0 -EndPercent 100 `
+            -StageNumber 1 -StageCount 1)
+        Set-QTracXProgress `
+            -Value 100 `
+            -Status "Plan complete. No changes were made."
+    }
+    finally {
+        $script:Busy = $false
+        $checkPlan.Enabled = $true
+        $startInstall.Enabled = $true
+        $backButton.Enabled = $tabs.SelectedIndex -gt 0
+        $nextButton.Enabled = $tabs.SelectedIndex -lt ($tabs.TabPages.Count - 1)
+    }
 }
 
 function Invoke-QTracXInstallation {
@@ -721,13 +845,17 @@ function Invoke-QTracXInstallation {
     $checkPlan.Enabled = $false
     $backButton.Enabled = $false
     $nextButton.Enabled = $false
-    $tabs.Enabled = $false
     try {
+        $installLog.Clear()
+        Set-QTracXProgress -Value 0 -Status "Starting QTracX installation."
+        Initialize-QTracXInstallerLog
         $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
         [void](Invoke-QTracXStage `
             -Name "Installing or verifying host prerequisites" `
             -FilePath $powershell `
-            -Arguments (Get-QTracXBootstrapArguments -Mode "Install" -HostOnly))
+            -Arguments (Get-QTracXBootstrapArguments -Mode "Install" -HostOnly) `
+            -StartPercent 0 -EndPercent 15 `
+            -StageNumber 1 -StageCount 6)
 
         Update-QTracXProcessPath
         $python = Get-QTracXPythonInvocation
@@ -744,7 +872,9 @@ function Invoke-QTracXInstallation {
         [void](Invoke-QTracXStage `
             -Name "Acquiring QTracX application source" `
             -FilePath $python.FilePath `
-            -Arguments $sourceArguments)
+            -Arguments $sourceArguments `
+            -StartPercent 15 -EndPercent 25 `
+            -StageNumber 2 -StageCount 6)
 
         # From this point forward, use the installer modules from the acquired
         # application source. The selected Git branch or ZIP is the source of
@@ -778,7 +908,9 @@ function Invoke-QTracXInstallation {
             -Name "Writing validated deployment configuration" `
             -FilePath $python.FilePath `
             -Arguments $configArguments `
-            -InputText $payloadJson)
+            -InputText $payloadJson `
+            -StartPercent 25 -EndPercent 32 `
+            -StageNumber 3 -StageCount 6)
 
         $applicationArguments = @(
             "-NoProfile",
@@ -794,7 +926,9 @@ function Invoke-QTracXInstallation {
         [void](Invoke-QTracXStage `
             -Name "Creating the application runtime and production build" `
             -FilePath $powershell `
-            -Arguments $applicationArguments)
+            -Arguments $applicationArguments `
+            -StartPercent 32 -EndPercent 72 `
+            -StageNumber 4 -StageCount 6)
 
         $environmentName = $(
             if ((Get-QTracXRuntimeName) -eq "gpu") { ".venv-gpu" }
@@ -812,7 +946,9 @@ function Invoke-QTracXInstallation {
                 $installedDatabase,
                 "--repo-root", $destination
             ) `
-            -InputText $payloadJson)
+            -InputText $payloadJson `
+            -StartPercent 72 -EndPercent 90 `
+            -StageNumber 5 -StageCount 6)
 
         $verifyArguments = @(
             "-NoProfile",
@@ -827,14 +963,26 @@ function Invoke-QTracXInstallation {
         [void](Invoke-QTracXStage `
             -Name "Verifying the completed QTracX installation" `
             -FilePath $powershell `
-            -Arguments $verifyArguments)
+            -Arguments $verifyArguments `
+            -StartPercent 90 -EndPercent 100 `
+            -StageNumber 6 -StageCount 6)
 
-        $progressLabel.Text = "Installation completed successfully."
+        Set-QTracXProgress `
+            -Value 100 `
+            -Status "Installation completed successfully."
         Add-QTracXLog "QTracX installation completed successfully."
+        $logMessage = $(
+            if ($script:InstallerLogPath) {
+                "`r`n`r`nInstaller log: $($script:InstallerLogPath)"
+            }
+            else {
+                ""
+            }
+        )
         [System.Windows.Forms.MessageBox]::Show(
             "QTracX was installed and verified successfully.`r`n`r`n" +
             "Windows service registration and automatic startup will be added " +
-            "in the next installer slice.",
+            "in the next installer slice." + $logMessage,
             "QTracX installation complete",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
@@ -844,9 +992,8 @@ function Invoke-QTracXInstallation {
         $script:Busy = $false
         $startInstall.Enabled = $true
         $checkPlan.Enabled = $true
-        $backButton.Enabled = $true
-        $nextButton.Enabled = $true
-        $tabs.Enabled = $true
+        $backButton.Enabled = $tabs.SelectedIndex -gt 0
+        $nextButton.Enabled = $tabs.SelectedIndex -lt ($tabs.TabPages.Count - 1)
     }
 }
 
@@ -890,6 +1037,13 @@ $databaseHost.Add_TextChanged({
     }
 })
 $deploymentMode.Add_SelectedIndexChanged({ Set-QTracXDeploymentState })
+$tabs.Add_Selecting({
+    param($Sender, $EventArguments)
+    if ($script:Busy -and
+        $EventArguments.TabPageIndex -ne $tabs.SelectedIndex) {
+        $EventArguments.Cancel = $true
+    }
+})
 $tabs.Add_SelectedIndexChanged({
     $script:CurrentPage = $tabs.SelectedIndex
     $backButton.Enabled = $tabs.SelectedIndex -gt 0 -and -not $script:Busy
@@ -910,6 +1064,18 @@ $nextButton.Add_Click({
 })
 $cancelButton.Add_Click({
     if (-not $script:Busy) { $form.Close() }
+})
+$form.Add_FormClosing({
+    param($Sender, $EventArguments)
+    if ($script:Busy) {
+        $EventArguments.Cancel = $true
+        [System.Windows.Forms.MessageBox]::Show(
+            "Wait for the current installer stage to finish before closing the wizard.",
+            "QTracX installation in progress",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    }
 })
 $checkPlan.Add_Click({
     try {
@@ -933,8 +1099,18 @@ $startInstall.Add_Click({
     catch {
         $progressLabel.Text = "Installation stopped."
         Add-QTracXLog $_.Exception.Message
+        $logMessage = $(
+            if ($script:InstallerLogPath) {
+                "`r`n`r`nInstaller log: $($script:InstallerLogPath)"
+            }
+            else {
+                ""
+            }
+        )
         [System.Windows.Forms.MessageBox]::Show(
-            $_.Exception.Message + "`r`n`r`nNo existing destination data was deleted.",
+            $_.Exception.Message +
+            "`r`n`r`nNo existing destination data was deleted." +
+            $logMessage,
             "QTracX installation stopped",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error

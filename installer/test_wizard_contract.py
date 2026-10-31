@@ -60,6 +60,25 @@ class WizardContractTests(unittest.TestCase):
         )
         self.assertLess(database_stage, verify_stage)
 
+    def test_installation_output_is_streamed_without_freezing_the_form(self) -> None:
+        self.assertIn("ReadLineAsync", self.script)
+        self.assertIn("-OnOutput", self.script)
+        self.assertIn("Application]::DoEvents()", self.script)
+        self.assertNotIn("ReadToEndAsync", self.script)
+
+    def test_installation_has_visible_overall_progress_and_a_persistent_log(self) -> None:
+        self.assertIn("System.Windows.Forms.ProgressBar", self.script)
+        self.assertIn("Stage $StageNumber of $StageCount", self.script)
+        self.assertIn("-StageNumber 6 -StageCount 6", self.script)
+        self.assertIn('"QTracX\\installer-logs"', self.script)
+        self.assertIn("Installer log:", self.script)
+
+    def test_wizard_cannot_close_or_reenter_during_a_running_stage(self) -> None:
+        self.assertIn("$form.Add_FormClosing", self.script)
+        self.assertIn("$tabs.Add_Selecting", self.script)
+        self.assertIn("$EventArguments.Cancel = $true", self.script)
+        self.assertIn("$script:Busy = $true", self.script)
+
     def test_acquired_source_drives_application_setup(self) -> None:
         self.assertIn(
             '$installedBootstrap = Join-Path $installedInstaller "bootstrap.ps1"',
