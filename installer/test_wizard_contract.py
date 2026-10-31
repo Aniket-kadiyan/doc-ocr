@@ -68,7 +68,11 @@ class WizardContractTests(unittest.TestCase):
 
     def test_installation_has_visible_overall_progress_and_a_persistent_log(self) -> None:
         self.assertIn("System.Windows.Forms.ProgressBar", self.script)
-        self.assertIn("Stage $StageNumber of $StageCount", self.script)
+        self.assertIn(
+            "Stage $StageNumber of ${StageCount}: $Name",
+            self.script,
+        )
+        self.assertNotIn("$StageCount:", self.script)
         self.assertIn("-StageNumber 6 -StageCount 6", self.script)
         self.assertIn('"QTracX\\installer-logs"', self.script)
         self.assertIn("Installer log:", self.script)

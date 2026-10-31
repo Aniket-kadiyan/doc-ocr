@@ -762,7 +762,7 @@ function Invoke-QTracXStage {
         [int]$StageNumber = 1,
         [int]$StageCount = 1
     )
-    $status = "Stage $StageNumber of $StageCount: $Name"
+    $status = "Stage $StageNumber of ${StageCount}: $Name"
     Set-QTracXProgress -Value $StartPercent -Status $status
     Add-QTracXLog $status
     $result = Invoke-QTracXProcess `
@@ -778,7 +778,7 @@ function Invoke-QTracXStage {
     }
     Set-QTracXProgress `
         -Value $EndPercent `
-        -Status "Completed stage $StageNumber of $StageCount: $Name"
+        -Status "Completed stage $StageNumber of ${StageCount}: $Name"
     return $result
 }
 
