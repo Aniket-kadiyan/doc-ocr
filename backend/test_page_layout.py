@@ -99,7 +99,9 @@ def test_section_crop_keeps_selected_table_and_drawing_pixels() -> None:
     assert section.getpixel((578 - origin[0], 120 - origin[1])) == (0, 0, 0)
     # Page (300, 300) is drawing ink outside the table and remains visible.
     assert section.getpixel((300 - origin[0], 300 - origin[1])) == (0, 0, 0)
-    assert layout.overlay(scope_kind="section")["table_masks"] == []
+    assert layout.overlay(scope_kind="section")["table_masks"] == [
+        mask.to_dict() for mask in layout.table_masks
+    ]
 
 
 def test_page_layout_cache_is_bounded_and_reuses_geometry() -> None:
