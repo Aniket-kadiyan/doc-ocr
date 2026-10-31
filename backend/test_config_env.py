@@ -26,6 +26,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIsNone(config.tls_cert_file)
         self.assertIsNone(config.tls_key_file)
         self.assertEqual(config.auth_session_hours, 8)
+        self.assertFalse(config.demo_lock_enabled)
+        self.assertIsNone(config.demo_start_at)
+        self.assertEqual(config.demo_duration_hours, 48)
         self.assertEqual(config.run_report_keep, 300)
         self.assertEqual(
             config.public_summary()["cors_policy"], "allow_all_origins"
@@ -47,6 +50,9 @@ class RuntimeConfigTests(unittest.TestCase):
             "QTRACX_LOG_BACKUP_COUNT": "20",
             "QTRACX_RUN_REPORT_KEEP": "450",
             "AUTH_SESSION_HOURS": "12",
+            "QTRACX_DEMO_LOCK_ENABLED": "true",
+            "QTRACX_DEMO_START_AT": "2026-11-01T10:00:00",
+            "QTRACX_DEMO_DURATION_HOURS": "0.25",
         }
         with patch.dict(os.environ, values, clear=True):
             config = load_runtime_config()
@@ -67,6 +73,12 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.log_level, "WARNING")
         self.assertEqual(config.run_report_keep, 450)
         self.assertEqual(config.auth_session_hours, 12)
+        self.assertTrue(config.demo_lock_enabled)
+        self.assertEqual(config.demo_duration_hours, 0.25)
+        self.assertEqual(
+            config.demo_start_at.isoformat(timespec="seconds"),
+            "2026-11-01T10:00:00+05:30",
+        )
         self.assertTrue(config.https_enabled)
         self.assertTrue(
             str(config.tls_cert_file).endswith("certificates/qtracx.crt")
@@ -88,6 +100,27 @@ class RuntimeConfigTests(unittest.TestCase):
                 load_runtime_config()
         with patch.dict(os.environ, {"AUTH_SESSION_HOURS": "0"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_LOCK_ENABLED": "true"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "START_AT"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_DURATION_HOURS": "zero"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "positive number"):
+                load_runtime_config()
+        with patch.dict(
+            os.environ,
+            {"QTRACX_DEMO_START_AT": "tomorrow morning"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "ISO date/time"):
                 load_runtime_config()
         with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "0"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
