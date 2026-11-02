@@ -13,6 +13,7 @@ from auth_repository import (
     DuplicateUserError,
     LastAdministratorError,
     UserNotFoundError,
+    list_permission_catalog,
     list_users,
     set_user_access_by_id,
     set_user_password_by_id,
@@ -49,6 +50,8 @@ class AuthenticatedUserResponse(BaseModel):
     display_name: str
     is_active: bool
     roles: list[str]
+    permissions: list[str] = Field(default_factory=list)
+    permission_overrides: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -56,6 +59,13 @@ class AuthenticatedUserResponse(BaseModel):
 class LoginResponse(BaseModel):
     user: AuthenticatedUserResponse
     expires_at: datetime
+
+
+class PermissionResponse(BaseModel):
+    name: str
+    category: str
+    description: str
+    role_controlled: bool
 
 
 class UserProfileUpdateRequest(BaseModel):
@@ -235,6 +245,24 @@ def admin_list_users(request: Request, response: Response) -> list[Authenticated
         ) from error
     response.headers["Cache-Control"] = "no-store"
     return [AuthenticatedUserResponse(**record.as_public_dict()) for record in records]
+
+
+@router.get(
+    "/admin/permissions",
+    response_model=list[PermissionResponse],
+    dependencies=[Depends(require_administrator)],
+)
+def admin_list_permissions(request: Request, response: Response) -> list[PermissionResponse]:
+    manager = _database_manager(request)
+    try:
+        with manager.session() as session:
+            records = list_permission_catalog(session)
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503, detail="Authentication service unavailable"
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return [PermissionResponse(**record.as_public_dict()) for record in records]
 
 
 @router.patch(

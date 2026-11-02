@@ -1,31 +1,36 @@
-QTraX user-management overlay v2
-Base: origin/deployment-readiness at 539a945
+QTraX granular permissions — G1 authorization foundation
+Base: origin/granular-permissions at 85b3a10
 
-This is a cumulative overlay. It includes the original user-management page
-plus role and access management. Apply it directly over the working v1 files;
-do not revert v1 first.
-
-WHAT THIS ADDS
-- Separate browser UI at /user-management.
-- Administrator-only API for listing and changing existing users.
-- Existing-user edits: username, display name, and password reset.
-- Enable or disable an account's application access.
-- Grant or revoke the Administrator role.
-- Effective-permission summary in the management UI.
-- Last-active-administrator protection and session revocation.
-- No account-creation HTTP endpoint or UI control.
-- CLI commands and a focused guide in docs/USER_MANAGEMENT.md.
+SCOPE
+- Permission catalogue and role-default mappings.
+- Per-user allow/deny override storage and resolver.
+- Effective permissions in login, /auth/me and admin user responses.
+- Administrator-readable permission catalogue endpoint.
+- Migration 0003_granular_permissions.
+- Existing users retain all current non-admin functionality.
+- No OCR/checksheet route is denied by granular permissions in G1.
 
 APPLY
-1. Extract this ZIP into the repository root.
-2. Allow matching files to be overwritten.
-3. No database migration is required.
+1. Confirm you are on the granular-permissions branch at 85b3a10 or a direct
+   descendant.
+2. Extract this ZIP into the repository root and overwrite matching files.
+3. Install no new libraries; this uses the existing SQLAlchemy/Alembic stack.
 
-TEST FROM THE REPOSITORY ROOT (POWERSHELL)
+DATABASE UPGRADE (REQUIRED)
+From the backend folder, while the backend is stopped:
+
+  .\.venv-gpu\Scripts\python.exe manage_auth.py db upgrade
+  .\.venv-gpu\Scripts\python.exe manage_auth.py db check
+
+Use .venv instead of .venv-gpu for a CPU-only environment. db check must show
+status ok before the backend is started. The migration supports PostgreSQL,
+MSSQL and the SQLite test environment.
+
+TEST FROM THE REPOSITORY ROOT
 Push-Location backend
 .\.venv-gpu\Scripts\python.exe -m pytest -q `
-  test_auth_security.py test_auth_repository.py test_auth_service.py `
-  test_auth_routes.py test_manage_auth.py test_auth_schema.py
+  test_auth_schema.py test_auth_repository.py test_auth_service.py `
+  test_auth_routes.py test_manage_auth.py test_config_env.py test_demo_lock.py
 Pop-Location
 
 npm run lint
@@ -33,22 +38,16 @@ npm run typecheck
 npm run test:frontend
 npm run build
 
-Replace .venv-gpu with .venv on a CPU-only development environment.
+SMOKE CHECK
+1. Start the backend and sign in as an existing normal user.
+2. GET /auth/me must include permissions and permission_overrides.
+3. Existing drawing, export and checksheet workflows must still work normally.
+4. Sign in as an administrator and verify /user-management still loads.
 
-RUN
-Restart the QTraX backend and frontend, then open:
-  http://localhost:3002/user-management
-
-For a LAN deployment, replace localhost and 3002 with the deployed server
-address and UI port. Sign in with an account that has the admin role.
-
-CURRENT PERMISSION MODEL
-- Standard user: required base role for normal QTraX workflows.
-- Administrator: access to existing-user management.
-- Active status: controls whether the account can sign in.
-
-Granular per-module permissions are not part of the current database or route
-authorization model and are not simulated by this UI.
+EXPECTED CURRENT BEHAVIOUR
+G1 stores and resolves permissions but does not enforce them on application
+routes yet. Enforcement is G2, permission editing in the management UI is G3,
+and frontend workflow guards are G4.
 
 SUGGESTED COMMIT MESSAGE
-feat(auth): manage user roles and access from admin console
+feat(auth): add granular permission foundation and migration

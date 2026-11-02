@@ -64,6 +64,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    permission_overrides: Mapped[list["UserPermissionOverride"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -88,6 +93,11 @@ class Role(Base):
         back_populates="roles",
         lazy="selectin",
     )
+    permissions: Mapped[list["Permission"]] = relationship(
+        secondary="qtracx_role_permissions",
+        back_populates="roles",
+        lazy="selectin",
+    )
 
     __table_args__ = (UniqueConstraint("name", name="uq_qtracx_roles_name"),)
 
@@ -108,6 +118,75 @@ class UserRole(Base):
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
+
+
+class Permission(Base):
+    __tablename__ = "qtracx_permissions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+    roles: Mapped[list[Role]] = relationship(
+        secondary="qtracx_role_permissions",
+        back_populates="permissions",
+        lazy="selectin",
+    )
+    user_overrides: Mapped[list["UserPermissionOverride"]] = relationship(
+        back_populates="permission",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_qtracx_permissions_name"),
+    )
+
+
+class RolePermission(Base):
+    __tablename__ = "qtracx_role_permissions"
+
+    role_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("qtracx_roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    permission_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("qtracx_permissions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class UserPermissionOverride(Base):
+    __tablename__ = "qtracx_user_permission_overrides"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("qtracx_users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    permission_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("qtracx_permissions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    is_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    user: Mapped[User] = relationship(back_populates="permission_overrides")
+    permission: Mapped[Permission] = relationship(back_populates="user_overrides")
 
 
 class AuthSession(Base):

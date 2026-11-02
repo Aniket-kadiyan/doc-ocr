@@ -72,6 +72,11 @@ The second migration also adds `failed_login_count`, `locked_until`, and
 account for 15 minutes. Login failures always return the same message, whether
 the username is absent, inactive, locked, or has a wrong password.
 
+The third migration adds the granular authorization catalogue, role defaults,
+and per-user permission overrides. See `docs/GRANULAR_PERMISSIONS.md` for the
+permission names and staged enforcement plan. Existing users retain every
+non-administrative permission after the upgrade.
+
 ## Configure browser sessions
 
 The default is suitable for the normal HTTP deployment:

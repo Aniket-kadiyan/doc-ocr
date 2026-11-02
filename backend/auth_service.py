@@ -12,7 +12,13 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from auth_models import AuthSession, User, utc_now
+from auth_models import (
+    AuthSession,
+    Role,
+    User,
+    UserPermissionOverride,
+    utc_now,
+)
 from auth_repository import UserRecord, user_record
 from auth_security import (
     AuthenticationInputError,
@@ -92,7 +98,12 @@ def create_login_session(
 
     user = session.scalar(
         select(User)
-        .options(selectinload(User.roles))
+        .options(
+            selectinload(User.roles).selectinload(Role.permissions),
+            selectinload(User.permission_overrides).selectinload(
+                UserPermissionOverride.permission
+            ),
+        )
         .where(User.normalized_username == normalized_username)
         .with_for_update()
     )
@@ -161,7 +172,14 @@ def get_authenticated_session(
     token_hash = _hash_token(session_token)
     stored = session.scalar(
         select(AuthSession)
-        .options(selectinload(AuthSession.user).selectinload(User.roles))
+        .options(
+            selectinload(AuthSession.user)
+            .selectinload(User.roles)
+            .selectinload(Role.permissions),
+            selectinload(AuthSession.user)
+            .selectinload(User.permission_overrides)
+            .selectinload(UserPermissionOverride.permission),
+        )
         .where(AuthSession.token_hash == token_hash)
     )
     if (

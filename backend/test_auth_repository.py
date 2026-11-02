@@ -10,6 +10,7 @@ from auth_models import AuthSession, Base, User, utc_now
 from auth_repository import (
     DuplicateUserError,
     LastAdministratorError,
+    RoleControlledPermissionError,
     create_user,
     get_user,
     list_users,
@@ -18,6 +19,7 @@ from auth_repository import (
     set_user_active,
     set_user_password,
     set_user_password_by_id,
+    set_user_permission_overrides,
     update_user_profile,
 )
 from auth_security import verify_password
@@ -53,6 +55,9 @@ class AuthenticationRepositoryTests(unittest.TestCase):
             self.assertEqual({role.name for role in user.roles}, {"admin", "user"})
             self.assertTrue(verify_password("admin secure password 2026", user.password_hash))
             self.assertNotEqual(user.password_hash, "admin secure password 2026")
+            record = list_users(session)[0]
+            self.assertIn("drawing.use", record.permissions)
+            self.assertIn("users.manage", record.permissions)
 
     def test_duplicate_username_is_case_insensitive(self) -> None:
         self._create_admin("Quality.Admin")
@@ -253,6 +258,40 @@ class AuthenticationRepositoryTests(unittest.TestCase):
                     user_id=administrator_id,
                     active=False,
                     administrator=True,
+                )
+
+    def test_user_permission_overrides_allow_deny_and_restore_role_default(self) -> None:
+        user_id = self._create_admin("permission.admin")
+        with self.database.session() as session:
+            updated = set_user_permission_overrides(
+                session,
+                user_id=user_id,
+                overrides={"drawing.export": False},
+            )
+            self.assertNotIn("drawing.export", updated.permissions)
+            self.assertEqual(
+                updated.permission_overrides,
+                {"drawing.export": False},
+            )
+            self.assertIn("users.manage", updated.permissions)
+
+        with self.database.session() as session:
+            restored = set_user_permission_overrides(
+                session,
+                user_id=user_id,
+                overrides={"drawing.export": None},
+            )
+            self.assertIn("drawing.export", restored.permissions)
+            self.assertEqual(restored.permission_overrides, {})
+
+    def test_role_controlled_permission_cannot_be_overridden(self) -> None:
+        user_id = self._create_admin("role.admin")
+        with self.database.session() as session:
+            with self.assertRaises(RoleControlledPermissionError):
+                set_user_permission_overrides(
+                    session,
+                    user_id=user_id,
+                    overrides={"users.manage": False},
                 )
 
     def test_users_are_listed_without_password_data(self) -> None:

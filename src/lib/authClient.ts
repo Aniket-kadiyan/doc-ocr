@@ -7,6 +7,8 @@ export interface AuthenticatedUser {
   display_name: string;
   is_active: boolean;
   roles: string[];
+  permissions: string[];
+  permission_overrides: Record<string, boolean>;
   created_at: string;
   updated_at: string;
 }

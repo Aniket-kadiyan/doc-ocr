@@ -74,6 +74,9 @@ class AuthenticationRouteTests(unittest.TestCase):
         current = self.client.get("/auth/me")
         self.assertEqual(current.status_code, 200)
         self.assertEqual(current.json()["roles"], ["user"])
+        self.assertIn("drawing.use", current.json()["permissions"])
+        self.assertNotIn("users.manage", current.json()["permissions"])
+        self.assertEqual(current.json()["permission_overrides"], {})
 
         rejected = self.client.post("/auth/logout")
         self.assertEqual(rejected.status_code, 403)
@@ -157,6 +160,13 @@ class AuthenticationRouteTests(unittest.TestCase):
             [entry["username"] for entry in listed.json()],
             ["operator.one", "quality.admin"],
         )
+        permissions = self.client.get("/auth/admin/permissions")
+        self.assertEqual(permissions.status_code, 200)
+        self.assertEqual(len(permissions.json()), 7)
+        user_management = next(
+            item for item in permissions.json() if item["name"] == "users.manage"
+        )
+        self.assertTrue(user_management["role_controlled"])
         operator = next(
             entry for entry in listed.json() if entry["username"] == "operator.one"
         )

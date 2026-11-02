@@ -48,6 +48,9 @@ _REQUIRED_TABLES = {
     "qtracx_roles",
     "qtracx_user_roles",
     "qtracx_auth_sessions",
+    "qtracx_permissions",
+    "qtracx_role_permissions",
+    "qtracx_user_permission_overrides",
 }
 
 
