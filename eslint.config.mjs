@@ -13,6 +13,8 @@ const eslintConfig = [
   {
     ignores: [
       ".next/**",
+      // Python virtual environments ship third-party JavaScript (matplotlib).
+      "**/.venv/**",
       "coverage/**",
       "next-env.d.ts",
       "node_modules/**",

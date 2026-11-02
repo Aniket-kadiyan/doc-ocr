@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "D/WRo5D5XcM=",
+  "success": true,
+  "projectFilePath": "/Users/chitrajain/Desktop/doc-ocr-box/Aniket/doc-ocr/tools/dwg2dxf/Dwg2Dxf.csproj",
+  "expectedPackageFiles": [
+    "/Users/chitrajain/.nuget/packages/acadsharp/3.8.0/acadsharp.3.8.0.nupkg.sha512",
+    "/Users/chitrajain/.nuget/packages/microsoft.net.illink.tasks/10.0.13/microsoft.net.illink.tasks.10.0.13.nupkg.sha512",
+    "/Users/chitrajain/.nuget/packages/microsoft.netcore.app.runtime.win-x64/10.0.13/microsoft.netcore.app.runtime.win-x64.10.0.13.nupkg.sha512",
+    "/Users/chitrajain/.nuget/packages/microsoft.aspnetcore.app.runtime.win-x64/10.0.13/microsoft.aspnetcore.app.runtime.win-x64.10.0.13.nupkg.sha512",
+    "/Users/chitrajain/.nuget/packages/microsoft.netcore.app.host.win-x64/10.0.13/microsoft.netcore.app.host.win-x64.10.0.13.nupkg.sha512"
+  ],
+  "logs": []
+}

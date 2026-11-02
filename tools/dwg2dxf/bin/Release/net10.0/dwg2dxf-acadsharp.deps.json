@@ -1,0 +1,41 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "dwg2dxf-acadsharp/1.0.0": {
+        "dependencies": {
+          "ACadSharp": "3.8.0"
+        },
+        "runtime": {
+          "dwg2dxf-acadsharp.dll": {}
+        }
+      },
+      "ACadSharp/3.8.0": {
+        "runtime": {
+          "lib/net10.0/ACadSharp.dll": {
+            "assemblyVersion": "3.8.0.0",
+            "fileVersion": "3.8.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "dwg2dxf-acadsharp/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "ACadSharp/3.8.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-XXyrcCaLvWZbswq8Y5lOobtDPgL1SugD17SzpYqEgwSaePo3yTgovFYkEgz7+cX8LWFqcGfCKpUQL+3n8WPdQA==",
+      "path": "acadsharp/3.8.0",
+      "hashPath": "acadsharp.3.8.0.nupkg.sha512"
+    }
+  }
+}

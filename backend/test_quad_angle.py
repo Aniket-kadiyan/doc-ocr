@@ -67,48 +67,16 @@ def test_real_detector_quad_angle():
     assert OcrPipeline._quad_angle(quad) == pytest.approx(-36.6, abs=0.3)
 
 
-def test_slant_groups_ignore_upright_and_vertical_text():
+def test_neighbourhoods_ignore_upright_and_vertical_text():
     """Only diagonal text votes: the other two are read by their own passes."""
+    image = Image.new("RGB", (1000, 1000), "white")
     boxes = [
         _box(100, 100, 200, 40, 0.0),      # horizontal
         _box(300, 300, 200, 40, 90.0),     # vertical
         _box(500, 500, 200, 40, 2.0),      # near-horizontal
         _box(700, 700, 200, 40, 88.0),     # near-vertical
     ]
-    assert OcrPipeline._slant_angle_groups(boxes) == []
-
-
-def test_slant_groups_merge_within_tolerance():
-    boxes = [
-        _box(100, 100, 200, 40, -36.0),
-        _box(300, 300, 190, 40, -40.0),
-        _box(500, 500, 195, 40, -38.0),
-    ]
-    groups = OcrPipeline._slant_angle_groups(boxes)
-    assert len(groups) == 1
-    assert groups[0] == pytest.approx(-38.0, abs=2.0)
-
-
-def test_slant_groups_separate_opposite_diagonals():
-    """A chamfer on one diagonal and a fit callout on the other are two families."""
-    boxes = [
-        _box(100, 100, 300, 40, 45.0),
-        _box(600, 100, 300, 40, 44.0),
-        _box(100, 600, 200, 40, -38.0),
-    ]
-    groups = OcrPipeline._slant_angle_groups(boxes)
-    assert len(groups) == 2
-    assert groups[0] == pytest.approx(44.5, abs=1.5)   # heaviest family first
-    assert groups[1] == pytest.approx(-38.0, abs=1.0)
-
-
-def test_slant_groups_respect_max_groups():
-    boxes = [
-        _box(100, 100, 300, 40, 45.0),
-        _box(600, 100, 200, 40, -38.0),
-        _box(100, 600, 100, 40, 20.0),
-    ]
-    assert len(OcrPipeline._slant_angle_groups(boxes, max_groups=2)) == 2
+    assert OcrPipeline()._slant_neighbourhoods(image, boxes) == []
 
 
 def test_neighbourhood_covers_diagonal_text_only():
@@ -153,7 +121,8 @@ def test_neighbourhood_sign():
     assert pipeline._neighbourhood_sign(boxes, (0, 0, 100, 100)) is None
 
 
-def test_no_quads_means_no_groups():
+def test_no_quads_means_no_neighbourhoods():
     """Boxes from the morphology proposer carry no corners, so they cannot vote."""
+    image = Image.new("RGB", (200, 200), "white")
     plain = [{"x": 0, "y": 0, "w": 100, "h": 20, "text": "12.5", "conf": 0.9}]
-    assert OcrPipeline._slant_angle_groups(plain) == []
+    assert OcrPipeline()._slant_neighbourhoods(image, plain) == []

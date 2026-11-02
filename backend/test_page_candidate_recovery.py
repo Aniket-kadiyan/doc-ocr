@@ -299,6 +299,16 @@ def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> N
             }
         ],
     )
+    doubtful = resolve_authoritative_hypotheses(
+        _result("96.4°±0.5°"),
+        [
+            {
+                **_result("10 5"),
+                "authoritative_valid": True,
+                "authoritative_target_owned": True,
+            }
+        ],
+    )
     untargeted = resolve_authoritative_hypotheses(
         _result("96.4°±0.5°"),
         [
@@ -312,9 +322,18 @@ def test_authoritative_resolution_preserves_symbols_and_reviews_conflicts() -> N
 
     assert equivalent["text"] == "30°±3°"
     assert not equivalent["needs_review"]
+    # The preliminary pass is only a cost gate: a complete authoritative read
+    # stands on its own, and disagreeing with the fast read is not a reason
+    # to stop the inspector ("R1.4" read preliminarily as "518").
     assert conflict["text"] == "105"
     assert conflict["numeric_conflict"]
-    assert conflict["authoritative_review_required"]
+    assert not conflict["authoritative_review_required"]
+    assert not conflict["needs_review"]
+    # When the authoritative read is not a complete value itself, the
+    # disagreement does need a human.
+    assert doubtful["numeric_conflict"]
+    assert doubtful["authoritative_review_required"]
+    assert doubtful["needs_review"]
     assert untargeted["text"] == ""
     assert untargeted["needs_review"]
 

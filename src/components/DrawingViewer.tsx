@@ -222,6 +222,8 @@ export function DrawingViewer() {
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   /** Original drawing bytes, kept so a saved project can embed them. */
   const sourceFileRef = useRef<ProjectSource | null>(null);
+  // The ref feeds scans; this copy is what the toolbar shows.
+  const [openFileName, setOpenFileName] = useState<string | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const projectIdRef = useRef("");
 
@@ -618,6 +620,7 @@ export function DrawingViewer() {
     setProjectId(recent.id);
     setProjectName(recent.name.replace(/\.[^.]+$/, ""));
     setDocumentMetadata(recent.metadata);
+    setOpenFileName(recent.name);
     sourceFileRef.current = {
       fileName: recent.fileName,
       mimeType: file.type,
@@ -676,6 +679,7 @@ export function DrawingViewer() {
     setScanScope(null);
     setScanSummary(null);
     setProjectName(file.name.replace(/\.[^.]+$/, ""));
+    setOpenFileName(selected.name);
     const fileType = isPdfKind(sourceKind) ? "pdf" : "image";
     sourceFileRef.current = {
       fileName: file.name,
@@ -685,7 +689,7 @@ export function DrawingViewer() {
     };
     await saveProject({
       id,
-      name: file.name,
+      name: selected.name,
       fileName: file.name,
       fileType,
       mimeType: file.type,
@@ -732,6 +736,7 @@ export function DrawingViewer() {
     renderedRasterPageRef.current = null;
     sourceCanvasRef.current = null;
     sourceFileRef.current = null;
+    setOpenFileName(null);
     setAnnotations([]);
     setSelectedId(null);
     replaceScanCandidates([]);
@@ -774,6 +779,7 @@ export function DrawingViewer() {
       setBalloonStyleSelection(bundle.balloonStyle);
       setProjectId(id);
       sourceFileRef.current = bundle.source;
+      setOpenFileName(bundle.source.fileName);
       setProjectName(bundle.projectName);
       setDocumentMetadata(bundle.metadata);
       replaceReferenceTables(bundle.referenceTables);
@@ -1183,6 +1189,22 @@ export function DrawingViewer() {
           scanPage,
           now
         );
+        // A frame that takes over the balloon of its own tolerance keeps that
+        // balloon's id, number, method and tool; only the read changes.
+        for (const { annotationId, region } of filtered.upgrades) {
+          const [read] = annotationsFromRegions([region], scanPage, now);
+          updateAnnotation(annotationId, {
+            value: read.value,
+            label: read.label,
+            type: read.type,
+            confidence: read.confidence,
+            bbox: read.bbox,
+            rotation: read.rotation,
+            orientedBox: undefined,
+            needsReview: read.needsReview,
+            range: read.range,
+          });
+        }
 
         // Keep every unaccepted detector outcome outside the annotation store.
         // Review and filtered "Other" objects share one durable lifecycle;
@@ -1267,7 +1289,7 @@ export function DrawingViewer() {
           );
         }
 
-        if (newAnnotations.length > 0) {
+        if (newAnnotations.length > 0 || filtered.upgrades.length > 0) {
           // Atomic per-section commit: save these balloons before the queue is
           // allowed to start its next section.
           addAnnotations(newAnnotations);
@@ -1333,6 +1355,7 @@ export function DrawingViewer() {
     },
     [
       addAnnotations,
+      updateAnnotation,
       replaceScanCandidates,
       setIsProcessing,
       setIsSegmenting,
@@ -2113,6 +2136,7 @@ export function DrawingViewer() {
         canSaveProject={konvaImage !== null}
         referenceTables={referenceTables}
         scanCandidates={scanCandidates}
+        fileName={openFileName}
       />
 
       <div className="flex min-h-0 flex-1">
