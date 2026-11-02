@@ -29,6 +29,7 @@ The wizard collects:
 - CPU mode, or GPU mode when `nvidia-smi` detects an NVIDIA GPU;
 - model-instance and scan-worker counts;
 - normal HTTP or optional HTTPS certificate/key paths;
+- production or time-limited demo installation;
 - MSSQL or PostgreSQL and installer-managed or preconfigured provisioning;
 - an MSSQL hostname/fixed TCP port or `server\instance` named instance;
 - the dedicated QTracX database account; and
@@ -40,6 +41,13 @@ standard input. They are not included in process arguments or the installer
 log. The dedicated application database password is necessarily persisted in
 the generated `.env.local` connection string so the backend can connect after
 restart.
+
+For a time-limited demo, the wizard collects an explicit start date/time in
+India Standard Time and a positive whole or decimal duration in hours. It
+shows the calculated expiry before installation and writes the existing
+`QTRACX_DEMO_LOCK_ENABLED`, `QTRACX_DEMO_START_AT` and
+`QTRACX_DEMO_DURATION_HOURS` settings. Production is the default and leaves
+the demo lock disabled.
 
 For a named MSSQL instance, enter a value such as `jains\SQLEXPRESS` in
 **Database server / instance** and clear **Use explicit TCP port**. This uses

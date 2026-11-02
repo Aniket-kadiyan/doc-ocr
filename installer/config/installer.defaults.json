@@ -62,6 +62,11 @@
     "certificateFile": "",
     "privateKeyFile": ""
   },
+  "demo": {
+    "enabled": false,
+    "timezone": "Asia/Kolkata",
+    "durationHours": 48
+  },
   "storage": {
     "checksheetDataDirectory": "backend/data/checksheets",
     "logDirectory": "backend/logs"

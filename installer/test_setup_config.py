@@ -23,6 +23,9 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertEqual(defaults["database"]["name"], "QTracX")
         self.assertEqual(defaults["ocr"]["modelInstances"], 1)
         self.assertEqual(defaults["ocr"]["scanWorkers"], 2)
+        self.assertFalse(defaults["demo"]["enabled"])
+        self.assertEqual(defaults["demo"]["timezone"], "Asia/Kolkata")
+        self.assertEqual(defaults["demo"]["durationHours"], 48)
         self.assertEqual(
             defaults["prerequisites"]["python"]["wingetId"],
             "Python.Python.3.13",
@@ -42,6 +45,55 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertIn("NEXT_PUBLIC_OCR_API_URL=http://localhost:8000", text)
         self.assertIn("OCR_MODEL_INSTANCES=1", text)
         self.assertIn("OCR_SCAN_WORKERS=2", text)
+        self.assertIn("QTRACX_DEMO_LOCK_ENABLED=false", text)
+        self.assertIn("QTRACX_DEMO_DURATION_HOURS=48", text)
+        self.assertNotIn("QTRACX_DEMO_START_AT=", text)
+
+    def test_demo_selection_writes_ist_start_and_decimal_duration(self) -> None:
+        setup = InstallerSetup.from_mapping({
+            "database": {"applicationPassword": "safe password"},
+            "demo": {
+                "enabled": True,
+                "startAt": "2026-11-01T10:00:00+05:30",
+                "durationHours": "0.25",
+            },
+        })
+
+        text = setup.environment_text()
+
+        self.assertIn("QTRACX_DEMO_LOCK_ENABLED=true", text)
+        self.assertIn(
+            "QTRACX_DEMO_START_AT=2026-11-01T10:00:00+05:30",
+            text,
+        )
+        self.assertIn("QTRACX_DEMO_DURATION_HOURS=0.25", text)
+        self.assertTrue(setup.safe_summary()["demo_enabled"])
+
+    def test_demo_requires_a_valid_start_time(self) -> None:
+        setup = InstallerSetup(
+            demo_enabled=True,
+            demo_start_at="not-a-date",
+            database=DatabaseSetup(application_password="safe password"),
+        )
+
+        with self.assertRaisesRegex(SetupConfigurationError, "ISO date/time"):
+            setup.validate()
+
+    def test_demo_duration_accepts_decimal_but_rejects_nonpositive_values(self) -> None:
+        valid = InstallerSetup(
+            demo_enabled=True,
+            demo_start_at="2026-11-01T10:00:00+05:30",
+            demo_duration_hours=1.5,
+            database=DatabaseSetup(application_password="safe password"),
+        )
+        valid.validate()
+
+        invalid = InstallerSetup(
+            demo_duration_hours=0,
+            database=DatabaseSetup(application_password="safe password"),
+        )
+        with self.assertRaisesRegex(SetupConfigurationError, "greater than 0"):
+            invalid.validate()
 
     def test_lan_mode_binds_all_interfaces_but_advertises_server(self) -> None:
         setup = InstallerSetup(

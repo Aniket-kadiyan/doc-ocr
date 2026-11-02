@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -76,6 +78,39 @@ def _boolean(payload: Mapping[str, Any], key: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise SetupConfigurationError(f"{key} must be true or false")
     return value
+
+
+def _number(payload: Mapping[str, Any], key: str, default: float) -> float:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        raise SetupConfigurationError(f"{key} must be a number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as error:
+        raise SetupConfigurationError(f"{key} must be a number") from error
+    if not math.isfinite(result):
+        raise SetupConfigurationError(f"{key} must be a finite number")
+    return result
+
+
+def _validate_demo_start(value: str) -> None:
+    candidate = value.strip()
+    if not candidate:
+        raise SetupConfigurationError(
+            "demo start date and time are required for a demo installation"
+        )
+    if candidate.endswith(("Z", "z")):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError as error:
+        raise SetupConfigurationError(
+            "demo start must be an ISO date/time"
+        ) from error
+
+
+def _format_number(value: float) -> str:
+    return format(value, ".15g")
 
 
 def _mapping(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
@@ -169,6 +204,9 @@ class InstallerSetup:
     https_enabled: bool = False
     certificate_file: str = ""
     private_key_file: str = ""
+    demo_enabled: bool = False
+    demo_start_at: str = ""
+    demo_duration_hours: float = 48.0
     checksheet_data_directory: str = "backend/data/checksheets"
     log_directory: str = "backend/logs"
     database: DatabaseSetup = field(default_factory=DatabaseSetup)
@@ -192,6 +230,12 @@ class InstallerSetup:
                 raise SetupConfigurationError(
                     "HTTPS requires both certificate and private-key files"
                 )
+        if not 0 < self.demo_duration_hours <= 8760:
+            raise SetupConfigurationError(
+                "demo duration hours must be greater than 0 and at most 8760"
+            )
+        if self.demo_enabled:
+            _validate_demo_start(self.demo_start_at)
         if not self.checksheet_data_directory.strip():
             raise SetupConfigurationError("checksheet data directory is required")
         if not self.log_directory.strip():
@@ -247,6 +291,20 @@ class InstallerSetup:
             f"DATABASE_URL={self.database.url()}",
             "AUTH_SESSION_HOURS=8",
             "",
+            "# Temporary customer demo window",
+            (
+                "QTRACX_DEMO_LOCK_ENABLED="
+                f"{'true' if self.demo_enabled else 'false'}"
+            ),
+        ])
+        if self.demo_enabled:
+            rows.append(f"QTRACX_DEMO_START_AT={self.demo_start_at}")
+        rows.extend([
+            (
+                "QTRACX_DEMO_DURATION_HOURS="
+                f"{_format_number(self.demo_duration_hours)}"
+            ),
+            "",
             "# Storage",
             f"CHECKSHEET_DATA_DIR={self.checksheet_data_directory}",
             "CHECKSHEET_MAX_DOCUMENT_MB=200",
@@ -272,6 +330,9 @@ class InstallerSetup:
             "ocr_device": self.ocr_device,
             "model_instances": self.model_instances,
             "scan_workers": self.scan_workers,
+            "demo_enabled": self.demo_enabled,
+            "demo_start_at": self.demo_start_at if self.demo_enabled else None,
+            "demo_duration_hours": self.demo_duration_hours,
             "database_engine": self.database.engine,
             "database_host": self.database.host,
             "database_port": self.database.port,
@@ -283,6 +344,7 @@ class InstallerSetup:
     def from_mapping(cls, payload: Mapping[str, Any]) -> "InstallerSetup":
         database_payload = _mapping(payload, "database")
         https_payload = _mapping(payload, "https")
+        demo_payload = _mapping(payload, "demo")
         storage_payload = _mapping(payload, "storage")
         engine = str(database_payload.get("engine", "mssql")).strip().lower()
         runtime = str(payload.get("runtime", "cpu")).strip().lower()
@@ -339,6 +401,13 @@ class InstallerSetup:
             private_key_file=str(
                 https_payload.get("privateKeyFile", "")
             ).strip(),
+            demo_enabled=_boolean(demo_payload, "enabled", False),
+            demo_start_at=str(demo_payload.get("startAt", "")).strip(),
+            demo_duration_hours=_number(
+                demo_payload,
+                "durationHours",
+                48.0,
+            ),
             checksheet_data_directory=str(
                 storage_payload.get(
                     "checksheetDataDirectory",

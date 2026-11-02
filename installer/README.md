@@ -176,10 +176,16 @@ Run the Windows Forms wizard from an elevated PowerShell session:
 ```
 
 It collects source, server, runtime, database, HTTPS and initial-administrator
-settings, provides a read-only host plan, and can execute the complete source,
+settings, asks whether the installation is production or a time-limited demo,
+provides a read-only host plan, and can execute the complete source,
 configuration, runtime, frontend-build, database-migration and final-verification
 sequence. Passwords are passed to Python through standard input and are not
 placed in command arguments or installer logs.
+
+Demo installations collect an IST start date/time and a whole or decimal
+duration in hours, display the calculated expiry in the review, and generate
+the backend's existing `QTRACX_DEMO_*` configuration. Production remains the
+default.
 
 The review page includes determinate overall stage progress and streams child
 process output live instead of displaying it only after completion. A matching

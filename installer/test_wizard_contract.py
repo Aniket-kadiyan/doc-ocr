@@ -24,8 +24,18 @@ class WizardContractTests(unittest.TestCase):
             "PostgreSQL",
             "CPU",
             "GPU 0",
+            "Production installation",
+            "Time-limited demo",
         ):
             self.assertIn(expected, self.script)
+
+    def test_demo_selection_collects_ist_start_duration_and_expiry(self) -> None:
+        self.assertIn("Demo starts (IST)", self.script)
+        self.assertIn("Demo duration (hours)", self.script)
+        self.assertIn("India Standard Time", self.script)
+        self.assertIn('"+05:30"', self.script)
+        self.assertIn("durationHours = [decimal]$demoDuration.Value", self.script)
+        self.assertIn("Demo expires", self.script)
 
     def test_host_prerequisites_run_before_source_acquisition(self) -> None:
         host_stage = self.script.index(

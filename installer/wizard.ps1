@@ -45,6 +45,7 @@ $script:DatabaseScript = Join-Path $PSScriptRoot "database_bootstrap.py"
 $script:CurrentPage = 0
 $script:Busy = $false
 $script:InstallerLogPath = $null
+$script:DemoStartInitialized = $false
 
 function ConvertTo-ProcessArguments {
     param([string[]]$Values)
@@ -377,6 +378,41 @@ $browseCertificate = Add-QTracXButton $serverTab "Browse..." 742 346 90
 Add-QTracXLabel $serverTab "Private-key file" 28 400 | Out-Null
 $privateKeyFile = Add-QTracXTextBox $serverTab 250 396 480
 $browsePrivateKey = Add-QTracXButton $serverTab "Browse..." 742 394 90
+Add-QTracXLabel $serverTab "Installation type" 28 452 | Out-Null
+$installationType = Add-QTracXComboBox $serverTab 250 448 @(
+    "Production installation",
+    "Time-limited demo"
+) 300
+Add-QTracXLabel $serverTab "Demo starts (IST)" 28 500 | Out-Null
+$demoStart = [System.Windows.Forms.DateTimePicker]::new()
+$demoStart.Location = [Drawing.Point]::new(250, 496)
+$demoStart.Size = [Drawing.Size]::new(300, 28)
+$demoStart.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom
+$demoStart.CustomFormat = "yyyy-MM-dd HH:mm:ss"
+$demoStart.ShowUpDown = $true
+$indiaTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+$demoStart.Value = [TimeZoneInfo]::ConvertTimeFromUtc(
+    [DateTime]::UtcNow,
+    $indiaTimeZone
+)
+$serverTab.Controls.Add($demoStart)
+Add-QTracXLabel $serverTab "Demo duration (hours)" 28 548 | Out-Null
+$demoDuration = [System.Windows.Forms.NumericUpDown]::new()
+$demoDuration.Location = [Drawing.Point]::new(250, 544)
+$demoDuration.Size = [Drawing.Size]::new(150, 32)
+$demoDuration.MinimumSize = [Drawing.Size]::new(150, 32)
+$demoDuration.Minimum = [decimal]0.01
+$demoDuration.Maximum = [decimal]8760
+$demoDuration.DecimalPlaces = 2
+$demoDuration.Increment = [decimal]0.25
+$demoDuration.Value = [decimal]48
+$demoDuration.BackColor = [Drawing.SystemColors]::Window
+$demoDuration.ForeColor = [Drawing.SystemColors]::WindowText
+$serverTab.Controls.Add($demoDuration)
+$demoExpiry = Add-QTracXLabel $serverTab "Production installation: no expiry." 28 598 790
+$demoExpiry.AutoSize = $false
+$demoExpiry.Height = 45
+$demoExpiry.ForeColor = [Drawing.Color]::DimGray
 
 Add-QTracXLabel $databaseTab "Database engine" 28 28 | Out-Null
 $databaseEngine = Add-QTracXComboBox $databaseTab 250 24 @(
@@ -480,6 +516,38 @@ function Set-QTracXHttpsState {
     $privateKeyFile.Enabled = $enabled
     $browseCertificate.Enabled = $enabled
     $browsePrivateKey.Enabled = $enabled
+}
+
+function Get-QTracXDemoStartText {
+    return $demoStart.Value.ToString("yyyy-MM-ddTHH:mm:ss") + "+05:30"
+}
+
+function Update-QTracXDemoExpiry {
+    if ($installationType.SelectedIndex -eq 0) {
+        $demoExpiry.Text = "Production installation: no expiry."
+        return
+    }
+    $duration = [double]$demoDuration.Value
+    $expiry = $demoStart.Value.AddHours($duration)
+    $demoExpiry.Text = (
+        "Demo expires {0} IST ({1} hours after start)." -f
+        $expiry.ToString("yyyy-MM-dd HH:mm:ss"),
+        $demoDuration.Value.ToString("0.##")
+    )
+}
+
+function Set-QTracXDemoState {
+    $enabled = $installationType.SelectedIndex -eq 1
+    if ($enabled -and -not $script:DemoStartInitialized) {
+        $demoStart.Value = [TimeZoneInfo]::ConvertTimeFromUtc(
+            [DateTime]::UtcNow,
+            $indiaTimeZone
+        )
+        $script:DemoStartInitialized = $true
+    }
+    $demoStart.Enabled = $enabled
+    $demoDuration.Enabled = $enabled
+    Update-QTracXDemoExpiry
 }
 
 function Set-QTracXDatabaseState {
@@ -645,6 +713,18 @@ function Get-QTracXPayload {
             certificateFile = $certificateFile.Text.Trim()
             privateKeyFile = $privateKeyFile.Text.Trim()
         }
+        demo = [ordered]@{
+            enabled = $installationType.SelectedIndex -eq 1
+            startAt = $(
+                if ($installationType.SelectedIndex -eq 1) {
+                    Get-QTracXDemoStartText
+                }
+                else {
+                    ""
+                }
+            )
+            durationHours = [decimal]$demoDuration.Value
+        }
         storage = [ordered]@{
             checksheetDataDirectory = "backend/data/checksheets"
             logDirectory = "backend/logs"
@@ -669,12 +749,23 @@ function Update-QTracXReview {
         $explicitDatabasePort.Checked) {
         $databaseTarget += ":$([int]$databasePort.Value)"
     }
+    $installationSummary = "Production installation (no expiry)"
+    if ($installationType.SelectedIndex -eq 1) {
+        $expiry = $demoStart.Value.AddHours([double]$demoDuration.Value)
+        $installationSummary = (
+            "Time-limited demo: starts {0} IST, expires {1} IST ({2} hours)" -f
+            $demoStart.Value.ToString("yyyy-MM-dd HH:mm:ss"),
+            $expiry.ToString("yyyy-MM-dd HH:mm:ss"),
+            $demoDuration.Value.ToString("0.##")
+        )
+    }
     $reviewSummary.Text = @"
 Source: $sourceDescription
 Install to: $($installDirectory.Text.Trim())
 Deployment: $($deploymentMode.SelectedItem) at $($serverAddress.Text.Trim())
 UI / backend: $protocol ports $([int]$uiPort.Value) / $([int]$backendPort.Value)
 OCR: $(Get-QTracXRuntimeName), $([int]$modelInstances.Value) model instance(s), $([int]$scanWorkers.Value) scan worker(s)
+Installation: $installationSummary
 Database: $(Get-QTracXDatabaseEngine) on $databaseTarget, mode $(Get-QTracXProvisioningMode)
 Database: $($databaseName.Text.Trim()) / application user $($databaseApplicationUser.Text.Trim())
 Initial QTracX administrator: $($applicationAdminUser.Text.Trim())
@@ -1027,6 +1118,9 @@ $browsePrivateKey.Add_Click({
 })
 $sourceMode.Add_SelectedIndexChanged({ Set-QTracXSourceState })
 $httpsEnabled.Add_CheckedChanged({ Set-QTracXHttpsState })
+$installationType.Add_SelectedIndexChanged({ Set-QTracXDemoState })
+$demoStart.Add_ValueChanged({ Update-QTracXDemoExpiry })
+$demoDuration.Add_ValueChanged({ Update-QTracXDemoExpiry })
 $databaseEngine.Add_SelectedIndexChanged({ Set-QTracXDatabaseState })
 $databaseMode.Add_SelectedIndexChanged({ Set-QTracXDatabaseState })
 $explicitDatabasePort.Add_CheckedChanged({ Set-QTracXDatabasePortState })
@@ -1120,6 +1214,7 @@ $startInstall.Add_Click({
 
 Set-QTracXSourceState
 Set-QTracXHttpsState
+Set-QTracXDemoState
 Set-QTracXDatabaseState
 Set-QTracXDeploymentState
 $backButton.Enabled = $false
