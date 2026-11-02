@@ -1,19 +1,24 @@
-QTraX user-management overlay
+QTraX user-management overlay v2
 Base: origin/deployment-readiness at 539a945
+
+This is a cumulative overlay. It includes the original user-management page
+plus role and access management. Apply it directly over the working v1 files;
+do not revert v1 first.
 
 WHAT THIS ADDS
 - Separate browser UI at /user-management.
-- Administrator-only API for listing existing users.
+- Administrator-only API for listing and changing existing users.
 - Existing-user edits: username, display name, and password reset.
+- Enable or disable an account's application access.
+- Grant or revoke the Administrator role.
+- Effective-permission summary in the management UI.
+- Last-active-administrator protection and session revocation.
 - No account-creation HTTP endpoint or UI control.
-- CLI commands for username and display-name changes.
-- Focused user-management guide in docs/USER_MANAGEMENT.md.
+- CLI commands and a focused guide in docs/USER_MANAGEMENT.md.
 
 APPLY
-1. Start from the latest deployment-readiness branch containing commit 539a945
-   or its descendants.
-2. Extract this ZIP into the repository root and allow matching files to be
-   overwritten.
+1. Extract this ZIP into the repository root.
+2. Allow matching files to be overwritten.
 3. No database migration is required.
 
 TEST FROM THE REPOSITORY ROOT (POWERSHELL)
@@ -31,15 +36,19 @@ npm run build
 Replace .venv-gpu with .venv on a CPU-only development environment.
 
 RUN
-Restart both the QTraX backend and frontend, then open:
+Restart the QTraX backend and frontend, then open:
   http://localhost:3002/user-management
 
 For a LAN deployment, replace localhost and 3002 with the deployed server
-address and UI port. Sign in with a user that has the admin role.
+address and UI port. Sign in with an account that has the admin role.
 
-USER CREATION
-The management page intentionally cannot create users. See
-docs/USER_MANAGEMENT.md for the exact create-user and create-admin commands.
+CURRENT PERMISSION MODEL
+- Standard user: required base role for normal QTraX workflows.
+- Administrator: access to existing-user management.
+- Active status: controls whether the account can sign in.
+
+Granular per-module permissions are not part of the current database or route
+authorization model and are not simulated by this UI.
 
 SUGGESTED COMMIT MESSAGE
-feat(auth): add restricted existing-user management console
+feat(auth): manage user roles and access from admin console

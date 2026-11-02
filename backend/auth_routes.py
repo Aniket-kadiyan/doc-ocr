@@ -11,8 +11,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from auth_repository import (
     AuthenticationRepositoryError,
     DuplicateUserError,
+    LastAdministratorError,
     UserNotFoundError,
     list_users,
+    set_user_access_by_id,
     set_user_password_by_id,
     update_user_profile,
 )
@@ -63,6 +65,11 @@ class UserProfileUpdateRequest(BaseModel):
 
 class UserPasswordUpdateRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
+
+
+class UserAccessUpdateRequest(BaseModel):
+    is_active: bool
+    administrator: bool
 
 
 def _database_manager(request: Request) -> DatabaseManager:
@@ -143,6 +150,8 @@ def _management_error(error: Exception) -> HTTPException:
             status_code=409,
             detail="A user with that username already exists",
         )
+    if isinstance(error, LastAdministratorError):
+        return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, (AuthenticationInputError, AuthenticationRepositoryError)):
         return HTTPException(status_code=400, detail=str(error))
     return HTTPException(status_code=500, detail="User management operation failed")
@@ -276,6 +285,36 @@ def admin_update_user_password(
                 session,
                 user_id=user_id,
                 password=payload.password,
+            )
+    except (AuthenticationInputError, AuthenticationRepositoryError) as error:
+        raise _management_error(error) from error
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503, detail="Authentication service unavailable"
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return AuthenticatedUserResponse(**record.as_public_dict())
+
+
+@router.patch(
+    "/admin/users/{user_id}/access",
+    response_model=AuthenticatedUserResponse,
+)
+def admin_update_user_access(
+    user_id: str,
+    payload: UserAccessUpdateRequest,
+    request: Request,
+    response: Response,
+    _authenticated: AuthenticatedSession = Depends(require_administrator),
+) -> AuthenticatedUserResponse:
+    manager = _database_manager(request)
+    try:
+        with manager.session() as session:
+            record = set_user_access_by_id(
+                session,
+                user_id=user_id,
+                active=payload.is_active,
+                administrator=payload.administrator,
             )
     except (AuthenticationInputError, AuthenticationRepositoryError) as error:
         raise _management_error(error) from error

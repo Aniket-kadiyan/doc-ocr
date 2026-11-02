@@ -215,6 +215,55 @@ class AuthenticationRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 405)
 
+    def test_administrator_can_change_existing_user_access_and_role(self) -> None:
+        login = self.client.post("/auth/login", json={
+            "username": "quality.admin",
+            "password": "admin secure password 2026",
+        })
+        self.assertEqual(login.status_code, 200)
+        csrf_token = self.client.cookies.get(CSRF_COOKIE_NAME)
+        listed = self.client.get("/auth/admin/users").json()
+        operator = next(entry for entry in listed if entry["username"] == "operator.one")
+
+        promoted = self.client.patch(
+            f"/auth/admin/users/{operator['id']}/access",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"is_active": True, "administrator": True},
+        )
+        self.assertEqual(promoted.status_code, 200)
+        self.assertEqual(set(promoted.json()["roles"]), {"admin", "user"})
+
+        disabled = self.client.patch(
+            f"/auth/admin/users/{operator['id']}/access",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"is_active": False, "administrator": False},
+        )
+        self.assertEqual(disabled.status_code, 200)
+        self.assertFalse(disabled.json()["is_active"])
+        self.assertEqual(disabled.json()["roles"], ["user"])
+
+    def test_final_active_administrator_cannot_be_disabled_or_demoted(self) -> None:
+        login = self.client.post("/auth/login", json={
+            "username": "quality.admin",
+            "password": "admin secure password 2026",
+        })
+        self.assertEqual(login.status_code, 200)
+        csrf_token = self.client.cookies.get(CSRF_COOKIE_NAME)
+        administrator = login.json()["user"]
+
+        demoted = self.client.patch(
+            f"/auth/admin/users/{administrator['id']}/access",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"is_active": True, "administrator": False},
+        )
+        self.assertEqual(demoted.status_code, 409)
+        disabled = self.client.patch(
+            f"/auth/admin/users/{administrator['id']}/access",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"is_active": False, "administrator": True},
+        )
+        self.assertEqual(disabled.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()

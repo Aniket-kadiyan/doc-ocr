@@ -71,3 +71,21 @@ export async function updateManagedUserPassword(
   await requireSuccess(response, "Could not update the user password");
   return (await response.json()) as AuthenticatedUser;
 }
+
+export async function updateManagedUserAccess(
+  userId: string,
+  access: { is_active: boolean; administrator: boolean }
+): Promise<AuthenticatedUser> {
+  const response = await fetchWithRequestId(
+    `${getOcrApiUrl()}/auth/admin/users/${encodeURIComponent(userId)}/access`,
+    {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(access),
+    },
+    { operation: "auth.admin.users.update-access" }
+  );
+  await requireSuccess(response, "Could not update user access");
+  return (await response.json()) as AuthenticatedUser;
+}

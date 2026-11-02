@@ -8,10 +8,9 @@ backend. Browser users cannot create accounts.
 
 - New accounts are created only from `backend/manage_auth.py` on the server.
 - The separate browser management page can change an existing account's
-  username, display name, or password.
+  username, display name, password, active status, or administrator role.
 - The browser page requires a signed-in account with the `admin` role.
-- The page does not provide account creation, deletion, enable/disable, or role
-  controls.
+- The page does not provide account creation or deletion controls.
 - Existing passwords cannot be displayed. They are stored as Argon2id hashes;
   an administrator can only set a new password.
 
@@ -38,12 +37,16 @@ Select an existing account and then:
 1. Edit **Username** or **Display name**, then choose **Save user details**.
 2. To reset a password, enter and confirm the new password, then choose
    **Update password**.
-3. Tell the affected user their new username or temporary password through an
+3. Under **Roles and permissions**, enable or disable application access and
+   grant or revoke the **Administrator** role.
+4. Tell the affected user their new username or temporary password through an
    approved private channel.
 
-A password reset revokes every active session belonging to that account. If an
-administrator resets their own password, they must sign in again. Username and
-display-name changes retain the account's stable database ID.
+A password, access, or role change revokes every active session belonging to
+that account. If an administrator changes their own password, access, or role,
+they must sign in again. Username and display-name changes retain the account's
+stable database ID. The final active administrator cannot be disabled or
+demoted.
 
 ## Run administrative commands
 

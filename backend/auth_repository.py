@@ -236,6 +236,50 @@ def set_user_administrator(
     return user_record(user)
 
 
+def set_user_access_by_id(
+    session: Session,
+    *,
+    user_id: str,
+    active: bool,
+    administrator: bool,
+) -> UserRecord:
+    """Update the enforceable account access and role flags in one operation."""
+
+    user = get_user_by_id(session, user_id)
+    roles = seed_default_roles(session)
+    admin_role = roles["admin"]
+    is_administrator = any(role.name == "admin" for role in user.roles)
+    removes_active_administrator = (
+        user.is_active
+        and is_administrator
+        and (not active or not administrator)
+    )
+    if removes_active_administrator:
+        active_admin_count = session.scalar(
+            select(func.count(User.id))
+            .select_from(User)
+            .join(User.roles)
+            .where(User.is_active.is_(True), Role.name == "admin")
+        ) or 0
+        if active_admin_count <= 1:
+            raise LastAdministratorError(
+                "The final active administrator cannot be disabled or demoted"
+            )
+
+    changed = user.is_active != active or is_administrator != administrator
+    user.is_active = active
+    if administrator and not is_administrator:
+        user.roles.append(admin_role)
+    elif not administrator and is_administrator:
+        user.roles.remove(admin_role)
+
+    if changed:
+        user.updated_at = utc_now()
+        _revoke_user_sessions(session, user.id)
+    session.flush()
+    return user_record(user)
+
+
 def set_user_password(
     session: Session,
     *,

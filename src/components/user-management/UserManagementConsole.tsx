@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AuthenticationApiError, AuthenticatedUser } from "@/lib/authClient";
 import {
   listManagedUsers,
+  updateManagedUserAccess,
   updateManagedUserPassword,
   updateManagedUserProfile,
 } from "@/lib/userManagementClient";
@@ -198,9 +199,10 @@ export function UserManagementConsole() {
         <section>
           {selected ? (
             <UserEditor
-              key={`${selected.id}:${selected.updated_at}`}
+              key={selected.id}
               user={selected}
               signedInUserId={administrator.id}
+              onAccessUpdated={replaceUser}
               onProfileUpdated={replaceUser}
               onPasswordUpdated={replaceUser}
             />
@@ -218,24 +220,31 @@ export function UserManagementConsole() {
 function UserEditor({
   user,
   signedInUserId,
+  onAccessUpdated,
   onProfileUpdated,
   onPasswordUpdated,
 }: {
   user: AuthenticatedUser;
   signedInUserId: string;
+  onAccessUpdated: (user: AuthenticatedUser) => void;
   onProfileUpdated: (user: AuthenticatedUser) => void;
   onPasswordUpdated: (user: AuthenticatedUser) => void;
 }) {
   const [username, setUsername] = useState(user.username);
   const [displayName, setDisplayName] = useState(user.display_name);
+  const [active, setActive] = useState(user.is_active);
+  const [administrator, setAdministrator] = useState(user.roles.includes("admin"));
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [profileBusy, setProfileBusy] = useState(false);
   const [passwordBusy, setPasswordBusy] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
   const [profileError, setProfileError] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [accessMessage, setAccessMessage] = useState("");
+  const [accessError, setAccessError] = useState("");
 
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -289,6 +298,33 @@ function UserEditor({
       setPasswordError(errorMessage(error, "Could not update the password."));
     } finally {
       setPasswordBusy(false);
+    }
+  };
+
+  const saveAccess = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAccessMessage("");
+    setAccessError("");
+    setAccessBusy(true);
+    try {
+      const updated = await updateManagedUserAccess(user.id, {
+        is_active: active,
+        administrator,
+      });
+      onAccessUpdated(updated);
+      setActive(updated.is_active);
+      setAdministrator(updated.roles.includes("admin"));
+      setAccessMessage(
+        user.id === signedInUserId &&
+          (user.is_active !== updated.is_active ||
+            user.roles.includes("admin") !== updated.roles.includes("admin"))
+          ? "Access updated. Your current session has been revoked; sign in again to continue."
+          : "Roles and permissions updated. The user's active sessions have been revoked."
+      );
+    } catch (error) {
+      setAccessError(errorMessage(error, "Could not update user access."));
+    } finally {
+      setAccessBusy(false);
     }
   };
 
@@ -355,6 +391,94 @@ function UserEditor({
             </button>
             {profileMessage && <p className="text-sm text-emerald-700">{profileMessage}</p>}
             {profileError && <p role="alert" className="text-sm text-red-700">{profileError}</p>}
+          </div>
+        </form>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <form onSubmit={saveAccess}>
+          <h3 className="font-semibold">Roles and permissions</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Permissions are assigned through the roles currently supported by
+            QTraX. Changing access or administrator status signs the affected
+            account out of all current sessions.
+          </p>
+
+          <div className="mt-5 space-y-3">
+            <label className="flex cursor-pointer items-start justify-between gap-5 rounded-xl border border-slate-200 p-4 hover:bg-slate-50">
+              <span>
+                <span className="block text-sm font-semibold text-slate-900">
+                  Application access
+                </span>
+                <span className="mt-1 block text-sm leading-5 text-slate-600">
+                  Allows this account to sign in and use the QTraX application.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={active}
+                onChange={(event) => setActive(event.target.checked)}
+                className="mt-1 h-5 w-5 shrink-0 accent-blue-700"
+              />
+            </label>
+
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="flex items-start justify-between gap-5">
+                <span>
+                  <span className="block text-sm font-semibold text-slate-900">
+                    Standard user
+                  </span>
+                  <span className="mt-1 block text-sm leading-5 text-slate-600">
+                    Drawing, review, checksheet and export workflows.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked
+                  disabled
+                  aria-label="Standard user role is required"
+                  className="mt-1 h-5 w-5 shrink-0 accent-blue-700"
+                />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Required for every QTraX account and cannot be removed here.
+              </p>
+            </div>
+
+            <label className="flex cursor-pointer items-start justify-between gap-5 rounded-xl border border-slate-200 p-4 hover:bg-slate-50">
+              <span>
+                <span className="block text-sm font-semibold text-slate-900">
+                  Administrator
+                </span>
+                <span className="mt-1 block text-sm leading-5 text-slate-600">
+                  Can open this management console and change existing users,
+                  credentials, roles and application access.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={administrator}
+                onChange={(event) => setAdministrator(event.target.checked)}
+                className="mt-1 h-5 w-5 shrink-0 accent-blue-700"
+              />
+            </label>
+          </div>
+
+          <div className="mt-5 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Effective access: {active ? "Application enabled" : "Sign-in disabled"}
+            {administrator ? " · User administration enabled" : " · Standard workflows only"}
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-4">
+            <button
+              type="submit"
+              disabled={accessBusy}
+              className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+            >
+              {accessBusy ? "Saving…" : "Save roles and permissions"}
+            </button>
+            {accessMessage && <p className="text-sm text-emerald-700">{accessMessage}</p>}
+            {accessError && <p role="alert" className="text-sm text-red-700">{accessError}</p>}
           </div>
         </form>
       </div>

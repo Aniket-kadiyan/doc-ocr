@@ -162,8 +162,8 @@ the failed-login counter and any current timed lockout.
 
 The focused operator guide, including the administrator-only browser page at
 `/user-management`, is available in `docs/USER_MANAGEMENT.md`. The browser page
-can update only existing usernames, display names, and passwords; it exposes no
-account-creation endpoint or control.
+can update only existing usernames, display names, passwords, active status,
+and administrator role; it exposes no account-creation endpoint or control.
 
 ## Test this stage
 
