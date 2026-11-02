@@ -22,6 +22,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIsNone(config.dwg_converter_path)
         self.assertTrue(config.backend_reload)
         self.assertEqual(config.ocr_model_instances, 1)
+        self.assertEqual(config.ocr_scan_workers, 2)
         self.assertFalse(config.https_enabled)
         self.assertIsNone(config.tls_cert_file)
         self.assertIsNone(config.tls_key_file)
@@ -39,6 +40,7 @@ class RuntimeConfigTests(unittest.TestCase):
             "QTRACX_ENV": "PRODUCTION", "UI_HOST": "0.0.0.0", "PORT": "3102",
             "OCR_HOST": "0.0.0.0", "OCR_PORT": "8100", "OCR_RELOAD": "false",
             "OCR_MODEL_INSTANCES": "3",
+            "OCR_SCAN_WORKERS": "4",
             "CAD_MAX_DOCUMENT_MB": "256",
             "CAD_CONVERT_TIMEOUT_SECONDS": "240",
             "DWG2DXF_ACADSHARP": "tools/dwg2dxf/custom-converter",
@@ -61,7 +63,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.backend_port, 8100)
         self.assertFalse(config.backend_reload)
         self.assertEqual(config.ocr_model_instances, 3)
+        self.assertEqual(config.ocr_scan_workers, 4)
         self.assertEqual(config.public_summary()["ocr_model_instances"], 3)
+        self.assertEqual(config.public_summary()["ocr_scan_workers"], 4)
         self.assertEqual(config.cad_max_document_mb, 256)
         self.assertEqual(config.cad_convert_timeout_seconds, 240)
         self.assertTrue(config.public_summary()["dwg_converter_configured"])
@@ -81,10 +85,14 @@ class RuntimeConfigTests(unittest.TestCase):
         )
         self.assertTrue(config.https_enabled)
         self.assertTrue(
-            str(config.tls_cert_file).endswith("certificates/qtracx.crt")
+            config.tls_cert_file.as_posix().endswith(
+                "certificates/qtracx.crt"
+            )
         )
         self.assertTrue(
-            str(config.tls_key_file).endswith("certificates/qtracx.key")
+            config.tls_key_file.as_posix().endswith(
+                "certificates/qtracx.key"
+            )
         )
         self.assertTrue(config.public_summary()["tls_cert_configured"])
 
@@ -126,6 +134,12 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(os.environ, {"OCR_MODEL_INSTANCES": "9"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_SCAN_WORKERS": "0"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
+                load_runtime_config()
+        with patch.dict(os.environ, {"OCR_SCAN_WORKERS": "33"}, clear=True):
             with self.assertRaisesRegex(RuntimeConfigurationError, "between"):
                 load_runtime_config()
         with patch.dict(os.environ, {"CAD_MAX_DOCUMENT_MB": "0"}, clear=True):

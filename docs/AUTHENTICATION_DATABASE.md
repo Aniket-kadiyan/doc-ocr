@@ -25,7 +25,7 @@ Installing this smaller file avoids reinstalling or replacing PaddlePaddle.
 Add a URL like this to the repository's `.env.local`:
 
 ```dotenv
-DATABASE_URL=postgresql+pg8000://qtracx_user:CHANGE_ME@db-server:5432/qtracx
+DATABASE_URL=postgresql+pg8000://qtracx_app:CHANGE_ME@db-server:5432/QTracX
 ```
 
 Create a dedicated database and account. The account needs permission to
@@ -37,7 +37,7 @@ Install Microsoft ODBC Driver 18 for SQL Server on the backend machine, then
 add a URL like this to `.env.local`:
 
 ```dotenv
-DATABASE_URL=mssql+pyodbc://qtracx_user:CHANGE_ME@db-server:1433/qtracx?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
+DATABASE_URL=mssql+pyodbc://qtracx_app:CHANGE_ME@db-server:1433/QTracX?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no
 ```
 
 If the SQL Server uses an internal certificate that the backend machine does
@@ -142,7 +142,7 @@ After `db upgrade` and `db check` succeed, run:
 
 The command prompts twice for the password. The password is not accepted as a
 command-line argument, written to the console, stored in shell history, or
-included in application logs. Passwords require at least 12 characters and are
+included in application logs. Passwords require at least 4 characters and are
 stored as Argon2id hashes.
 
 Additional administration commands:
@@ -152,11 +152,18 @@ Additional administration commands:
 .\.venv-gpu\Scripts\python.exe manage_auth.py user disable USERNAME
 .\.venv-gpu\Scripts\python.exe manage_auth.py user enable USERNAME
 .\.venv-gpu\Scripts\python.exe manage_auth.py user set-password USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user set-username CURRENT_USERNAME NEW_USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user set-display-name USERNAME "New Display Name"
 ```
 
 The final active administrator cannot be disabled. Disabling a user or changing
 a password revokes that user's active sessions. Changing a password also clears
 the failed-login counter and any current timed lockout.
+
+The focused operator guide, including the administrator-only browser page at
+`/user-management`, is available in `docs/USER_MANAGEMENT.md`. The browser page
+can update only existing usernames, display names, passwords, active status,
+and administrator role; it exposes no account-creation endpoint or control.
 
 ## Test this stage
 

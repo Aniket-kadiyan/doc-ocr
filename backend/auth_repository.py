@@ -119,6 +119,17 @@ def get_user(session: Session, username: str) -> User:
     return user
 
 
+def get_user_by_id(session: Session, user_id: str) -> User:
+    user = session.scalar(
+        select(User)
+        .options(selectinload(User.roles))
+        .where(User.id == user_id)
+    )
+    if user is None:
+        raise UserNotFoundError("User was not found")
+    return user
+
+
 def list_users(session: Session) -> list[UserRecord]:
     users = session.scalars(
         select(User)
@@ -126,6 +137,38 @@ def list_users(session: Session) -> list[UserRecord]:
         .order_by(User.normalized_username)
     ).all()
     return [user_record(user) for user in users]
+
+
+def update_user_profile(
+    session: Session,
+    *,
+    user_id: str,
+    username: str,
+    display_name: str,
+) -> UserRecord:
+    """Change an existing account's public identity without changing its ID."""
+
+    user = get_user_by_id(session, user_id)
+    canonical_username, normalized_username = normalize_username(username)
+    canonical_display_name = normalize_display_name(display_name)
+    duplicate = session.scalar(
+        select(User.id).where(
+            User.normalized_username == normalized_username,
+            User.id != user.id,
+        )
+    )
+    if duplicate is not None:
+        raise DuplicateUserError("A user with that username already exists")
+
+    user.username = canonical_username
+    user.normalized_username = normalized_username
+    user.display_name = canonical_display_name
+    user.updated_at = utc_now()
+    try:
+        session.flush()
+    except IntegrityError as error:
+        raise DuplicateUserError("A user with that username already exists") from error
+    return user_record(user)
 
 
 def set_user_active(
@@ -193,6 +236,50 @@ def set_user_administrator(
     return user_record(user)
 
 
+def set_user_access_by_id(
+    session: Session,
+    *,
+    user_id: str,
+    active: bool,
+    administrator: bool,
+) -> UserRecord:
+    """Update the enforceable account access and role flags in one operation."""
+
+    user = get_user_by_id(session, user_id)
+    roles = seed_default_roles(session)
+    admin_role = roles["admin"]
+    is_administrator = any(role.name == "admin" for role in user.roles)
+    removes_active_administrator = (
+        user.is_active
+        and is_administrator
+        and (not active or not administrator)
+    )
+    if removes_active_administrator:
+        active_admin_count = session.scalar(
+            select(func.count(User.id))
+            .select_from(User)
+            .join(User.roles)
+            .where(User.is_active.is_(True), Role.name == "admin")
+        ) or 0
+        if active_admin_count <= 1:
+            raise LastAdministratorError(
+                "The final active administrator cannot be disabled or demoted"
+            )
+
+    changed = user.is_active != active or is_administrator != administrator
+    user.is_active = active
+    if administrator and not is_administrator:
+        user.roles.append(admin_role)
+    elif not administrator and is_administrator:
+        user.roles.remove(admin_role)
+
+    if changed:
+        user.updated_at = utc_now()
+        _revoke_user_sessions(session, user.id)
+    session.flush()
+    return user_record(user)
+
+
 def set_user_password(
     session: Session,
     *,
@@ -200,6 +287,24 @@ def set_user_password(
     password: str,
 ) -> UserRecord:
     user = get_user(session, username)
+    user.password_hash = hash_password(password, username=user.username)
+    user.failed_login_count = 0
+    user.locked_until = None
+    user.updated_at = utc_now()
+    _revoke_user_sessions(session, user.id)
+    session.flush()
+    return user_record(user)
+
+
+def set_user_password_by_id(
+    session: Session,
+    *,
+    user_id: str,
+    password: str,
+) -> UserRecord:
+    """Reset a password by stable account ID and revoke all account sessions."""
+
+    user = get_user_by_id(session, user_id)
     user.password_hash = hash_password(password, username=user.username)
     user.failed_login_count = 0
     user.locked_until = None

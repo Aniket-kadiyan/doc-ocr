@@ -1,0 +1,102 @@
+QTracX Installer I2 - Database Bootstrap
+=========================================
+
+Base branch and revision
+------------------------
+
+Apply this package to the deployment-readiness branch after commit:
+
+    2e46558 test(config): make TLS path assertions Windows-compatible
+
+The ZIP contains source changes only. It contains no commit and does not push
+anything.
+
+Apply
+-----
+
+1. Confirm that deployment-readiness is checked out and current.
+2. Extract the ZIP into the doc-ocr repository root.
+3. Allow it to overwrite the matching installer and documentation files.
+4. Review the changes with:
+
+       git status --short
+       git diff --check
+
+What changed
+------------
+
+- Adds MSSQL and PostgreSQL database bootstrap support.
+- Adds an installer-managed mode that can use sa, postgres, or another
+  sufficiently privileged database account.
+- Adds a preconfigured mode for installations where the sa/superuser password
+  is unavailable. In this mode, IT creates the QTracX database and its
+  dedicated application/migration account, then passes only that account's
+  connection details to the installer.
+- Runs Alembic migrations, verifies the authentication schema, and creates or
+  repairs the initial QTracX application administrator.
+- Keeps database-administrator passwords out of generated configuration and
+  command-line arguments.
+- Adds database-driver discovery to installer preflight.
+
+Prepare a database without sa
+-----------------------------
+
+Follow:
+
+    installer\MANUAL_DATABASE_PREPARATION.md
+
+For the current development SQL Server, use the ODBC driver actually installed
+on the machine. Based on the earlier machine inventory, this is:
+
+    ODBC Driver 17 for SQL Server
+
+Then select database setup mode "preconfigured" and enter the QTracX database
+account created by the SQL script. The installer will not ask for or use sa.
+
+Test
+----
+
+From the repository root in PowerShell:
+
+    .\backend\.venv-gpu\Scripts\python.exe -m unittest -v installer.test_setup_config installer.test_preflight installer.test_source_acquisition installer.test_database_bootstrap
+
+    Push-Location backend
+    .\.venv-gpu\Scripts\python.exe -m unittest -v test_config_env.py
+    Pop-Location
+
+Use backend\.venv instead of backend\.venv-gpu on a CPU-only development
+environment.
+
+Run the read-only preflight report:
+
+    .\backend\.venv-gpu\Scripts\python.exe installer\preflight.py --json
+
+Test a database connection without creating or changing database objects:
+
+    .\backend\.venv-gpu\Scripts\python.exe installer\database_bootstrap.py --interactive --check-only
+
+Run database setup
+------------------
+
+The following command changes the selected database. Run it only after the
+connection-only test succeeds and the selected values have been checked:
+
+    .\backend\.venv-gpu\Scripts\python.exe installer\database_bootstrap.py --interactive
+
+For a missing sa password, choose:
+
+    Database setup mode: preconfigured
+
+The database user supplied in that mode must have permission to create and
+alter tables because the same account runs current and future migrations.
+
+Suggested commit message
+------------------------
+
+    feat(installer): add database bootstrap and preconfigured account mode
+
+Next installer step
+-------------------
+
+Build the Windows graphical setup wizard over the validated preflight, source
+acquisition, configuration, and database-bootstrap functions.

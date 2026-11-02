@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "platform": "windows-x64",
+  "packages": {
+    "python": {
+      "displayName": "CPython 3.13.14 x64",
+      "version": "3.13.14",
+      "fileName": "python-3.13.14-amd64.exe",
+      "officialDownloadUrl": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
+      "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0",
+      "installerType": "exe",
+      "silentArguments": [
+        "/quiet",
+        "InstallAllUsers=1",
+        "PrependPath=1",
+        "Include_launcher=1",
+        "Include_test=0"
+      ],
+      "wingetId": "Python.Python.3.13",
+      "wingetVersion": "3.13.14",
+      "licenseName": "Python Software Foundation License"
+    },
+    "node": {
+      "displayName": "Node.js 24.22.1 LTS x64",
+      "version": "24.22.1",
+      "fileName": "node-v24.22.1-x64.msi",
+      "officialDownloadUrl": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-x64.msi",
+      "sha256": "3bda4baf1ee709b33cf920dd633106ddb23951e322bff9c03ec9f64ab8981b01",
+      "installerType": "msi",
+      "silentArguments": [
+        "/qn",
+        "/norestart"
+      ],
+      "wingetId": "OpenJS.NodeJS.LTS",
+      "wingetVersion": "24.22.1",
+      "licenseName": "Node.js license (MIT and dependency notices)"
+    },
+    "git": {
+      "displayName": "Git for Windows 2.56.0.3 x64",
+      "version": "2.56.0.3",
+      "fileName": "Git-2.56.0.3-64-bit.exe",
+      "officialDownloadUrl": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.3/Git-2.56.0.3-64-bit.exe",
+      "sha256": "dc6d3db061999136e139f31376c5582a9ed6f36a4ea12f15e54ad7fa2bfc0bf2",
+      "installerType": "exe",
+      "silentArguments": [
+        "/VERYSILENT",
+        "/NORESTART",
+        "/NOCANCEL",
+        "/SP-"
+      ],
+      "wingetId": "Git.Git",
+      "wingetVersion": "2.56.0.3",
+      "licenseName": "GNU General Public License v2"
+    },
+    "mssqlOdbc": {
+      "displayName": "Microsoft ODBC Driver 18.7.1.1 for SQL Server x64",
+      "version": "18.7.1.1",
+      "fileName": "msodbcsql-18.7.1.1-x64.msi",
+      "officialDownloadUrl": "https://download.microsoft.com/download/d624e1c6-293b-4d6f-91b8-6e515a5d6a77/amd64/1033/msodbcsql.msi",
+      "sha256": "",
+      "authenticodePublisher": "Microsoft Corporation",
+      "installerType": "msi",
+      "silentArguments": [
+        "/qn",
+        "/norestart",
+        "IACCEPTMSODBCSQLLICENSETERMS=YES"
+      ],
+      "wingetId": "Microsoft.msodbcsql.18",
+      "wingetVersion": "18.7.1.1",
+      "licenseName": "Microsoft ODBC Driver license terms"
+    }
+  }
+}

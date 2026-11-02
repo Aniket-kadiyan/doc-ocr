@@ -39,6 +39,11 @@ backend/debug_output/
 backend/data
 backend/logs/
 
+# optional release-only prerequisite bundle
+/installer/prerequisites/*.exe
+/installer/prerequisites/*.msi
+/installer/prerequisites/prerequisites.lock.json
+
 
 .specstory/
 .vscode/

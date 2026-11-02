@@ -44,6 +44,20 @@ class ManageAuthenticationTests(unittest.TestCase):
             self.assertEqual(arguments.username, "operator.one")
             self.assertEqual(arguments.user_action, action)
 
+    def test_profile_management_commands_accept_explicit_new_values(self) -> None:
+        parser = _parser()
+        username = parser.parse_args([
+            "user", "set-username", "operator.one", "operator.renamed"
+        ])
+        self.assertEqual(username.username, "operator.one")
+        self.assertEqual(username.new_username, "operator.renamed")
+
+        display = parser.parse_args([
+            "user", "set-display-name", "operator.renamed", "Renamed Operator"
+        ])
+        self.assertEqual(display.username, "operator.renamed")
+        self.assertEqual(display.display_name, "Renamed Operator")
+
     def test_interactive_password_confirmation_must_match(self) -> None:
         with patch("manage_auth.getpass", side_effect=["first value", "second value"]):
             with self.assertRaisesRegex(AuthenticationInputError, "do not match"):

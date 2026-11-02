@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "applicationName": "QTracX",
+  "environment": "production",
+  "codeSource": {
+    "mode": "archive",
+    "repositoryUrl": "https://github.com/Aniket-kadiyan/doc-ocr.git",
+    "branch": "deployment-readiness"
+  },
+  "prerequisites": {
+    "python": {
+      "requiredVersion": "3.13",
+      "architecture": "x64",
+      "wingetId": "Python.Python.3.13"
+    },
+    "node": {
+      "minimumVersion": "20.19.0",
+      "wingetId": "OpenJS.NodeJS.LTS"
+    },
+    "git": {
+      "wingetId": "Git.Git"
+    },
+    "mssqlOdbc": {
+      "supportedMajorVersions": [18, 17],
+      "preferredDriver": "ODBC Driver 18 for SQL Server",
+      "wingetId": "Microsoft.msodbcsql.18"
+    }
+  },
+  "network": {
+    "deploymentMode": "local",
+    "serverAddress": "localhost",
+    "uiPort": 3002,
+    "backendPort": 8000,
+    "protocol": "http"
+  },
+  "database": {
+    "provisioningMode": "installer",
+    "type": "mssql",
+    "name": "QTracX",
+    "applicationUser": "qtracx_app",
+    "mssql": {
+      "host": "localhost",
+      "port": 1433,
+      "administratorUser": "sa",
+      "odbcDriver": "ODBC Driver 18 for SQL Server",
+      "encrypt": true,
+      "trustServerCertificate": true
+    },
+    "postgresql": {
+      "host": "localhost",
+      "port": 5432,
+      "administratorUser": "postgres"
+    }
+  },
+  "ocr": {
+    "device": "cpu",
+    "modelInstances": 1,
+    "scanWorkers": 2
+  },
+  "https": {
+    "enabled": false,
+    "certificateFile": "",
+    "privateKeyFile": ""
+  },
+  "demo": {
+    "enabled": false,
+    "timezone": "Asia/Kolkata",
+    "durationHours": 48
+  },
+  "storage": {
+    "checksheetDataDirectory": "backend/data/checksheets",
+    "logDirectory": "backend/logs"
+  }
+}

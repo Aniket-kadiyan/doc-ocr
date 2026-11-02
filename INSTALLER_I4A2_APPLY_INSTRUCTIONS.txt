@@ -1,0 +1,52 @@
+QTracX installer I4A.2 - npm compatibility fix
+================================================
+
+Cause fixed
+-----------
+The affected computer has Node.js 20.20.2 but npm 6.14.8 from the user's
+AppData directory overrides Node's bundled npm. npm 6 cannot process the
+current package-lock.json and fails while reading the dexie dependency.
+
+What this overlay changes
+-------------------------
+1. Requires npm 10 or newer as well as Node.js 20.19 or newer.
+2. Detects and runs the npm-cli.js bundled with Node.js, bypassing stale
+   user-level npm shims without deleting or upgrading the user's global npm.
+3. Uses installer modules from the acquired Git branch/ZIP after source
+   acquisition, so application setup and source stay on the same revision.
+
+Apply to the development repository
+-----------------------------------
+Extract this ZIP at the repository root and allow the installer files to be
+replaced. Run:
+
+  .\backend\.venv-gpu\Scripts\python.exe -m unittest -v `
+      installer.test_runtime_setup `
+      installer.test_bootstrap_contract `
+      installer.test_wizard_contract
+
+Push the result to the predefined deployment-readiness branch before testing
+Git-mode installation.
+
+Update the launcher on the test computer
+----------------------------------------
+Extract the same ZIP over the small launcher folder currently used to start
+installer\wizard.ps1, preserving its installer\prerequisites directory.
+
+Do not reuse C:\Qtrcx because it contains the interrupted installation. Select
+a new empty destination such as C:\QtracX-Retry. In the wizard select:
+
+  Deployment mode: Localhost only
+  Server address:  localhost
+  OCR runtime:     CPU
+
+Use the already resolved MSSQL settings. A global npm upgrade is not required.
+
+Optional npm verification on the test computer
+----------------------------------------------
+  & "C:\Program Files\nodejs\node.exe" `
+      "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" `
+      --version
+
+The result should be 10 or newer. If Node has no bundled npm CLI, the updated
+bootstrap treats Node as incomplete and installs the pinned bundled Node LTS.
