@@ -16,6 +16,8 @@ from auth_repository import (
     set_user_administrator,
     set_user_active,
     set_user_password,
+    set_user_password_by_id,
+    update_user_profile,
 )
 from auth_security import verify_password
 from database import DatabaseManager
@@ -165,6 +167,42 @@ class AuthenticationRepositoryTests(unittest.TestCase):
             self.assertIsNotNone(stored_session.revoked_at)
             self.assertEqual(user.failed_login_count, 0)
             self.assertIsNone(user.locked_until)
+
+    def test_profile_update_uses_stable_id_and_rejects_duplicate_username(self) -> None:
+        first_id = self._create_admin("first.admin")
+        self._create_admin("second.admin")
+        with self.database.session() as session:
+            record = update_user_profile(
+                session,
+                user_id=first_id,
+                username="renamed.admin",
+                display_name="Renamed Administrator",
+            )
+            self.assertEqual(record.id, first_id)
+            self.assertEqual(record.username, "renamed.admin")
+            self.assertEqual(record.display_name, "Renamed Administrator")
+
+        with self.database.session() as session:
+            with self.assertRaises(DuplicateUserError):
+                update_user_profile(
+                    session,
+                    user_id=first_id,
+                    username="SECOND.ADMIN",
+                    display_name="Duplicate",
+                )
+
+    def test_password_can_be_changed_by_stable_user_id(self) -> None:
+        user_id = self._create_admin("stable.admin")
+        with self.database.session() as session:
+            record = set_user_password_by_id(
+                session,
+                user_id=user_id,
+                password="new password",
+            )
+            self.assertEqual(record.id, user_id)
+        with self.database.session() as session:
+            user = session.get(User, user_id)
+            self.assertTrue(verify_password("new password", user.password_hash))
 
     def test_users_are_listed_without_password_data(self) -> None:
         self._create_admin("z.admin")

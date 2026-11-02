@@ -8,6 +8,16 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from auth_repository import (
+    AuthenticationRepositoryError,
+    DuplicateUserError,
+    UserNotFoundError,
+    list_users,
+    set_user_password_by_id,
+    update_user_profile,
+)
+from auth_security import AuthenticationInputError
+
 from auth_service import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -44,6 +54,15 @@ class AuthenticatedUserResponse(BaseModel):
 class LoginResponse(BaseModel):
     user: AuthenticatedUserResponse
     expires_at: datetime
+
+
+class UserProfileUpdateRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=120)
+
+
+class UserPasswordUpdateRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
 
 
 def _database_manager(request: Request) -> DatabaseManager:
@@ -106,6 +125,29 @@ def require_protected_request(
     return authenticated
 
 
+def require_administrator(
+    authenticated: AuthenticatedSession = Depends(require_protected_request),
+) -> AuthenticatedSession:
+    """Authorize management operations independently of frontend visibility."""
+
+    if "admin" not in authenticated.user.roles:
+        raise HTTPException(status_code=403, detail="Administrator access is required")
+    return authenticated
+
+
+def _management_error(error: Exception) -> HTTPException:
+    if isinstance(error, UserNotFoundError):
+        return HTTPException(status_code=404, detail="User was not found")
+    if isinstance(error, DuplicateUserError):
+        return HTTPException(
+            status_code=409,
+            detail="A user with that username already exists",
+        )
+    if isinstance(error, (AuthenticationInputError, AuthenticationRepositoryError)):
+        return HTTPException(status_code=400, detail=str(error))
+    return HTTPException(status_code=500, detail="User management operation failed")
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, request: Request, response: Response) -> LoginResponse:
     manager = _database_manager(request)
@@ -166,6 +208,83 @@ def current_user(
 ) -> AuthenticatedUserResponse:
     response.headers["Cache-Control"] = "no-store"
     return _public_user(authenticated)
+
+
+@router.get(
+    "/admin/users",
+    response_model=list[AuthenticatedUserResponse],
+    dependencies=[Depends(require_administrator)],
+)
+def admin_list_users(request: Request, response: Response) -> list[AuthenticatedUserResponse]:
+    manager = _database_manager(request)
+    try:
+        with manager.session() as session:
+            records = list_users(session)
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503, detail="Authentication service unavailable"
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return [AuthenticatedUserResponse(**record.as_public_dict()) for record in records]
+
+
+@router.patch(
+    "/admin/users/{user_id}",
+    response_model=AuthenticatedUserResponse,
+)
+def admin_update_user_profile(
+    user_id: str,
+    payload: UserProfileUpdateRequest,
+    request: Request,
+    response: Response,
+    _authenticated: AuthenticatedSession = Depends(require_administrator),
+) -> AuthenticatedUserResponse:
+    manager = _database_manager(request)
+    try:
+        with manager.session() as session:
+            record = update_user_profile(
+                session,
+                user_id=user_id,
+                username=payload.username,
+                display_name=payload.display_name,
+            )
+    except (AuthenticationInputError, AuthenticationRepositoryError) as error:
+        raise _management_error(error) from error
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503, detail="Authentication service unavailable"
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return AuthenticatedUserResponse(**record.as_public_dict())
+
+
+@router.post(
+    "/admin/users/{user_id}/password",
+    response_model=AuthenticatedUserResponse,
+)
+def admin_update_user_password(
+    user_id: str,
+    payload: UserPasswordUpdateRequest,
+    request: Request,
+    response: Response,
+    _authenticated: AuthenticatedSession = Depends(require_administrator),
+) -> AuthenticatedUserResponse:
+    manager = _database_manager(request)
+    try:
+        with manager.session() as session:
+            record = set_user_password_by_id(
+                session,
+                user_id=user_id,
+                password=payload.password,
+            )
+    except (AuthenticationInputError, AuthenticationRepositoryError) as error:
+        raise _management_error(error) from error
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503, detail="Authentication service unavailable"
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return AuthenticatedUserResponse(**record.as_public_dict())
 
 
 @router.post("/logout", status_code=204)

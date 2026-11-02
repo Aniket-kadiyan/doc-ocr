@@ -29,10 +29,12 @@ from sqlalchemy import inspect
 from auth_repository import (
     AuthenticationRepositoryError,
     create_user,
+    get_user,
     list_users,
     set_user_administrator,
     set_user_active,
     set_user_password,
+    update_user_profile,
 )
 from auth_security import AuthenticationInputError
 from config_env import load_env_files, load_runtime_config
@@ -136,6 +138,22 @@ def _run_user_command(arguments: argparse.Namespace) -> int:
                     username=arguments.username,
                     password=_prompt_password(),
                 ).as_public_dict()
+            elif arguments.user_action == "set-username":
+                user = get_user(session, arguments.username)
+                output = update_user_profile(
+                    session,
+                    user_id=user.id,
+                    username=arguments.new_username,
+                    display_name=user.display_name,
+                ).as_public_dict()
+            elif arguments.user_action == "set-display-name":
+                user = get_user(session, arguments.username)
+                output = update_user_profile(
+                    session,
+                    user_id=user.id,
+                    username=user.username,
+                    display_name=arguments.display_name,
+                ).as_public_dict()
             elif arguments.user_action == "grant-admin":
                 output = set_user_administrator(
                     session,
@@ -181,6 +199,16 @@ def _parser() -> argparse.ArgumentParser:
     ):
         action_parser = user_actions.add_parser(action)
         action_parser.add_argument("username")
+    username_parser = user_actions.add_parser(
+        "set-username", help="change the sign-in name for an existing user"
+    )
+    username_parser.add_argument("username", help="current username")
+    username_parser.add_argument("new_username")
+    display_name_parser = user_actions.add_parser(
+        "set-display-name", help="change the visible name for an existing user"
+    )
+    display_name_parser.add_argument("username")
+    display_name_parser.add_argument("display_name")
     return parser
 
 

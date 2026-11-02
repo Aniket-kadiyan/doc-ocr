@@ -152,11 +152,18 @@ Additional administration commands:
 .\.venv-gpu\Scripts\python.exe manage_auth.py user disable USERNAME
 .\.venv-gpu\Scripts\python.exe manage_auth.py user enable USERNAME
 .\.venv-gpu\Scripts\python.exe manage_auth.py user set-password USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user set-username CURRENT_USERNAME NEW_USERNAME
+.\.venv-gpu\Scripts\python.exe manage_auth.py user set-display-name USERNAME "New Display Name"
 ```
 
 The final active administrator cannot be disabled. Disabling a user or changing
 a password revokes that user's active sessions. Changing a password also clears
 the failed-login counter and any current timed lockout.
+
+The focused operator guide, including the administrator-only browser page at
+`/user-management`, is available in `docs/USER_MANAGEMENT.md`. The browser page
+can update only existing usernames, display names, and passwords; it exposes no
+account-creation endpoint or control.
 
 ## Test this stage
 
