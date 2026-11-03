@@ -195,6 +195,9 @@ class FeatureControlFrame:
     warnings: list[str] = field(default_factory=list)
     #: Where the leader attaches, when one was found.
     leader_point: tuple[float, float] | None = None
+    #: Clockwise screen angle of the frame's reading direction: 0, or -90 for
+    #: a frame drawn on its side reading up the page.
+    rotation: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         x, y, w, h = self.bbox
@@ -219,6 +222,7 @@ class FeatureControlFrame:
             "composite_id": self.composite_id,
             "confidence": round(float(self.confidence), 4),
             "warnings": list(self.warnings),
+            "rotation": self.rotation,
         }
         if self.leader_point:
             out["leader_point"] = {
@@ -386,14 +390,40 @@ def find_frames(
 
     Returns boxes in the caller's coordinate space.
     """
-    cfg = config or get_config()
     if cv2 is None:
         return []
-    gray = to_gray(image)
+    return find_frames_in(
+        frame_binary(image),
+        transform=transform,
+        config=config,
+        reference_edge=reference_edge,
+    )
+
+
+def frame_binary(image: Image.Image) -> np.ndarray:
+    """The ink ``find_frames`` looks for rules in.
+
+    The threshold is most of the finder's cost, and it does not care which
+    way up the page is, so a caller looking for frames both ways round
+    computes it once and turns it.
+    """
     # No despeckle: its floor is 2% of the largest component, which on a page
     # is the part outline, and that erased whole frames (see ``binarize``).
     # The rule morphology below ignores specks on its own.
-    binary = binarize(gray, clean=False)
+    return binarize(to_gray(image), clean=False)
+
+
+def find_frames_in(
+    binary: np.ndarray,
+    *,
+    transform: Transform = IDENTITY,
+    config: GdtConfig | None = None,
+    reference_edge: int | None = None,
+) -> list[tuple[float, float, float, float]]:
+    """``find_frames`` over ink already thresholded by ``frame_binary``."""
+    cfg = config or get_config()
+    if cv2 is None:
+        return []
     h, w = binary.shape[:2]
     if h < cfg.frame_min_height_px or w < cfg.frame_min_width_px:
         return []
@@ -1701,6 +1731,34 @@ def parse_frames(
     detected = find_frames(
         image, transform=IDENTITY, config=cfg, reference_edge=reference_edge
     )
+    return parse_boxes(
+        image,
+        detected,
+        ocr_fn=ocr_fn,
+        transform=transform,
+        page=page,
+        config=cfg,
+        reference_edge=reference_edge,
+    )
+
+
+def parse_boxes(
+    image: Image.Image,
+    detected: Sequence[tuple[float, float, float, float]],
+    *,
+    ocr_fn: OcrFn | None = None,
+    transform: Transform = IDENTITY,
+    page: int = 1,
+    config: GdtConfig | None = None,
+    reference_edge: int | None = None,
+) -> list[FeatureControlFrame]:
+    """Read the frames in boxes ``find_frames`` proposed over ``image``.
+
+    Split from ``parse_frames`` so a page found tile by tile is read once:
+    a frame in the overlap of two tiles is proposed by both, and reading it
+    twice doubled its OCR.
+    """
+    cfg = config or get_config()
     if not detected:
         return []
     min_height = max(

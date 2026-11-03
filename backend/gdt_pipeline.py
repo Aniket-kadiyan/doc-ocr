@@ -275,7 +275,11 @@ def _unrotate_box(
 
 
 def tiles_for(
-    width: int, height: int, *, config: GdtConfig | None = None
+    width: int,
+    height: int,
+    *,
+    config: GdtConfig | None = None,
+    overlap: int | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """Cover a page with overlapping tiles.
 
@@ -285,7 +289,7 @@ def tiles_for(
     """
     cfg = config or get_config()
     size = max(256, cfg.tile_px)
-    overlap = max(32, cfg.tile_overlap_px)
+    overlap = max(32, cfg.tile_overlap_px if overlap is None else overlap)
     if width <= size and height <= size:
         return [(0, 0, width, height)]
 
@@ -305,6 +309,36 @@ def tiles_for(
             break
         y += step
     return out
+
+
+#: Frame tiles overlap by this fraction of the page's short edge, so a frame
+#: on a seam is whole in some tile. A three-cell frame on BS1801025.048b is
+#: 0.105 of the edge.
+FRAME_TILE_OVERLAP_FRAC = 0.15
+
+#: A proposal this close to a tile's inner edge may have been cut by it.
+SEAM_PX = 3
+
+
+def _whole_proposals(
+    proposals: Sequence[tuple[tuple[float, float, float, float], bool]],
+) -> list[tuple[float, float, float, float]]:
+    """One box per proposed frame, preferring a whole one to a cut one.
+
+    The same frame proposed by two tiles is kept once. A box cut by a seam
+    gives way to a box from another tile that holds it; with nothing holding
+    it, it is still the best proposal there is and is kept.
+    """
+    from gdt_detect import iou
+
+    kept: list[tuple[float, float, float, float]] = []
+    for box, cut in sorted(proposals, key=lambda p: p[1]):
+        if any(iou(box, other) >= 0.9 for other in kept):
+            continue
+        if cut and any(_mostly_inside(box, other, share=0.9) for other in kept):
+            continue
+        kept.append(box)
+    return kept
 
 
 # ── The pass ─────────────────────────────────────────────────────────────────
@@ -361,6 +395,7 @@ def analyze_page(
     config: GdtConfig | None = None,
     detect_loose_symbols: bool = True,
     deskew: bool = True,
+    read_vertical: bool = False,
     progress_callback: Callable[..., None] | None = None,
 ) -> PageResult:
     """Run the whole GD&T pass over one rendered page.
@@ -451,39 +486,58 @@ def analyze_page(
 
     all_symbols: list[Detection] = []
 
-    frame_tiles = tiles_for(work.width, work.height, config=cfg)
+    # Tiles only *propose* frames; each proposal is read once, on the whole
+    # page. A frame straddling a seam is cut in one tile and whole in the
+    # next, and the 180px overlap the glyph pass needs is shorter than a
+    # frame: on BS1801025.048b both of a pair of 307px frames crossed one
+    # seam, and one came back without its datum while the other was lost.
+    # The frame overlap is therefore a fraction of the page, and a cut box
+    # gives way to the whole one; reading proposals once keeps the larger
+    # overlap from reading a frame two or four times.
+    #
+    # Frames drawn on their side are proposed from the same ink turned a
+    # quarter clockwise. The rule finder only knows horizontal rules, so a
+    # frame standing beside a vertical dimension (BS1801025.048b has two)
+    # was never proposed, and the text detector published its tolerance
+    # alone — "Ø0.02" with no symbol or datum. Only the bottom-to-top reading
+    # is tried; that is how a drawing aligns vertical text.
+    reference_edge = min(work.width, work.height)
+    frame_tiles = tiles_for(
+        work.width,
+        work.height,
+        config=cfg,
+        overlap=max(cfg.tile_overlap_px, int(reference_edge * FRAME_TILE_OVERLAP_FRAC)),
+    )
     frame_tile_total = len(frame_tiles)
     progress(
         f"Prepared {frame_tile_total} GD&T frame detection tiles",
         0,
         frame_tile_total,
     )
+    upright: list[tuple[tuple[float, float, float, float], bool]] = []
+    turned: list[tuple[tuple[float, float, float, float], bool]] = []
     for index, (tx, ty, tw, th) in enumerate(frame_tiles):
         progress(
             f"Detecting GD&T frames in tile {index + 1} of {frame_tile_total}",
             index,
             frame_tile_total,
         )
-        tile = work.crop((tx, ty, tx + tw, ty + th))
-        transform = Transform(offset_x=float(tx), offset_y=float(ty))
+        inner = (tx > 0, ty > 0, tx + tw < work.width, ty + th < work.height)
         try:
-            frames = fcf_parse.parse_frames(
-                tile,
-                ocr_fn=ocr_fn,
-                transform=transform,
-                page=page,
-                config=cfg,
-                reference_edge=min(work.width, work.height),
-            )
-            for frame in frames:
-                frame.bbox = unscale(frame.bbox)
-                for cell in frame.compartments:
-                    cell.bbox = unscale(cell.bbox)
-                if frame.symbol is not None:
-                    frame.symbol.bbox = unscale(frame.symbol.bbox)
-                    frame.symbol.frame_id = frame.id
-                    all_symbols.append(frame.symbol)
-            result.frames.extend(frames)
+            binary = fcf_parse.frame_binary(work.crop((tx, ty, tx + tw, ty + th)))
+            for box in fcf_parse.find_frames_in(
+                binary, config=cfg, reference_edge=reference_edge
+            ):
+                upright.append(_tile_proposal(box, tx, ty, tw, th, inner))
+            if read_vertical:
+                for box in fcf_parse.find_frames_in(
+                    _np.rot90(binary, k=-1).copy(),
+                    config=cfg,
+                    reference_edge=reference_edge,
+                ):
+                    box = _turn_back(box, th)
+                    upright_box, cut = _tile_proposal(box, tx, ty, tw, th, inner)
+                    turned.append((_turn(upright_box, work.height), cut))
         except Exception as exc:  # noqa: BLE001
             result.errors.append(
                 {
@@ -499,6 +553,43 @@ def analyze_page(
             index + 1,
             frame_tile_total,
         )
+
+    for page_image, proposals, rotation in (
+        (work, upright, 0),
+        (work.transpose(Image.Transpose.ROTATE_270) if turned else None, turned, -90),
+    ):
+        if not proposals:
+            continue
+        try:
+            frames = fcf_parse.parse_boxes(
+                page_image,
+                _whole_proposals(proposals),
+                ocr_fn=ocr_fn,
+                page=page,
+                config=cfg,
+                reference_edge=reference_edge,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(
+                {
+                    "stage": "feature_control_frames",
+                    "rotation": rotation,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(limit=3),
+                }
+            )
+            continue
+        for frame in frames:
+            if rotation:
+                _turn_frame_back(frame, work.height)
+            frame.bbox = unscale(frame.bbox)
+            for cell in frame.compartments:
+                cell.bbox = unscale(cell.bbox)
+            if frame.symbol is not None:
+                frame.symbol.bbox = unscale(frame.symbol.bbox)
+                frame.symbol.frame_id = frame.id
+                all_symbols.append(frame.symbol)
+        result.frames.extend(frames)
 
     if detect_loose_symbols:
         for index, (tx, ty, tw, th) in enumerate(tiles_for(base.width, base.height, config=cfg)):
@@ -825,6 +916,12 @@ def _plausible(frame: FeatureControlFrame) -> bool:
     if tolerance.state == fcf_parse.PRESENT and tolerance.value is not None:
         if float(tolerance.value) > MAX_PLAUSIBLE_TOLERANCE:
             return False
+    if frame.rotation:
+        # Turned on its side, a title-block row or a hatched section edge is
+        # as boxy as a frame: across the Docs sheets the turned pass proposed
+        # a dozen of those, each with an unreadable or whole-number
+        # "tolerance" or no symbol. Every real one had both.
+        return symbol_sure and tolerance_read
     return symbol_sure or tolerance_read
 
 
@@ -862,13 +959,26 @@ def scan_regions(
         config=config,
         detect_loose_symbols=False,
         deskew=deskew,
+        read_vertical=True,
         progress_callback=progress_callback,
     )
+    found = [
+        frame for frame in result.frames if _plausible(frame) and not frame.rotation
+    ]
+    # A horizontal frame turned on its side shows its dividers as rules; what
+    # the turned pass makes of one — a sliver between two dividers, inside
+    # the frame — is never a second frame.
+    found.extend(
+        frame
+        for frame in result.frames
+        if frame.rotation
+        and _plausible(frame)
+        and not any(_mostly_inside(frame.bbox, other.bbox) for other in found)
+    )
+
     groups: dict[str, list[FeatureControlFrame]] = {}
     order: list[str] = []
-    for frame in result.frames:
-        if not _plausible(frame):
-            continue
+    for frame in found:
         key = frame.composite_id or frame.id
         if key not in groups:
             groups[key] = []
@@ -889,6 +999,7 @@ def scan_regions(
             else "Feature Control Frame"
         )
         reasons = [r for r in (_frame_needs_review(f) for f in frames) if r]
+        upright = not lead.rotation
         regions.append(
             {
                 "candidate_id": f"fcf-{key}",
@@ -904,8 +1015,8 @@ def scan_regions(
                 "category": SCAN_REGION_TYPE,
                 "subtype": name,
                 "label": f"GD&T {name}" if len(frames) == 1 else "GD&T Composite",
-                "orientation": "horizontal",
-                "rotation": 0,
+                "orientation": "vertical" if upright is False else "horizontal",
+                "rotation": -90 if upright is False else 0,
                 "needs_review": bool(reasons),
                 "recognized": True,
                 "boundary_review": False,
@@ -926,7 +1037,83 @@ def scan_regions(
                 "gdt": {"frames": [f.to_dict() for f in frames]},
             }
         )
+        if not upright:
+            # Read bottom to top: the frame's own top-left is the box's
+            # bottom-left, and its length runs up the page.
+            regions[-1]["oriented_box"] = {
+                "x": round(x0, 2),
+                "y": round(y1, 2),
+                "width": round(y1 - y0, 2),
+                "height": round(x1 - x0, 2),
+                "rotation": -90,
+            }
     return regions
+
+
+def _mostly_inside(
+    inner: tuple[float, float, float, float],
+    outer: tuple[float, float, float, float],
+    *,
+    share: float = 0.3,
+) -> bool:
+    ix, iy, iw, ih = inner
+    ox, oy, ow, oh = outer
+    overlap_w = max(0.0, min(ix + iw, ox + ow) - max(ix, ox))
+    overlap_h = max(0.0, min(iy + ih, oy + oh) - max(iy, oy))
+    return overlap_w * overlap_h >= share * max(iw * ih, 1.0)
+
+
+def _turn(
+    box: tuple[float, float, float, float], height: float
+) -> tuple[float, float, float, float]:
+    """A box on a page of ``height``, on that page turned a quarter clockwise."""
+    x, y, w, h = box
+    return (height - (y + h), x, h, w)
+
+
+def _turn_back(
+    box: tuple[float, float, float, float], height: float
+) -> tuple[float, float, float, float]:
+    """A box on the page turned a quarter clockwise, on the page as given."""
+    x, y, w, h = box
+    return (y, height - (x + w), h, w)
+
+
+def _turn_frame_back(frame: FeatureControlFrame, height: float) -> None:
+    """Put a frame read on the turned page back on the page as given."""
+    frame.rotation = -90
+    frame.bbox = _turn_back(frame.bbox, height)
+    for cell in frame.compartments:
+        cell.bbox = _turn_back(cell.bbox, height)
+    if frame.symbol is not None:
+        frame.symbol.bbox = _turn_back(frame.symbol.bbox, height)
+    if frame.leader_point is not None:
+        lx, ly = frame.leader_point
+        frame.leader_point = (ly, height - lx)
+
+
+def _tile_proposal(
+    box: tuple[float, float, float, float],
+    tx: int,
+    ty: int,
+    tw: int,
+    th: int,
+    inner: tuple[bool, bool, bool, bool],
+) -> tuple[tuple[float, float, float, float], bool]:
+    """A box found in a tile, on the page, and whether a seam may have cut it.
+
+    ``inner`` says which of the tile's left, top, right and bottom edges are
+    seams rather than the page's own edge.
+    """
+    x, y, w, h = box
+    cut = (
+        (inner[0] and x <= SEAM_PX)
+        or (inner[1] and y <= SEAM_PX)
+        or (inner[2] and x + w >= tw - SEAM_PX)
+        or (inner[3] and y + h >= th - SEAM_PX)
+    )
+    return (x + tx, y + ty, w, h), cut
+
 
 
 def _centre_inside(inner: dict[str, Any], outer: dict[str, Any]) -> bool:
@@ -1030,6 +1217,8 @@ def attach_adjacent_text(
     a value beside a frame is its own callout.
     """
     for region in frame_regions:
+        if region.get("orientation") == "vertical":
+            continue  # the reach below is measured across a horizontal frame
         box = region["bbox"]
         fx0, fy0 = float(box["x"]), float(box["y"])
         fx1, fy1 = fx0 + float(box["width"]), fy0 + float(box["height"])
