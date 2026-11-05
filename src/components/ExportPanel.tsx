@@ -52,16 +52,43 @@ interface ExportPanelProps {
   scanCandidates?: readonly ScanCandidate[];
 }
 
-async function loadCompanyLogo(): Promise<string> {
-  const response = await fetch("/senior_flexonics_logo.jpeg");
-  if (!response.ok) throw new Error("Could not load the Senior Flexonics logo.");
-  const blob = await response.blob();
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Could not read the company logo."));
-    reader.readAsDataURL(blob);
-  });
+// async function loadCompanyLogo(): Promise<string> {
+//   const response = await fetch("/senior_flexonics_logo.jpeg");
+//   if (!response.ok) throw new Error("Could not load the Senior Flexonics logo.");
+//   const blob = await response.blob();
+//   return await new Promise<string>((resolve, reject) => {
+//     const reader = new FileReader();
+//     reader.onload = () => resolve(String(reader.result));
+//     reader.onerror = () => reject(new Error("Could not read the company logo."));
+//     reader.readAsDataURL(blob);
+//   });
+// }
+
+async function loadCompanyLogo(): Promise<string | undefined> {
+  try {
+    const response = await fetch("/ups_logo.png");
+
+    if (!response.ok) return undefined;
+
+    const blob = await response.blob();
+
+    return await new Promise<string | undefined>((resolve) => {
+      const reader = new FileReader();
+
+      reader.onload = () =>
+        resolve(
+          typeof reader.result === "string"
+            ? reader.result
+            : undefined
+        );
+
+      reader.onerror = () => resolve(undefined);
+
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 export function ExportPanel({

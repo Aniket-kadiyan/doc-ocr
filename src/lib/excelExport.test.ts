@@ -86,7 +86,7 @@ describe("inspection workbook", () => {
     expect(worksheet).toBeDefined();
     if (!worksheet) throw new Error("Checksheet worksheet was not created.");
 
-    expect(worksheet.getCell("C1").value).toBe("Senior Flexonics");
+    expect(worksheet.getCell("C1").value).toBe("UPS");
     expect(worksheet.getCell("A2").value).toBe("Punch Inspection");
     expect(worksheet.getCell("B4").value).toBe("Drive Bracket");
     expect(worksheet.getCell("F4").value).toBe("DB-1042");

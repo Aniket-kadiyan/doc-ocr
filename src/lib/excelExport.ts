@@ -12,7 +12,7 @@ import type { PageReferenceTable } from "@/types/referencePoint";
 
 export const EXCEL_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-export const DEFAULT_COMPANY_NAME = "Senior Flexonics";
+export const DEFAULT_COMPANY_NAME = "UPS";
 
 export interface ExcelExportOptions {
   fileName: string;
