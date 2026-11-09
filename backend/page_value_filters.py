@@ -110,6 +110,14 @@ SINGLE_CHARACTER_VALUE = _compile(r"^[A-Z0-9]$")
 # printed beside it before anything is excluded.
 BARE_IDENTIFIER_NUMBER = _compile(r"^\d{6,}$")
 SUSPICIOUS_SINGLE_VALUE = _compile(r"^[018]$")
+# A surface-finish requirement: an ISO roughness grade ("N7", N1 to N12) or a
+# roughness parameter with its limit ("Ra 3.2", "Rzmax35"). The labelling
+# rules already call these Surface Finish, but no grammar below accepted
+# them, so a correctly read "N7" was rejected as an incomplete value.
+SURFACE_FINISH_VALUE = _compile(
+    r"^(?:N\s?(?:1[0-2]|[1-9])"
+    r"|(?:RA|RZ|RQ|RMAX|RZ\s*MAX)\s*\d+(?:\.\d+)?(?:\s*(?:MAX|MIN))?)$"
+)
 
 _NUMBER = r"(?:\d+(?:\.\d+)?|\.\d+)"
 # Degrees, then optional minutes and seconds. The minute mark is often lost:
@@ -462,6 +470,8 @@ def is_complete_engineering_value(text: str) -> bool:
     if _STANDALONE_DEPTH_VALUE.fullmatch(value):
         return True
     if _DIAMETRAL_TOLERANCE_WITH_DATUM.fullmatch(value):
+        return True
+    if SURFACE_FINISH_VALUE.fullmatch(value):
         return True
     if _is_dual_unit_value(value):
         return True

@@ -149,20 +149,20 @@ def test_every_callout_on_a_real_vector_drawing_is_read_exactly():
     # The twelve callouts this drawing carries, exactly as the benchmark
     # fixture lists them.
     assert {
-        "60°±0°30", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
-        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30",
+        "60°±0°30'", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
+        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30'",
         "Ø23.5-0.05", "Ø30-0.2",
     } <= set(by_text)
 
     assert by_text["Ø33-0.05-0.1"]["type"] == "diameter"
-    assert by_text["60°±0°30"]["type"] == "angle"
+    assert by_text["60°±0°30'"]["type"] == "angle"
     assert by_text["R10±2"]["category"] == "Radius"
     # Every dimension is exact, so none of them is sent for review. Only a
     # bare number with no mark saying what it measures is, and on this sheet
     # those are title-block codes, not callouts.
     dimensions = [
-        "60°±0°30", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
-        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30",
+        "60°±0°30'", "Ø33-0.05-0.1", "15-0.2", "R2±0.2", "70±0.2",
+        "114.5±0.05", "R2±0.5", "R10±2", "Ø30±0.2", "5°±0°30'",
         "Ø23.5-0.05", "Ø30-0.2",
     ]
     assert not any(by_text[value]["needs_review"] for value in dimensions)
@@ -236,7 +236,7 @@ def test_symbol_recovery_adds_nothing_when_the_text_already_has_it():
     assert "Ø33-0.05-0.1" in values
     # Every radius and angle on this sheet stays what it is.
     assert "R2±0.2" in values and "R10±2" in values
-    assert "60°±0°30" in values
+    assert "60°±0°30'" in values
     assert not any(value.startswith("ØR") for value in values)
 
 
@@ -695,3 +695,110 @@ def test_a_picture_on_a_vector_page_is_read_for_the_notes_inside_it(monkeypatch)
     seen.clear()
     assert _image_area_notes(covered, 0, page_text_runs(covered, 0, dpi=144)[0], dpi=144) == []
     assert seen == []
+
+
+def test_a_roughness_grade_is_a_callout_though_it_has_one_digit():
+    from pdf_text_layer import is_callout
+
+    assert is_callout("N7") and is_callout("N10") and is_callout("Ra 3.2")
+    assert not is_callout("7") and not is_callout("NOTE 7")
+
+
+def test_a_symbol_font_embedded_as_a_subset_is_still_decoded():
+    # An embedded subset carries a per-file tag: P0012 names its AIGDT face
+    # "ADSINV+AIGDT", and every Ø on the sheet came out as the letter "n".
+    assert _decode_symbols("n", "ADSINV+AIGDT") == "Ø"
+    assert _decode_symbols("P", "ABCDEF+AIGDT") == "Ø"
+    assert _decode_symbols("n", "ABCDEF+ArialMT") == "n"
+
+
+def test_a_fits_half_size_deviation_stays_inside_its_bracket():
+    # "10 H7 (+0.02)" on P0012: the deviation is set half size, and the size
+    # rule split the callout into "10H7(", "+0.02" and ")".
+    groups = group_runs(
+        [
+            run("10", 100, 100, 52, 40, size=54.4),
+            run("H", 169, 100, 31, 39, size=54.4),
+            run("7", 207, 100, 25, 39, size=54.4),
+            run("(", 248, 94, 13, 51, size=54.4),
+            run("+", 260, 97, 13, 13, size=26.9),
+            run("0.02", 277, 94, 51, 20, size=26.9),
+            run(")", 333, 94, 13, 51, size=54.4),
+        ],
+        PAGE,
+    )
+    assert len(groups) == 1
+    assert groups[0]["text"].replace(" ", "") == "10H7(+0.02)"
+
+
+def _digit_sheet(*, arrowed: bool, flag: bool = False):
+    """A lone "8" over a horizontal line, as a dimension or as a label."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (800, 400), "white")
+    draw = ImageDraw.Draw(image)
+    # The digit: two stacked rings inside the box (380, 150)-(420, 200).
+    draw.ellipse((388, 152, 412, 174), outline="black", width=4)
+    draw.ellipse((386, 172, 414, 198), outline="black", width=4)
+    draw.line((200, 212, 600, 212), fill="black", width=3)
+    if arrowed:
+        for tip, back in ((200, 230), (600, 570)):
+            draw.polygon([(tip, 212), (back, 205), (back, 219)], fill="black")
+        for x in (200, 600):
+            draw.line((x, 120, x, 300), fill="black", width=3)
+    if flag:
+        draw.polygon([(400, 110), (350, 211), (450, 211)], outline="black", width=4)
+    return image, (380.0, 150.0, 420.0, 200.0)
+
+
+def test_a_lone_digit_on_an_arrowed_line_is_a_dimension():
+    from pdf_text_layer import _sits_on_dimension_line
+
+    image, bounds = _digit_sheet(arrowed=True)
+    assert _sits_on_dimension_line(image, bounds, 0.0)
+
+
+def test_a_lone_digit_over_a_plain_rule_or_in_a_flag_is_not():
+    from pdf_text_layer import _sits_on_dimension_line
+
+    # A zone label over the border, a cell over a table rule.
+    image, bounds = _digit_sheet(arrowed=False)
+    assert not _sits_on_dimension_line(image, bounds, 0.0)
+    # A note flag: its triangle stands on a dimension line, but the digit is
+    # the flag's tag.
+    image, bounds = _digit_sheet(arrowed=True, flag=True)
+    assert not _sits_on_dimension_line(image, bounds, 0.0)
+
+
+def test_a_grid_without_words_is_not_a_table(monkeypatch):
+    import page_layout
+    from page_layout import LayoutBox
+    from pdf_text_layer import native_table_masks
+
+    box = LayoutBox(0, 0, 400, 200)
+    monkeypatch.setattr(page_layout, "detect_table_masks", lambda image: (box,))
+    labelled = [run("Weight.:", 10, 10, 80, 20), run("2.021", 100, 10, 50, 20), run("kg", 160, 10, 20, 20)]
+    chamfers = [run("0.3", 10, 10, 30, 20), run("±0.1", 50, 10, 40, 20), run("×45°", 100, 10, 40, 20)]
+    assert native_table_masks(None, labelled) == [box.to_dict()]
+    assert native_table_masks(None, chamfers) == []
+
+
+SINGLE_DIGITS = DOCS / "Drawings" / "P0012.pdf"
+
+
+@pytest.mark.skipif(not SINGLE_DIGITS.exists(), reason="sample drawing not present")
+def test_p0012_balloons_its_single_digit_and_nothing_in_the_title_block():
+    result = text_layer_regions(
+        SINGLE_DIGITS.read_bytes(), 0, dpi=250.0, recover_symbols=False, read_frames=False
+    )
+    texts = [region["text"] for region in result["regions"]]
+    review = {region["text"] for region in result["regions"] if region.get("needs_review")}
+    assert "8" in texts
+    # The sheet writes Ø as text, so its plain numbers on arrowed dimension
+    # lines are linear values, ballooned rather than held for review.
+    assert not review & {"8", "45", "25", "18", "20", "15", "50"}
+    assert "10H7(+0.02)" in texts and texts.count("Ø50h7(-0.03)") == 2
+    assert "Ø62" in texts
+    in_table = {item["text"] for item in result["excluded"] if item["rule"] == "pdf_text_in_table"}
+    assert {"2.021kg", "P0012"} <= in_table
+    assert "2.021kg" not in texts and "P0012" not in texts

@@ -93,7 +93,9 @@ class TextRun:
 
 
 def _decode_symbols(char: str, font: str) -> str:
-    if font in SYMBOL_FONTS:
+    # An embedded subset is named "ADSINV+AIGDT": the six-letter tag before
+    # the "+" is per file, the face after it is what the glyph codes follow.
+    if font.rpartition("+")[2] in SYMBOL_FONTS:
         return SYMBOL_GLYPHS.get(char, char)
     return CONTROL_GLYPHS.get(char, char)
 
@@ -438,11 +440,16 @@ def is_callout(text: str) -> bool:
     "-0.5" by themselves against a step. They are published for review,
     because a deviation with nothing beside it is worth a second look.
     """
+    from page_value_filters import SURFACE_FINISH_VALUE
     from segment_quality import has_dimension_value
 
     stripped = without_marks(text).strip()
     if _GENERAL_TOLERANCE_RE.search(stripped):
         return False
+    # "N7" is one digit, but the grade letter says what it is: a roughness
+    # requirement, not a note number.
+    if SURFACE_FINISH_VALUE.fullmatch(stripped):
+        return True
     if not has_dimension_value(stripped) and not _SIGNED_ALONE_RE.match(stripped):
         return False
     digits = sum(character.isdigit() for character in stripped)
@@ -734,8 +741,15 @@ def group_runs(
                 bracket = _BRACKET_RE.fullmatch(run.text.strip()) or _BRACKET_RE.fullmatch(
                     run_group[-1].text.strip()
                 )
-                if gap <= (3.0 if bracket else 1.2) * line and _comparable_sizes(
-                    run_group[-1], run
+                # Inside an open bracket a size change is the bracket's own
+                # content: a fit's deviation is set half size, "10 H7 (+0.02)"
+                # and "Ø50 h7 (-0.03)", and splitting it there left "10H7(",
+                # "+0.02" and ")" as three callouts. Two limits stacked in
+                # one bracket overlap each other and are not joined this way.
+                opened = "".join(r.text for r in run_group)
+                in_bracket = opened.count("(") > opened.count(")") and gap >= -0.2 * line
+                if gap <= (3.0 if bracket else 1.2) * line and (
+                    in_bracket or _comparable_sizes(run_group[-1], run)
                 ):
                     run_group.append(run)
                 else:
@@ -926,6 +940,41 @@ def _render_page(pdf: Any, page_index: int, dpi: float) -> Any:
     return document[page_index].render(scale=dpi / 72.0).to_pil().convert("RGB")
 
 
+# One digit and nothing else: a note number, a zone label, a flag's tag, or
+# a dimension, which only the drawing around it can tell apart.
+_LONE_DIGIT_RE = re.compile(r"\d")
+
+#: A grid holding fewer text runs than this, or no word at all, is part of a
+#: view, not a table: the raster detector also rules a hatched section or a
+#: pair of boxed chamfers ("0.3±0.1×45°") as a grid, but every title block,
+#: revision list and spec table in Docs holds dozens of runs and labels them.
+TABLE_MIN_TEXT_RUNS = 3
+
+
+def native_table_masks(page_image: Any, runs: list[TextRun]) -> list[dict[str, float]]:
+    """
+    Tables on a vector page, wherever they sit on the sheet.
+
+    The ruled-grid detector the scan route uses finds them on the render; the
+    text layer then vetoes a grid that holds almost no text, which is what
+    the detector cannot see.
+    """
+    from page_layout import detect_table_masks
+
+    masks: list[dict[str, float]] = []
+    for box in detect_table_masks(page_image):
+        inside = [
+            run.text
+            for run in runs
+            if run.text.strip()
+            and box.x <= run.x + run.width / 2 <= box.x1
+            and box.y <= run.y + run.height / 2 <= box.y1
+        ]
+        if len(inside) >= TABLE_MIN_TEXT_RUNS and any(_WORD_RE.search(text) for text in inside):
+            masks.append(box.to_dict())
+    return masks
+
+
 def text_layer_regions(
     pdf: Any,
     page_index: int = 0,
@@ -944,6 +993,8 @@ def text_layer_regions(
     """
     from dimension_compose import compose_engineering_dimension
     from feature_classifier import classify_feature
+    from page_layout import detect_drawing_border
+    from page_value_filters import candidate_is_in_table, is_sheet_frame_label
     from symbol_vision import DetectedSymbols
 
     runs, size, fonts = page_text_runs(pdf, page_index, dpi=dpi)
@@ -971,14 +1022,45 @@ def text_layer_regions(
     note_regions, text_blocks, consumed, page_image = _native_note_regions(
         pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
     )
-    regions.extend(note_regions)
     callout_runs = [run for index, run in enumerate(runs) if index not in consumed]
+
+    if page_image is None:
+        page_image = _render_page(pdf, page_index, dpi)
+    table_masks = native_table_masks(page_image, runs)
+    # Boilerplate printed outside the drawing border is not a note on the
+    # part, however much it reads like one.
+    border = detect_drawing_border(page_image)
+    for note in note_regions:
+        if border is None or candidate_is_in_table(note["bbox"], [border.to_dict()]):
+            regions.append(note)
+        else:
+            excluded.append(
+                {
+                    "text": note.get("text", ""),
+                    "bbox": note["bbox"],
+                    "rule": "pdf_text_outside_border",
+                    "reason": "Native PDF text sits outside the drawing border",
+                }
+            )
+    writes_marks = any(mark in run.text for run in runs for mark in "Ø⌀")
 
     for group in group_runs(callout_runs, size):
         raw = group["text"]
         composed = compose_engineering_dimension(raw, None, DetectedSymbols())
         text = (composed.text or "").strip() or raw.strip()
         bbox, oriented = _boxes_from_corners(group["corners"])
+        # Title blocks, revision lists and spec tables sit along any edge of
+        # the sheet. Their numbers are bookkeeping, not inspection values.
+        if candidate_is_in_table(bbox, table_masks):
+            excluded.append(
+                {
+                    "text": text,
+                    "bbox": bbox,
+                    "rule": "pdf_text_in_table",
+                    "reason": "Native PDF text sits inside a table or title block",
+                }
+            )
+            continue
         if not any(character.isdigit() for character in text):
             excluded.append(
                 {
@@ -1026,7 +1108,11 @@ def text_layer_regions(
                         ]
                     )
         held_back = False
-        if not is_callout(text):
+        if not is_callout(text) and not (
+            _LONE_DIGIT_RE.fullmatch(text)
+            and not is_sheet_frame_label(bbox, size, text)
+            and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
+        ):
             if not _still_a_measurement(group["runs"], text):
                 excluded.append(
                     {
@@ -1041,6 +1127,16 @@ def text_layer_regions(
             # than silently discarded. It cannot be an OCR hallucination.
             held_back = True
         review = held_back or is_bare_number(text)
+        if (
+            review
+            and not held_back
+            and writes_marks
+            and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
+        ):
+            # A bare number is suspect because the sheet may have drawn its
+            # Ø as geometry. A sheet that writes Ø as text has not, so a
+            # number on an arrowed dimension line is a plain linear value.
+            review = False
         if review and not held_back and recover_symbols:
             # A number with no mark has probably lost one the drawing drew
             # instead of writing: "1 × 45°" reaches the text layer as "1" and
@@ -1514,6 +1610,203 @@ def _levelled_crop(
     if abs(angle) < 1.0:
         return crop
     return crop.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor="white")
+
+
+def _arrowhead_on_run(
+    ink: Any, row: int, start: int, stop: int, height: float
+) -> bool:
+    """
+    Whether the horizontal line through ``row`` swells into an arrowhead.
+
+    An arrowhead is a short stretch of the line that is several line widths
+    thick, about as thick above the line as below it, and widest at one end.
+    A glyph touching the line swells it on one side only; a crossing
+    extension line or table rule is far thicker than an arrowhead; a circle
+    or a triangle's corner is widest in the middle.
+    """
+    import numpy as np
+
+    columns = ink[:, start:stop]
+    above = np.zeros(stop - start, dtype=int)
+    below = np.zeros(stop - start, dtype=int)
+    for offset in range(stop - start):
+        column = columns[:, offset]
+        up = row
+        while up > 0 and column[up - 1]:
+            up -= 1
+        down = row
+        while down + 1 < len(column) and column[down + 1]:
+            down += 1
+        above[offset] = row - up
+        below[offset] = down - row
+    inked = columns[row].astype(bool)
+    thickness = np.where(inked, above + below + 1, 0)
+    # A line, not a row of glyphs that the gap bridging strung together:
+    # mostly inked, and mostly a hairline where it is.
+    thin = inked & (thickness <= max(4.0, 0.2 * height))
+    if inked.mean() < 0.6 or thin.sum() < 0.6 * inked.sum():
+        return False
+    # The lower quartile: long arrowheads drag a median up off the line.
+    line_width = float(np.percentile(thickness[thin], 25))
+    swollen = (
+        (thickness >= max(3.0, 2.5 * line_width))
+        & (thickness <= height)
+        & (np.minimum(above, below) >= 1)
+        & (np.minimum(above, below) * 2 >= np.maximum(above, below))
+    )
+    def walk(peak: int, step: int) -> int:
+        """Columns from the peak until the swelling has thinned to the line."""
+        floor = max(line_width + 1.0, 0.45 * thickness[peak])
+        index, distance = peak, 0
+        while 0 <= index + step < len(thickness) and distance <= 1.5 * height:
+            index += step
+            distance += 1
+            # A crossing extension line ends the walk: arrows meet them.
+            if thickness[index] > height or thickness[index] <= floor:
+                break
+        return distance
+
+    # The base of an arrowhead drops straight back to the line; its sides
+    # taper to the tip. Two arrows meeting base to base are still two.
+    abrupt = max(3.0, 0.08 * height)
+    for peak in np.flatnonzero(swollen):
+        if peak > 0 and thickness[peak - 1] > thickness[peak]:
+            continue
+        if peak + 1 < len(thickness) and thickness[peak + 1] > thickness[peak]:
+            continue
+        base, tip = sorted((walk(peak, -1), walk(peak, 1)))
+        if base <= abrupt and tip >= max(4.0, 2.0 * base, 0.1 * height) and tip <= 1.5 * height:
+            return True
+    return False
+
+
+def _sits_on_dimension_line(
+    page_image: Any, bounds: tuple[float, float, float, float], angle: float
+) -> bool:
+    """
+    Whether a text group is the value of a dimension line beside it.
+
+    A lone digit is usually a note number, a zone label, a table cell or the
+    tag in a triangle or a circle. It is a dimension when a line parallel to
+    it, just above, below or running into it from both sides, ends in an
+    arrowhead. Zone borders, table rules and flag outlines never do.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    x0, y0, x1, y1 = bounds
+    height, width = y1 - y0, x1 - x0
+    if height < 4:
+        return False
+    reach = 6.0 * height + width / 2
+    radius = int(math.ceil(math.hypot(reach, 2.0 * height))) + 2
+    cx, cy = _unlevel((x0 + x1) / 2, (y0 + y1) / 2, math.radians(angle))
+    # Clipped to the page and pasted onto paper: a crop past the page edge
+    # would fill with black, which reads as ink.
+    left_edge, top_edge = int(cx) - radius, int(cy) - radius
+    clip = (
+        max(left_edge, 0),
+        max(top_edge, 0),
+        min(int(cx) + radius, page_image.width),
+        min(int(cy) + radius, page_image.height),
+    )
+    if clip[2] <= clip[0] or clip[3] <= clip[1]:
+        return False
+    window = Image.new("L", (2 * radius, 2 * radius), 255)
+    window.paste(
+        page_image.crop(clip).convert("L"), (clip[0] - left_edge, clip[1] - top_edge)
+    )
+    if abs(angle) >= 1.0:
+        window = window.rotate(angle, resample=Image.BILINEAR, fillcolor=255)
+    ink = np.asarray(window) < 160
+    left, right = int(radius - width / 2), int(radius + width / 2)
+    top, bottom = int(radius - height / 2), int(radius + height / 2)
+    span = ink.shape[1]
+    bridge = max(3, int(0.35 * height))
+
+    def run_through(row: int, column: int) -> tuple[int, int] | None:
+        band = ink[max(row - 1, 0) : row + 2].any(axis=0)
+        if not band[column]:
+            return None
+        # Bridge short gaps: antialiasing breaks a hairline, and a value
+        # between close extension lines sits on a stub of the dimension line
+        # that stops short of them on both sides ("|  7  |").
+        start = column
+        while start > 0 and band[max(start - bridge, 0) : start].any():
+            start -= 1
+        stop = column
+        while stop + 1 < span and band[stop + 1 : stop + 1 + bridge].any():
+            stop += 1
+        return start, stop + 1
+
+    # A digit drawn inside its own small outline is a tag: a circled
+    # characteristic number or a note flag, even when that outline sits on a
+    # dimension line. The paper right around the glyph is then a small closed
+    # pocket rather than part of the open sheet.
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(
+        ink.astype(np.uint8), connectivity=8
+    )
+    # Judged around the digit's own ink: the font box is taller than the
+    # glyph and pokes out of a triangle's apex.
+    glyph = [
+        stat
+        for stat in stats[1:count]
+        if stat[0] >= left - 2
+        and stat[1] >= top - 2
+        and stat[0] + stat[2] <= right + 2
+        and stat[1] + stat[3] <= bottom + 2
+    ]
+    if glyph:
+        gx0 = max(min(int(g[0]) for g in glyph) - 2, 0)
+        gy0 = max(min(int(g[1]) for g in glyph) - 2, 0)
+        gx1 = min(max(int(g[0] + g[2]) for g in glyph) + 2, span - 1)
+        gy1 = min(max(int(g[1] + g[3]) for g in glyph) + 2, ink.shape[0] - 1)
+        _, paper, paper_stats, _ = cv2.connectedComponentsWithStats(
+            (~ink).astype(np.uint8), connectivity=4
+        )
+        ring = np.concatenate(
+            [paper[gy0, gx0:gx1], paper[gy1, gx0:gx1], paper[gy0:gy1, gx0], paper[gy0:gy1, gx1]]
+        )
+        ring = ring[ring > 0]
+        if ring.size:
+            pockets = paper_stats[ring]
+            # Circles and flag triangles leave a square pocket (measured
+            # 0.97-1.03 wide-to-tall over every tag in Docs); a value between
+            # two close extension lines sits in a tall slot instead (0.62).
+            tag = (
+                (pockets[:, 2] <= 3.0 * height)
+                & (pockets[:, 3] <= 3.0 * height)
+                & (pockets[:, 2] >= 0.8 * pockets[:, 3])
+                & (pockets[:, 2] <= 1.25 * pockets[:, 3])
+            )
+            if tag.mean() > 0.8:
+                return False
+
+    inner = (left + int(0.15 * width), right - int(0.15 * width))
+    first_row = max(top - int(0.9 * height), 1)
+    last_row = min(bottom + int(0.9 * height), ink.shape[0] - 1)
+    for row in range(first_row, last_row):
+        runs: list[tuple[int, int]] = []
+        under = run_through(row, (inner[0] + inner[1]) // 2)
+        if under and under[0] <= inner[0] and under[1] >= inner[1]:
+            runs.append(under)
+        else:
+            # The value can sit in a gap the dimension line leaves for it.
+            reach_in = int(0.8 * height)
+            lefts = [run_through(row, c) for c in range(left - reach_in, left) if ink[row, c]]
+            rights = [run_through(row, c) for c in range(right, right + reach_in) if ink[row, c]]
+            lefts = [run for run in lefts if run and run[1] <= left + 1]
+            rights = [run for run in rights if run and run[0] >= right - 1]
+            if lefts and rights:
+                runs += [lefts[-1], rights[0]]
+        if any(
+            stop - start >= 0.8 * height
+            and _arrowhead_on_run(ink, row, start, stop, height)
+            for start, stop in runs
+        ):
+            return True
+    return False
 
 
 def rescue_geometry_marks(text: str, read: str) -> str | None:
