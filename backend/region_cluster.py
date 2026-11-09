@@ -53,6 +53,39 @@ def _overlap(a: tuple[float, float, float, float], b: tuple[float, float, float,
     return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
 
 
+def _touching_pairs(
+    rects: list[tuple[float, float, float, float]],
+) -> list[tuple[int, int]]:
+    """
+    Every ``(i, j)``, ``i < j``, whose rectangles overlap or touch, in order.
+
+    Rectangles are bucketed on a grid one median rectangle wide, so only
+    neighbours are ever compared; a dense sheet of a thousand separated boxes
+    costs a few thousand tests instead of half a million. Returned sorted, so a
+    caller walking the pairs sees them in the same order as a nested loop.
+    """
+    import math
+
+    n = len(rects)
+    if n < 2:
+        return []
+    sizes = sorted(max(r[2] - r[0], r[3] - r[1]) for r in rects)
+    cell = max(sizes[n // 2], 1.0)
+    grid: dict[tuple[int, int], list[int]] = {}
+    for index, (x0, y0, x1, y1) in enumerate(rects):
+        for gx in range(math.floor(x0 / cell), math.floor(x1 / cell) + 1):
+            for gy in range(math.floor(y0 / cell), math.floor(y1 / cell) + 1):
+                grid.setdefault((gx, gy), []).append(index)
+    pairs: set[tuple[int, int]] = set()
+    for members in grid.values():
+        for a in range(len(members)):
+            for b in range(a + 1, len(members)):
+                i, j = members[a], members[b]
+                if _overlap(rects[i], rects[j]):
+                    pairs.add((i, j) if i < j else (j, i))
+    return sorted(pairs)
+
+
 def _reading_axis(box: Box) -> str:
     """Primary reading axis from aspect ratio: ``vertical``, ``horizontal``, or ``square``."""
     w, h = box["w"], box["h"]
@@ -248,23 +281,25 @@ def cluster_boxes(
         max_w = min(max_w, abs_cap) if max_w else abs_cap
         max_h = min(max_h, abs_cap) if max_h else abs_cap
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not _should_merge(boxes[i], boxes[j], margin_ratio):
+    # _should_merge only ever joins boxes whose inflated rectangles touch (its
+    # tight-box test lies inside them), so no other pair needs asking.
+    inflated = [_inflate(box, margin_ratio) for box in boxes]
+    for i, j in _touching_pairs(inflated):
+        if not _should_merge(boxes[i], boxes[j], margin_ratio):
+            continue
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            continue
+        # Cap the *transitive* cluster size, not just this pair's union: a
+        # chain of individually-close boxes (a linear dim → its GD&T frames →
+        # a neighbouring dim) would otherwise fuse into one oversized cluster
+        # far wider than any single dimension.
+        if max_w and max_h:
+            uw = max(rx1[ri], rx1[rj]) - min(rx0[ri], rx0[rj])
+            uh = max(ry1[ri], ry1[rj]) - min(ry0[ri], ry0[rj])
+            if uw > max_w or uh > max_h:
                 continue
-            ri, rj = find(i), find(j)
-            if ri == rj:
-                continue
-            # Cap the *transitive* cluster size, not just this pair's union: a
-            # chain of individually-close boxes (a linear dim → its GD&T frames →
-            # a neighbouring dim) would otherwise fuse into one oversized cluster
-            # far wider than any single dimension.
-            if max_w and max_h:
-                uw = max(rx1[ri], rx1[rj]) - min(rx0[ri], rx0[rj])
-                uh = max(ry1[ri], ry1[rj]) - min(ry0[ri], ry0[rj])
-                if uw > max_w or uh > max_h:
-                    continue
-            union(ri, rj)
+        union(ri, rj)
 
     groups: dict[int, list[Box]] = {}
     for i, box in enumerate(boxes):
@@ -449,13 +484,15 @@ def merge_overlapping_clusters(
             i = parent[i]
         return i
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            need = complete_overlap if (complete[i] and complete[j]) else min_overlap
-            if _ubbox_overlap_frac(boxes[i], boxes[j]) >= need:
-                ri, rj = find(i), find(j)
-                if ri != rj:
-                    parent[ri] = rj
+    rects = [
+        (b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"]) for b in boxes
+    ]
+    for i, j in _touching_pairs(rects):
+        need = complete_overlap if (complete[i] and complete[j]) else min_overlap
+        if _ubbox_overlap_frac(boxes[i], boxes[j]) >= need:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
 
     groups: dict[int, list[Box]] = {}
     for i, cluster in enumerate(clusters):

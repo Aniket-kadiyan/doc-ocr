@@ -107,9 +107,9 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     pipeline.detect_regions = detect_regions
     pipeline._expand_clusters = lambda _image, clusters, **_kwargs: clusters
     pipeline.recognize = lambda _image, **_kwargs: {
-        # Section mode must pass through short/plain values that the former
-        # is_segment_worthy policy rejected before publication.
-        "text": "50",
+        # A value the publication gates accept: a bare "50" is now dropped
+        # with the zone letters and balloon numbers it cannot be told from.
+        "text": "Ø50",
         "confidence": 0.98,
         "type": "Linear",
         "orientation": "horizontal",
@@ -128,7 +128,7 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     )
 
     assert result["count"] == 1
-    assert result["regions"][0]["text"] == "50"
+    assert result["regions"][0]["text"] == "Ø50"
     assert result["detected_count"] == result["recognized_count"] == 1
     assert result["eligible_count"] == 1
     assert result["excluded_count"] == result["review_count"] == 0
@@ -136,7 +136,7 @@ def test_segment_reports_real_stages_and_recognition_counters() -> None:
     outcome = result["candidate_outcomes"][0]
     assert outcome["candidate_id"] == "S0001"
     assert outcome["state"] == "eligible"
-    assert outcome["text"] == outcome["raw_text"] == "50"
+    assert outcome["text"] == outcome["raw_text"] == "Ø50"
     assert outcome["recognized"] is True
     assert events[0]["stage"] == "preparing"
     assert events[-1]["stage"] == "finalizing"
@@ -388,6 +388,9 @@ def test_page_scan_uses_adaptive_panels_then_bounded_recovery_batches() -> None:
         Image.new("RGB", (400, 240), "white"),
         layout=layout,
         progress_callback=lambda **event: events.append(event),
+        # The slanted pass detects the whole page once more on its own; this
+        # test counts the panel passes.
+        read_slanted=False,
     )
 
     assert len(detector_calls) == 8
@@ -743,15 +746,19 @@ def test_page_scan_never_publishes_preliminary_garbage_as_review_text() -> None:
         layout=layout,
     )
 
+    # Once the authoritative pass also reads nothing, the detector fired on
+    # ink that is not writing: it goes to Other, not to the review queue,
+    # and the preliminary "8" is never published as its text.
     assert result["detected_count"] == 1
     assert result["eligible_count"] == 0
-    assert result["excluded_count"] == 0
-    assert result["review_count"] == 1
-    assert result["review_candidates"][0]["candidate_id"] == "C0001"
-    assert result["review_candidates"][0]["text"] == ""
-    assert "detector target" in result["review_candidates"][0]["review_reason"].lower()
-    assert result["candidate_outcomes"][0]["state"] == "review"
-    assert result["candidate_outcomes"][0]["text"] == ""
+    assert result["excluded_count"] == 1
+    assert result["review_count"] == 0
+    assert result["review_candidates"] == []
+    outcome = result["candidate_outcomes"][0]
+    assert outcome["candidate_id"] == "C0001"
+    assert outcome["state"] == "excluded"
+    assert outcome["text"] == ""
+    assert "detector target" in outcome["reason"].lower()
     assert recognition_profiles == [
         "batch_recognition",
         "recovery_rectified",
