@@ -41,6 +41,8 @@ interface ToolbarProps {
   canSaveProject: boolean;
   referenceTables: readonly PageReferenceTable[];
   scanCandidates: readonly ScanCandidate[];
+  /** Name of the open drawing's file, or null when nothing is open. */
+  fileName: string | null;
 }
 
 export function Toolbar({
@@ -71,6 +73,7 @@ export function Toolbar({
   canSaveProject,
   referenceTables,
   scanCandidates,
+  fileName,
 }: ToolbarProps) {
   const [debugDump, setDebugDump] = useState(false);
 
@@ -124,6 +127,15 @@ export function Toolbar({
       >
         Remove Drawing
       </button>
+
+      {fileName && (
+        <span
+          title={fileName}
+          className="max-w-[16rem] truncate rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm font-medium text-slate-700"
+        >
+          {fileName}
+        </span>
+      )}
 
       <a
         href="/checksheets"

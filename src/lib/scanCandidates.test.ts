@@ -169,4 +169,58 @@ describe("scan candidate duplicate protection", () => {
       )
     ).toBe(false);
   });
+
+  describe("feature control frames over an earlier tolerance balloon", () => {
+    const frame = {
+      ...makeRegion("◎ Ø0.02 A", { x: 100, y: 50, width: 115, height: 23 }),
+      category: "GD&T",
+      type: "GD&T",
+    };
+    const tolerance = makeAnnotation({
+      id: "tol",
+      number: 23,
+      value: "Ø0.02",
+      type: "Diameter",
+      bbox: { x: 133, y: 50, width: 57, height: 23 },
+    });
+
+    it("takes over the untouched balloon in place", () => {
+      const result = filterNewScanRegions([frame], [tolerance], 1);
+
+      expect(result.accepted).toEqual([]);
+      expect(result.upgrades).toEqual([
+        { annotationId: "tol", region: frame },
+      ]);
+      expect(result.skippedExisting).toBe(0);
+    });
+
+    it("leaves a balloon the user retyped alone", () => {
+      const edited = { ...tolerance, value: "Ø0.05" };
+      const result = filterNewScanRegions([frame], [edited], 1);
+
+      expect(result.upgrades).toEqual([]);
+      expect(result.skippedExisting).toBe(1);
+    });
+
+    it("leaves an existing GD&T balloon alone", () => {
+      const existingFrame = {
+        ...tolerance,
+        value: "◎ Ø0.02 A",
+        type: "GD&T" as const,
+        bbox: frame.valueBox,
+      };
+      const result = filterNewScanRegions([frame], [existingFrame], 1);
+
+      expect(result.upgrades).toEqual([]);
+      expect(result.skippedExisting).toBe(1);
+    });
+
+    it("never upgrades from a plain value", () => {
+      const plain = makeRegion("Ø0.02 A", frame.valueBox);
+      const result = filterNewScanRegions([plain], [tolerance], 1);
+
+      expect(result.upgrades).toEqual([]);
+      expect(result.skippedExisting).toBe(1);
+    });
+  });
 });

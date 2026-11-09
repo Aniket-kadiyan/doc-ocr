@@ -50,8 +50,51 @@ export function isSamePageObject(left: BBox, right: BBox): boolean {
 
 export interface FilteredScanRegions {
   accepted: SegmentRegion[];
+  /** Existing balloons a feature control frame replaces in place. */
+  upgrades: { annotationId: string; region: SegmentRegion }[];
   skippedExisting: number;
   skippedDuplicates: number;
+}
+
+function isGdtRegion(region: { type?: string; category?: string }): boolean {
+  return region.category === "GD&T" || region.type === "GD&T";
+}
+
+const compact = (text: string) => text.replace(/\s+/g, "");
+
+/**
+ * The existing balloon a feature control frame should take over, if any.
+ *
+ * A scan that ran before frames were read (or with them turned off) balloons
+ * only the frame's tolerance, "Ø0.02", and that balloon then blocked every
+ * later "◎ Ø0.02 A" as a duplicate. The frame takes the balloon over only
+ * when every balloon it covers is a plain value lying inside it whose text
+ * the frame still contains: anything retyped by the user, or already GD&T,
+ * keeps winning.
+ */
+function frameUpgradeTarget(
+  candidate: SegmentRegion,
+  overlapping: Annotation[]
+): Annotation | null {
+  if (!isGdtRegion(candidate) || overlapping.length === 0) return null;
+  const frameText = compact(candidate.text);
+  const upgradable = overlapping.every((annotation) => {
+    const value = compact(annotation.value);
+    const box = annotation.bbox;
+    const area = Math.max(box.width * box.height, 1);
+    const frameArea = Math.max(
+      candidate.valueBox.width * candidate.valueBox.height,
+      1
+    );
+    return (
+      annotation.type !== "GD&T" &&
+      value.length > 0 &&
+      frameText.includes(value) &&
+      area < frameArea
+    );
+  });
+  if (!upgradable) return null;
+  return [...overlapping].sort((left, right) => left.number - right.number)[0];
 }
 
 /**
@@ -66,12 +109,9 @@ export function filterNewScanRegions(
   overlapThreshold = DEFAULT_OVERLAP_THRESHOLD,
   scopeKind: ScanScopeKind = "section"
 ): FilteredScanRegions {
-  const existingBoxes = existing
-    .filter(
-      (annotation) =>
-        annotation.kind !== "label" && annotation.page === page
-    )
-    .map((annotation) => annotation.bbox);
+  const existingValues = existing.filter(
+    (annotation) => annotation.kind !== "label" && annotation.page === page
+  );
 
   const ordered = [...candidates].sort(
     (left, right) =>
@@ -79,16 +119,25 @@ export function filterNewScanRegions(
       left.valueBox.x - right.valueBox.x
   );
   const accepted: SegmentRegion[] = [];
+  const upgrades: FilteredScanRegions["upgrades"] = [];
+  const upgraded = new Set<string>();
   let skippedExisting = 0;
   let skippedDuplicates = 0;
 
   for (const candidate of ordered) {
-    const overlapsExisting = existingBoxes.some(
-      (box) =>
-        bboxOverlapFraction(candidate.valueBox, box) >= overlapThreshold
+    const overlapping = existingValues.filter(
+      (annotation) =>
+        bboxOverlapFraction(candidate.valueBox, annotation.bbox) >=
+        overlapThreshold
     );
-    if (overlapsExisting) {
-      skippedExisting += 1;
+    if (overlapping.length > 0) {
+      const target = frameUpgradeTarget(candidate, overlapping);
+      if (target && !upgraded.has(target.id)) {
+        upgraded.add(target.id);
+        upgrades.push({ annotationId: target.id, region: candidate });
+      } else {
+        skippedExisting += 1;
+      }
       continue;
     }
     const duplicatesCandidate = accepted.some(
@@ -105,5 +154,5 @@ export function filterNewScanRegions(
     accepted.push(candidate);
   }
 
-  return { accepted, skippedExisting, skippedDuplicates };
+  return { accepted, upgrades, skippedExisting, skippedDuplicates };
 }
