@@ -647,3 +647,12 @@ def test_a_caption_fragment_reached_through_context_is_still_excluded() -> None:
 def test_the_caption_itself_is_excluded_by_its_own_words() -> None:
     for text in ("SECTION VIEW B-B", "Detail D", "Section A-A"):
         assert not evaluate_page_value(candidate(text)).accepted, text
+
+
+def test_a_surface_finish_requirement_is_a_complete_value() -> None:
+    """The labelling rules call these Surface Finish; the gate must agree."""
+    for text in ("N7", "N 8", "N12", "Ra 3.2", "Rzmax35", "Rz max 12.5"):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.accepted, (text, decision.rule_name)
+    for text in ("N0", "Rzmax", "RA"):
+        assert not evaluate_page_value(candidate(text)).accepted, text

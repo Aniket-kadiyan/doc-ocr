@@ -49,6 +49,18 @@ def test_tiles_cover_the_whole_page():
     assert max(y + h for _, y, _, h in tiles) == height
 
 
+def test_a_frame_cut_by_a_seam_gives_way_to_the_whole_one():
+    """BS1801025.048b: a 307px frame crossed a seam; the tile left of it
+    proposed the frame without its datum cell."""
+    whole = (2363.0, 1471.0, 307.0, 52.0)
+    cut = (2363.0, 1471.0, 234.0, 52.0)
+    assert pipeline._whole_proposals([(cut, True), (whole, False)]) == [whole]
+    # The same frame proposed by two tiles is read once.
+    assert pipeline._whole_proposals([(whole, False), (whole, False)]) == [whole]
+    # With nothing holding it, a cut box is still the best proposal there is.
+    assert pipeline._whole_proposals([(cut, True)]) == [cut]
+
+
 def test_frame_detection_reports_tile_progress(monkeypatch):
     monkeypatch.setattr(pipeline, "tiles_for", lambda *_args, **_kwargs: [
         (0, 0, 100, 100),
@@ -450,6 +462,42 @@ def test_scan_regions_publish_a_frame_as_one_gdt_balloon():
         assert "0.5" in region["text"]
         assert region["gdt"]["frames"][0]["type"] == "feature_control_frame"
         assert region["page_filter_rule"] == "feature_control_frame"
+
+
+def test_a_frame_on_its_side_is_read_and_mapped_back_to_the_page():
+    """A frame reading bottom to top, as BS1801025.048b draws two of them
+    beside a vertical dimension, was never proposed by the rule finder."""
+    from gdt_detect import iou
+
+    scene = syn.build("frames")
+    # A quarter counter-clockwise: the frames now read up the page.
+    page = scene.image.transpose(Image.Transpose.ROTATE_90)
+    height = scene.image.width
+    regions = pipeline.scan_regions(page, ocr_fn=lambda image: ("0.5", 0.9))
+    assert len(regions) == len(scene.frames)
+    for region in regions:
+        assert region["orientation"] == "vertical"
+        assert region["rotation"] == -90
+        box = region["bbox"]
+        found = (box["x"], box["y"], box["width"], box["height"])
+        # Where each truth frame lands after the turn.
+        turned = [
+            (y, height - (x + w), h, w) for x, y, w, h in (t.bbox for t in scene.frames)
+        ]
+        assert max(iou(found, t) for t in turned) > 0.6
+        oriented = region["oriented_box"]
+        assert oriented["width"] == pytest.approx(box["height"], abs=0.05)
+        assert oriented["y"] == pytest.approx(box["y"] + box["height"], abs=0.05)
+        glyphs = {reg.get(t.symbol_id).unicode for t in scene.frames}
+        assert region["text"][0] in glyphs
+
+
+def test_an_upright_frame_is_not_read_again_on_its_side():
+    scene = syn.build("frames")
+    regions = pipeline.scan_regions(scene.image, ocr_fn=lambda image: ("0.5", 0.9))
+    assert len(regions) == len(scene.frames)
+    assert all(r["orientation"] == "horizontal" for r in regions)
+    assert all("oriented_box" not in r for r in regions)
 
 
 def test_a_composite_frame_is_one_scan_region():

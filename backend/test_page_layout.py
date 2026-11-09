@@ -10,6 +10,7 @@ from page_layout import (
     _retain_repeated_cell_groups,
     analyze_page_layout,
     crop_section,
+    detect_drawing_border,
     detect_table_masks,
 )
 from page_layout_cache import PageLayoutCache
@@ -162,11 +163,11 @@ def test_a_framed_sheet_does_not_grow_cells_out_to_the_paper() -> None:
 
     masks = detect_table_masks(image)
 
-    assert masks
-    assert any(_contains(mask, 370, 130) for mask in masks)
-    # Nothing between the frame and the paper is a table cell.
-    assert not any(_contains(mask, 10, 180) for mask in masks)
-    assert not any(_contains(mask, width - 10, 180) for mask in masks)
+    table = [mask for mask in masks if _contains(mask, 370, 130)]
+    assert table
+    # The table's mask stops at its own grid, not at the frame or the paper.
+    # (The strips outside the frame are masked separately, as the border.)
+    assert all(mask.x > 200 and mask.x1 < width - 100 for mask in table)
 
 
 def _sheet_with_a_margin_legend() -> Image.Image:
@@ -284,3 +285,129 @@ def test_a_grid_of_large_cells_is_not_a_table_even_with_text_in_it() -> None:
     _draw_populated_grid(draw, x_values, y_values)
 
     assert not any(_contains(mask, 300, 200) for mask in detect_table_masks(image))
+
+
+def _arrow(draw: ImageDraw.ImageDraw, tip_x: int, y: int, step: int) -> None:
+    """A filled dimension arrowhead pointing at ``tip_x`` along a rule."""
+    back = tip_x + step * 10
+    draw.polygon(((tip_x, y), (back, y - 3), (back, y + 3)), fill="black")
+
+
+def test_a_dimensioned_view_is_not_a_table_even_with_text_in_every_cell() -> None:
+    """Extension and dimension lines form text-height cells, each with a value.
+
+    Every test of what a table holds passes on such a view, so on a densely
+    dimensioned sheet whole views were masked and every value in them was
+    never detected. What gives it away is the arrowhead on each dimension
+    line where it meets an extension line; a table's rules have none.
+    """
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    x_values = (280, 340, 400, 460)
+    y_values = (80, 104, 128, 152, 176)
+    _draw_populated_grid(draw, x_values, y_values)
+    for y in y_values:
+        for left, right in zip(x_values, x_values[1:]):
+            _arrow(draw, left + 2, y, 1)
+            _arrow(draw, right - 2, y, -1)
+
+    assert not any(_contains(mask, 370, 130) for mask in detect_table_masks(image))
+
+
+def test_text_touching_one_side_of_a_rule_is_not_an_arrowhead() -> None:
+    """A glyph against a table rule sits on one side; an arrowhead on both."""
+    image = Image.new("RGB", (640, 420), "white")
+    draw = ImageDraw.Draw(image)
+    x_values = (280, 340, 400, 460)
+    y_values = (80, 104, 128, 152, 176)
+    _draw_populated_grid(draw, x_values, y_values)
+    for y in y_values:
+        for right in x_values[1:]:
+            draw.polygon(((right - 2, y), (right - 12, y), (right - 12, y + 6)), fill="black")
+
+    assert any(_contains(mask, 370, 130) for mask in detect_table_masks(image))
+
+
+def _sheet_with_a_header_strip() -> Image.Image:
+    """A two-row revision strip across the head of the sheet."""
+
+    image = Image.new("RGB", (2400, 1700), "white")
+    draw = ImageDraw.Draw(image)
+    left, right = 1300, 2340
+    # Its column rules are 50px long, under the page-wide minimum of 3.5% of
+    # the page height (60px here).
+    rows = [40 + index * 25 for index in range(3)]
+    for y in rows:
+        draw.line((left, y, right, y), fill="black", width=2)
+    for x in (left, 1420, 1900, 2100, right):
+        draw.line((x, rows[0], x, rows[-1]), fill="black", width=2)
+    for y in rows[:-1]:
+        for x in (left, 1420, 1900, 2100):
+            draw.text((x + 8, y + 8), "A 12", fill="black")
+    draw.rectangle((700, 500, 1500, 1100), outline="black", width=2)
+    return image
+
+
+def test_a_strip_table_along_the_top_of_the_sheet_is_masked() -> None:
+    # The margin pass used to measure only the left and right strips, so a
+    # strip table across the head or foot of the sheet relied on the
+    # page-wide pass alone, where its short column rules do not count.
+    masks = detect_table_masks(_sheet_with_a_header_strip())
+
+    strip = [mask for mask in masks if mask.y < 80 and mask.x >= 1280]
+    assert strip, [(m.x, m.y, m.width, m.height) for m in masks]
+    assert strip[0].x <= 1310 and strip[0].x1 >= 2330
+    assert not [mask for mask in masks if 600 < mask.x and mask.y > 400]
+
+
+def _sheet_with_a_border(*, sides: int = 4) -> Image.Image:
+    """A bordered sheet with boilerplate text down the margin outside it."""
+
+    image = Image.new("RGB", (2400, 1700), "white")
+    draw = ImageDraw.Draw(image)
+    left, top, right, bottom = 120, 60, 2350, 1640
+    lines = (
+        (left, top, right, top),
+        (left, bottom, right, bottom),
+        (left, top, left, bottom),
+        (right, top, right, bottom),
+    )
+    for line in lines[:sides]:
+        draw.line(line, fill="black", width=3)
+    for y in range(300, 1300, 40):
+        draw.text((30, y), "25 4.5", fill="black")
+    draw.text((1200, 1660), "PROTO CODE 529", fill="black")
+    draw.text((900, 800), "47.4", fill="black")
+    return image
+
+
+def test_everything_outside_the_drawing_border_is_masked() -> None:
+    # A boilerplate column down the margin and a print stamp under the frame
+    # sit outside the drawing; their numbers are not dimensions.
+    image = _sheet_with_a_border()
+    masks = detect_table_masks(image)
+
+    assert detect_drawing_border(image) == LayoutBox(120, 60, 2231, 1581)
+    assert any(_contains(mask, 40, 700) for mask in masks)
+    assert any(_contains(mask, 1210, 1665) for mask in masks)
+    assert not any(_contains(mask, 905, 805) for mask in masks)
+    # The strips stop short of the rule a title block may share.
+    assert not any(_contains(mask, 121, 700) for mask in masks)
+
+
+def test_one_long_line_near_an_edge_is_not_a_border() -> None:
+    # Three sides could be a shaft's outline and a dimension line; masking
+    # beyond them would delete real values.
+    image = _sheet_with_a_border(sides=3)
+
+    assert detect_drawing_border(image) is None
+    assert not any(_contains(mask, 40, 700) for mask in detect_table_masks(image))
+
+
+def test_the_page_layout_carries_the_border_for_unmasked_passes() -> None:
+    # The notes and frame reads see the unmasked page, so they filter by the
+    # border themselves.
+    assert analyze_page_layout(_sheet_with_a_border()).border == LayoutBox(
+        120, 60, 2231, 1581
+    )
+    assert analyze_page_layout(_sheet_with_a_border(sides=3)).border is None

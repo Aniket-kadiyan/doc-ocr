@@ -267,6 +267,12 @@ _TITLE_BLOCK_WORDS_RE = re.compile(
 )
 
 
+def _inside_border(bbox: Mapping[str, float], border: Any | None) -> bool:
+    """True unless `bbox`'s centre lies outside the drawing border."""
+
+    return border is None or _centre_inside(bbox, border.to_dict())
+
+
 def _centre_inside(inner: Mapping[str, float], outer: Mapping[str, float]) -> bool:
     """True when `inner`'s centre falls within `outer`.
 
@@ -295,6 +301,37 @@ def _covers_digits(whole: str, part: str) -> bool:
         return False
     it = iter(whole)
     return all(c in it for c in part)
+
+
+def _share_inside(inner: Mapping[str, float], outer: Mapping[str, float]) -> float:
+    """The fraction of ``inner``'s area that lies within ``outer``."""
+
+    width = min(inner["x"] + inner["width"], outer["x"] + outer["width"]) - max(
+        inner["x"], outer["x"]
+    )
+    height = min(inner["y"] + inner["height"], outer["y"] + outer["height"]) - max(
+        inner["y"], outer["y"]
+    )
+    if width <= 0 or height <= 0:
+        return 0.0
+    return width * height / max(inner["width"] * inner["height"], 1.0)
+
+
+def _levelled_min_aspect(text: str) -> float:
+    """
+    How elongated a levelled read's ink must be to count as a line of text.
+
+    A long callout is plainly a line, but a short one is not much longer than
+    it is tall, and the dimension line it sits on adds to its height. On
+    129E01 "R19" and "R4.5" read at 0.98+ came back 1.47–1.59 long, under
+    the flat 1.8 that used to apply to every read, and both were dropped.
+    So the bar rises with the glyph count: points and spaces are too narrow
+    to lengthen the ink, and two glyphs still need 1.3 to be told from a
+    patch of the part.
+    """
+
+    glyphs = sum(1 for char in text if not char.isspace() and char not in ".,")
+    return min(1.8, max(1.3, 0.45 * glyphs))
 
 
 class OcrPipeline:
@@ -3318,6 +3355,77 @@ class OcrPipeline:
 
         return out if len(out) >= max(1, min_values) else None
 
+    def _split_at_interior_rules(
+        self,
+        image: Image.Image,
+        ink: Any,
+        box: Mapping[str, float],
+    ) -> list[dict[str, Any]] | None:
+        """
+        Cut one line of text at the vertical rules crossing it, and read each side.
+
+        Two chained dimensions written either side of their shared extension
+        line ("16.8 | 10.7") are detected as one line, and the rule between
+        them reads as a glyph: "16.81±0.7" on 129E01. The rule is ink down
+        the whole line and past it, which a "1" never is. Each side is read
+        alone, trimmed of any rule along its own edges. ``None`` when no rule
+        crosses the line or a side does not read as text.
+        """
+        from segment_quality import strip_foreign_glyphs
+
+        x, y = float(box["x"]), float(box["y"])
+        w, h = float(box["width"]), float(box["height"])
+        if h < 8 or w < 2.5 * h:
+            return None
+        cuts = self._interior_rules(ink, x, y, w, h)
+        if not cuts:
+            return None
+        pad = 0.15 * h
+        step = max(1.0, 0.1 * h)
+
+        def trim(left: float, right: float) -> tuple[float, float]:
+            # A side ends on the rule it was cut at, and may start or end on
+            # another a few pixels inside the detected box. Within half a line
+            # height of each end, cut past the innermost rule found there.
+            reach = int(0.5 * h / step)
+            new_left, new_right = left, right
+            for i in range(reach):
+                column = left + i * step
+                if ink.vertical_rule(column, column + step, y - pad, y + h + pad):
+                    new_left = column + step
+            for i in range(reach):
+                column = right - (i + 1) * step
+                if ink.vertical_rule(column, column + step, y - pad, y + h + pad):
+                    new_right = column
+            if new_right - new_left < h:
+                return left, right
+            return new_left, new_right
+
+        edges = [x] + cuts + [x + w]
+        pieces: list[dict[str, Any]] = []
+        for left, right in zip(edges, edges[1:]):
+            left, right = trim(left, right)
+            if right - left < 0.8 * h:
+                continue
+            crop_box = (
+                max(0, int(left)),
+                max(0, int(y - 6)),
+                min(image.width, int(right)),
+                min(image.height, int(y + h + 6)),
+            )
+            res = self.recognize(image.crop(crop_box), compute_text_bbox=False)
+            text = strip_foreign_glyphs((res.get("text") or "").strip())
+            if not text:
+                return None
+            bbox = {
+                "x": round(left, 1),
+                "y": round(y, 1),
+                "width": round(right - left, 1),
+                "height": round(h, 1),
+            }
+            pieces.append(self._region_from_result(res, bbox, text))
+        return pieces if len(pieces) >= 2 else None
+
     @staticmethod
     def _oriented_box_from_rot(
         bx: float, by: float, bw: float, bh: float, inv: Any
@@ -3709,7 +3817,9 @@ class OcrPipeline:
                         # Writing along a leader is elongated once the box is on
                         # the ink. A square patch is not a line of text, it is a
                         # piece of the part caught at this angle.
-                        if max(box_w, box_h) < min(box_w, box_h) * 1.8:
+                        if max(box_w, box_h) < min(box_w, box_h) * (
+                            _levelled_min_aspect(text)
+                        ):
                             continue
                 bbox = self._bbox_rot_to_source(
                     box_x, box_y, box_w, box_h, inv, iw, ih
@@ -3829,9 +3939,59 @@ class OcrPipeline:
                 + min(aspect, 8.0) * 0.15
             )
 
+        def text_height(r: dict[str, Any]) -> float:
+            ob = r.get("oriented_box")
+            if ob:
+                return float(min(ob["width"], ob["height"]))
+            return float(min(r["bbox"]["width"], r["bbox"]["height"]))
+
+        def speck(b: dict[str, Any], r: dict[str, Any]) -> bool:
+            # Wholly inside the callout and smaller across than 0.4 of its line
+            # is tall: not a value written beside it, which would be near its
+            # size, but a piece of its own ink read upright (a 29 px "20"
+            # inside a 120 px "R4.5"; a real digit there measures 0.5+).
+            box = b["bbox"]
+            return (
+                geom_overlap_frac(r, b) >= 0.9
+                and max(box["width"], box["height"]) < 0.4 * text_height(r)
+            )
+
+        def leader_tick_misread(d: str, bd: str) -> bool:
+            # The upright read of a slanted value often picks up the leader
+            # or arrowhead beside it as an extra "1" ("41.5" for "R4.5").
+            if len(bd) <= len(d) or not _covers_digits(bd, d):
+                return False
+            extra = list(bd)
+            for c in d:
+                extra.remove(c)
+            return set(extra) == {"1"}
+
+        def trailing_junk(r: dict[str, Any]) -> bool:
+            # The same ink levelled at two angles: one read is clean, the other
+            # runs on into the leader's ticks ("R4.5" against "R4.551"). Digits
+            # make the longer one rank higher, so it would win; it is dropped
+            # when the clean read is at least as confident.
+            text = r.get("text", "")
+            for o in angled:
+                ot = o.get("text", "")
+                if (
+                    o is not r
+                    and ot
+                    and len(ot) < len(text)
+                    and text.startswith(ot)
+                    and text[len(ot):].isdigit()
+                    and float(o.get("confidence") or 0.0)
+                    >= float(r.get("confidence") or 0.0)
+                    and geom_overlap_frac(r, o) >= 0.5
+                ):
+                    return True
+            return False
+
         kept: list[dict[str, Any]] = []
         # Best reads first, so a duplicate keeps the better one.
-        order = sorted(angled, key=quality, reverse=True)
+        order = sorted(
+            (r for r in angled if not trailing_junk(r)), key=quality, reverse=True
+        )
         for r in order:
             d = digits(r.get("text", ""))
             if len(d) < 2:
@@ -3860,7 +4020,24 @@ class OcrPipeline:
             # A third of a callout covered is already a visible double box, and
             # a bloated re-read covers only part of the region it duplicates.
             overlapped = [b for b in base_regions if geom_overlap_frac(r, b) >= 0.3]
-            swap_for: list[dict[str, Any]] = []
+            # Upright reads that are plainly this callout's own ink misread:
+            # a speck of it, or its value with the leader tick read as a "1".
+            # They neither outrank the levelled read nor block it; it replaces
+            # them.
+            misread = [
+                b for b in overlapped
+                if float(r.get("confidence") or 0.0) >= 0.95
+                and (
+                    speck(b, r)
+                    or (
+                        geom_overlap_frac(r, b) >= 0.75
+                        and leader_tick_misread(d, digits(b.get("text", "")))
+                    )
+                )
+            ]
+            misread_ids = {id(b) for b in misread}
+            overlapped = [b for b in overlapped if id(b) not in misread_ids]
+            swap_for: list[dict[str, Any]] = list(misread)
             if overlapped:
                 # The upright read wins unless this one is plainly better.
                 if quality(r) <= max(quality(b) for b in overlapped):
@@ -3900,7 +4077,7 @@ class OcrPipeline:
                         break
                 if blocked:
                     continue
-                swap_for = accounted
+                swap_for.extend(accounted)
             # A base region the swap logic just accounted for as a FRAGMENT of
             # this callout is not a re-read of it. ``same_value`` is a containment
             # test, so a value's own deviation stack ("+0.0700" sits inside
@@ -3929,7 +4106,15 @@ class OcrPipeline:
                     # the line. Judged on overall quality — comparing symbol
                     # counts alone left ``V V0.5×45°`` in place, because the
                     # stray V's do not change how many symbols it has.
-                    if digits(bt) == d and quality(r) > quality(b):
+                    # An upright read cut short ("R4." for "R4.5") is the same
+                    # value too: its digits are the start of the levelled one's.
+                    bd = digits(bt)
+                    truncated = (
+                        len(bd) < len(d)
+                        and d.startswith(bd)
+                        and float(r.get("confidence") or 0.0) >= 0.95
+                    )
+                    if (bd == d or truncated) and quality(r) > quality(b):
                         for key in ("text", "type", "category", "subtype", "label"):
                             b[key] = r.get(key)
                         b["bbox"] = r["bbox"]
@@ -5494,7 +5679,30 @@ class OcrPipeline:
             raise AssertionError("Whole-page layout exceeded eight panels")
         # Two passes per panel at the render's own resolution, then two more
         # over an enlarged panel to recover the text too small for the first.
-        detector_pass_total = tile_total * len(PAGE_SCAN_ROTATIONS_CW) * 2
+        # A panel the detector budget cannot enlarge has no gap passes, and
+        # is left out of the total so progress counts only passes that run.
+        full_target_edge = max(
+            PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
+            detection_primary_target_edge(masked_page),
+        )
+        gap_panel_ids = {
+            panel.panel_id
+            for _, panel, tile in tiles
+            if detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+                max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
+            )
+            > detection_tile_target_edge(
+                tile,
+                full_size=page_size,
+                pass_target_edge=full_target_edge,
+            )
+        }
+        detector_pass_total = (tile_total + len(gap_panel_ids)) * len(
+            PAGE_SCAN_ROTATIONS_CW
+        )
         if detector_pass_total > PAGE_SCAN_MAX_DETECTOR_CALLS:
             raise AssertionError(
                 "Whole-page scan exceeded "
@@ -5537,10 +5745,6 @@ class OcrPipeline:
             panel_states[panel_id] = "active"
             tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
-            full_target_edge = max(
-                PAGE_SCAN_DETECTOR_MIN_LONG_EDGE,
-                detection_primary_target_edge(masked_page),
-            )
             target_long_edge = detection_tile_target_edge(
                 tile,
                 full_size=page_size,
@@ -5679,19 +5883,13 @@ class OcrPipeline:
             panel_id = panel.panel_id
             tile_image = masked_page.crop(tile.box)
             primary_image = build_primary_detection_image(tile_image)
-            native_edge = detection_tile_target_edge(
-                tile,
-                full_size=page_size,
-                pass_target_edge=full_target_edge,
-            )
             gap_target_edge = detection_tile_target_edge(
                 tile,
                 full_size=page_size,
                 pass_target_edge=full_target_edge,
                 max_input_edge=DETECTION_TILE_MAX_INPUT_EDGE,
             )
-            if gap_target_edge <= native_edge:
-                detector_pass_index += len(PAGE_SCAN_ROTATIONS_CW)
+            if panel_id not in gap_panel_ids:
                 continue
             for rotation_cw in PAGE_SCAN_ROTATIONS_CW:
                 detector_pass_index += 1
@@ -6732,7 +6930,11 @@ class OcrPipeline:
         # one. The section route has always re-segmented such a read; the same
         # pass runs here, replacing a region only when the finer look actually
         # resolves two or more worthy values.
+        from note_blocks import InkMap
+
         split_regions: list[dict[str, Any]] = []
+        split_ink: InkMap | None = None
+        ruled_lines: list[tuple[Mapping[str, float], set[int]]] = []
         split_total = len(regions)
         report(
             stage="splitting",
@@ -6752,7 +6954,27 @@ class OcrPipeline:
                 box["width"], 1.0
             )
             if count_dimension_values(text) < 2 and not tall:
-                split_regions.append(region)
+                # Side by side rather than stacked: two values either side of
+                # an extension line, read as one.
+                ruled = None
+                if not float(region.get("rotation") or 0.0):
+                    if split_ink is None:
+                        split_ink = InkMap(image)
+                    try:
+                        ruled = self._split_at_interior_rules(image, split_ink, box)
+                    except Exception:
+                        ruled = None
+                if ruled and all(
+                    is_complete_engineering_value(
+                        normalize_page_value_text(str(piece.get("text") or ""))
+                    )
+                    for piece in ruled
+                ):
+                    split_regions.extend(ruled)
+                    detected_count += len(ruled) - 1
+                    ruled_lines.append((box, {id(piece) for piece in ruled}))
+                else:
+                    split_regions.append(region)
                 report(
                     stage="splitting",
                     message=f"Checked stacked value {split_index} of {split_total}",
@@ -6803,6 +7025,22 @@ class OcrPipeline:
                 operation_label="Stacked-value splitting",
                 candidate_count=len(split_regions),
             )
+        # The upright pass read pieces of a ruled line on their own as well
+        # ("891" and "110.1" inside "16.8 | 10.7"). The cut has read that line
+        # properly, so whatever else lies inside it gives way; left in, the
+        # duplicate pass keeps "110.1" over "10.7" for its extra digit.
+        if ruled_lines:
+            before_ruled = len(split_regions)
+            split_regions = [
+                region
+                for region in split_regions
+                if not any(
+                    id(region) not in pieces
+                    and _share_inside(region["bbox"], line) >= 0.6
+                    for line, pieces in ruled_lines
+                )
+            ]
+            detected_count -= before_ruled - len(split_regions)
         regions = split_regions
 
         # Slanted callouts (chamfers, angled fits) that this route cannot read:
@@ -6945,6 +7183,14 @@ class OcrPipeline:
                 for region in notes_regions
                 if bbox_intersects_scope(region["bbox"], scan_scope)
             ]
+        # Notes are read from the unmasked page, so boilerplate outside the
+        # drawing border (a hazardous-substances notice down the margin)
+        # would come back as a note balloon though its strip is masked.
+        notes_regions = [
+            region
+            for region in notes_regions
+            if _inside_border(region["bbox"], layout.border)
+        ]
         page_area = float(image.width) * float(image.height)
         for notes_region in notes_regions:
             before_notes = len(regions)
@@ -7013,15 +7259,17 @@ class OcrPipeline:
                     operation_label="Feature control frames",
                 )
 
+            # Not filtered by existing balloons: a frame contains the balloon
+            # an earlier scan put on its tolerance, and only the client knows
+            # whether that balloon is untouched enough for the frame to take
+            # it over (scanCandidates.frameUpgradeTarget).
             frame_regions = [
                 region
                 for region in self._frame_regions(
                     image,
                     progress_callback=report_gdt_progress,
                 )
-                if not overlaps_existing_value(
-                    region["bbox"], existing_value_boxes
-                )
+                if _inside_border(region["bbox"], layout.border)
                 and (
                     scan_scope is None
                     or bbox_intersects_scope(region["bbox"], scan_scope)
