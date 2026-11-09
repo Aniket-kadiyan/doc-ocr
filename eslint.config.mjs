@@ -13,6 +13,8 @@ const eslintConfig = [
   {
     ignores: [
       ".next/**",
+      // Python virtual environments contain third-party JavaScript.
+      "**/.venv*/**",
       "coverage/**",
       "next-env.d.ts",
       "node_modules/**",
