@@ -1,0 +1,43 @@
+﻿{
+    "schemaVersion":  1,
+    "platform":  "windows-x64",
+    "generatedAtUtc":  "2026-11-05T06:39:04.5665619Z",
+    "files":  [
+                  {
+                      "key":  "python",
+                      "displayName":  "CPython 3.13.14 x64",
+                      "version":  "3.13.14",
+                      "fileName":  "python-3.13.14-amd64.exe",
+                      "officialDownloadUrl":  "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
+                      "status":  "ready",
+                      "sha256":  "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+                  },
+                  {
+                      "key":  "node",
+                      "displayName":  "Node.js 24.22.1 LTS x64",
+                      "version":  "24.22.1",
+                      "fileName":  "node-v24.22.1-x64.msi",
+                      "officialDownloadUrl":  "https://nodejs.org/dist/v24.22.1/node-v24.22.1-x64.msi",
+                      "status":  "ready",
+                      "sha256":  "3bda4baf1ee709b33cf920dd633106ddb23951e322bff9c03ec9f64ab8981b01"
+                  },
+                  {
+                      "key":  "git",
+                      "displayName":  "Git for Windows 2.56.0.3 x64",
+                      "version":  "2.56.0.3",
+                      "fileName":  "Git-2.56.0.3-64-bit.exe",
+                      "officialDownloadUrl":  "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.3/Git-2.56.0.3-64-bit.exe",
+                      "status":  "ready",
+                      "sha256":  "dc6d3db061999136e139f31376c5582a9ed6f36a4ea12f15e54ad7fa2bfc0bf2"
+                  },
+                  {
+                      "key":  "mssqlOdbc",
+                      "displayName":  "Microsoft ODBC Driver 18.7.1.1 for SQL Server x64",
+                      "version":  "18.7.1.1",
+                      "fileName":  "msodbcsql-18.7.1.1-x64.msi",
+                      "officialDownloadUrl":  "https://download.microsoft.com/download/d624e1c6-293b-4d6f-91b8-6e515a5d6a77/amd64/1033/msodbcsql.msi",
+                      "status":  "ready",
+                      "sha256":  "21ef69e4b942f18aced55fa7c3a8d7263004e113a96690bac7509645e1b1a310"
+                  }
+              ]
+}
