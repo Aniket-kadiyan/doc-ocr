@@ -103,6 +103,10 @@ class PageLayout:
     table_masks: tuple[LayoutBox, ...]
     panels: tuple[LayoutPanel, ...]
     overlaps: tuple[LayoutBox, ...]
+    # The drawing border, when the sheet has a full one. Its outside is
+    # already among ``table_masks``; this is for passes that never see the
+    # masked page, such as the notes and feature-control-frame reads.
+    border: LayoutBox | None = None
 
     def overlay(
         self,
@@ -538,6 +542,27 @@ TEXT_COMPONENT_MAX_HEIGHT_RATIO = 0.025
 #: while leaving every title block and revision grid masked.
 TABLE_MASK_MIN_CELLS = 3
 
+#: Dimension lines end in arrowheads; table rules never do.
+#:
+#: A densely dimensioned view passes every test above. Its extension and
+#: dimension lines cross into text-height "cells", and each one holds the
+#: value written on its dimension line, so the view looks like a populated
+#: table. On 113-M02-292A that masked three whole views (41.7±0.2, 27, 48.5,
+#: R1000, 8-R2, 30°, 45° and more were never detected).
+#:
+#: A cell edge counts as a dimension line when one end, past the rule it
+#: starts on, widens into a wedge on BOTH sides of the line. The two-sided
+#: test is what keeps table text out: a glyph or signature touching a rule
+#: sits on one side of it. Measured over 69 grids on 40 raster sheets, the
+#: three dimensioned views had 17–31% of their cell edges ending in arrows;
+#: the highest real table had 10%, from one signature stroke in a 10-cell
+#: block. The decision is per group only: a single arrowed cell is noise
+#: (it unmasked half a gear-specification table when tried), so a real
+#: table is masked whole or not at all.
+TABLE_ARROW_LENGTH_RATIO = 0.008
+TABLE_VIEW_MIN_ARROW_EDGE_RATIO = 0.13
+TABLE_VIEW_MIN_ARROW_EDGES = 3
+
 
 def _group_repeated_cells(
     cells: Sequence[LayoutBox],
@@ -656,6 +681,144 @@ def _group_looks_like_a_table(
     )
 
 
+def _ink_run_across(
+    ink: np.ndarray,
+    *,
+    along: int,
+    across: int,
+    horizontal: bool,
+    reach: int,
+) -> tuple[int, int] | None:
+    """
+    The run of ink crossing a line, in one slice across it.
+
+    Returned as the run's first and last coordinate across the line, or
+    ``None`` when the slice falls off the page. An empty slice is a zero
+    length run at ``across``.
+    """
+
+    if horizontal:
+        if not 0 <= along < ink.shape[1]:
+            return None
+        start = max(0, across - reach)
+        line = ink[start : across + reach + 1, along]
+    else:
+        if not 0 <= along < ink.shape[0]:
+            return None
+        start = max(0, across - reach)
+        line = ink[along, start : across + reach + 1]
+    centre = across - start
+    touching = [
+        index
+        for index in range(max(0, centre - 3), min(len(line), centre + 4))
+        if line[index]
+    ]
+    if not touching:
+        return across, across - 1
+    first = last = min(touching, key=lambda index: abs(index - centre))
+    while first > 0 and line[first - 1] and centre - first < reach:
+        first -= 1
+    while last < len(line) - 1 and line[last + 1] and last - centre < reach:
+        last += 1
+    return start + first, start + last
+
+
+def _edge_ends_in_arrowhead(
+    ink: np.ndarray,
+    *,
+    across: int,
+    tip: int,
+    step: int,
+    horizontal: bool,
+    length: int,
+) -> bool:
+    """Whether a cell edge widens into a two-sided wedge just inside ``tip``."""
+
+    runs: list[tuple[int, int]] = []
+    for offset in range(2, 3 * length):
+        run = _ink_run_across(
+            ink,
+            along=tip + step * offset,
+            across=across,
+            horizontal=horizontal,
+            reach=2 * length,
+        )
+        if run is None:
+            return False
+        runs.append(run)
+    first = np.array([run[0] for run in runs], dtype=float)
+    last = np.array([run[1] for run in runs], dtype=float)
+    width = last - first + 1
+    # Past the head the edge is a plain line. Its middle there is the line's
+    # real centre; a scanned rule rarely sits exactly on the cell coordinate,
+    # and the wedge's two sides are measured from it.
+    line_width = float(np.median(width[-length:]))
+    line_centre = float(np.median((first[-length:] + last[-length:]) / 2))
+    # The edge starts on the perpendicular line that closes the cell; that
+    # line is far wider than any arrowhead, so step past it first.
+    start = 0
+    while start < length and width[start] > 2 * length:
+        start += 1
+    head = width[start : start + 2 * length]
+    widest = start + int(head.argmax())
+    peak = float(width[widest])
+    if peak < max(3 * line_width, line_width + 4) or peak > 2 * length:
+        return False
+    # A glyph or signature touching a rule sits on one side of it. A scanned
+    # arrowhead is rarely centred on its line, so up to 1:3 still counts.
+    above = line_centre - first[widest]
+    below = last[widest] - line_centre
+    return min(above, below) >= 2 and min(above, below) >= max(above, below) / 3
+
+
+def _arrowed_edge_count(
+    ink: np.ndarray,
+    cell: LayoutBox,
+    *,
+    page_height: int,
+) -> int:
+    """How many of a cell's four edges end in an arrowhead at either end."""
+
+    length = max(6, int(page_height * TABLE_ARROW_LENGTH_RATIO))
+    count = 0
+    for across, start, end, horizontal in (
+        (cell.y, cell.x, cell.x1, True),
+        (cell.y1, cell.x, cell.x1, True),
+        (cell.x, cell.y, cell.y1, False),
+        (cell.x1, cell.y, cell.y1, False),
+    ):
+        count += any(
+            _edge_ends_in_arrowhead(
+                ink,
+                across=across,
+                tip=tip,
+                step=step,
+                horizontal=horizontal,
+                length=length,
+            )
+            for tip, step in ((start, 1), (end, -1))
+        )
+    return count
+
+
+def _group_is_a_dimensioned_view(
+    group: Sequence[LayoutBox],
+    ink: np.ndarray,
+    *,
+    page_height: int,
+) -> bool:
+    """Too many of the group's edges are dimension lines. See the constants."""
+
+    arrowed = sum(
+        _arrowed_edge_count(ink, cell, page_height=page_height)
+        for cell in group
+    )
+    return (
+        arrowed >= TABLE_VIEW_MIN_ARROW_EDGES
+        and arrowed / (4 * len(group)) >= TABLE_VIEW_MIN_ARROW_EDGE_RATIO
+    )
+
+
 def _merge_rectangular_cells(
     cells: Sequence[LayoutBox],
     *,
@@ -754,6 +917,11 @@ def _grid_masks(
             page_height=page_height,
             tolerance=tolerance,
         )
+        and not _group_is_a_dimensioned_view(
+            group,
+            ink,
+            page_height=page_height,
+        )
         for cell in group
     ]
     return _discard_mostly_contained_boxes(
@@ -767,7 +935,7 @@ def _margin_band_masks(
     width: int,
     height: int,
 ) -> list[LayoutBox]:
-    """Grids in the sheet's margin strips, measured against the strip.
+    """Grids in the sheet's four margin strips, measured against the strip.
 
     A drawing keeps its boilerplate down the margins, and a narrow table's
     rules are short in page terms however obviously they rule a table. Running
@@ -776,26 +944,159 @@ def _margin_band_masks(
     the border and the boilerplate, not dimensions.
     """
 
-    band = int(round(width * TABLE_MASK_MARGIN_BAND_RATIO))
-    if band < 64:
-        return []
-
     masks: list[LayoutBox] = []
-    for x0 in (0, max(0, width - band)):
-        x1 = min(width, x0 + band)
-        if x1 - x0 < 64:
-            continue
-        for box in _grid_masks(
-            ink[:, x0:x1],
-            page_width=x1 - x0,
-            page_height=height,
-        ):
-            masks.append(LayoutBox(box.x + x0, box.y, box.width, box.height))
+    band = int(round(width * TABLE_MASK_MARGIN_BAND_RATIO))
+    if band >= 64:
+        for x0 in (0, max(0, width - band)):
+            x1 = min(width, x0 + band)
+            if x1 - x0 < 64:
+                continue
+            for box in _grid_masks(
+                ink[:, x0:x1],
+                page_width=x1 - x0,
+                page_height=height,
+            ):
+                masks.append(LayoutBox(box.x + x0, box.y, box.width, box.height))
+    # The same along the top and bottom: a revision strip or a parts list
+    # across the head or foot of the sheet has rows too short in page terms.
+    band = int(round(height * TABLE_MASK_MARGIN_BAND_RATIO))
+    if band >= 64:
+        for y0 in (0, max(0, height - band)):
+            y1 = min(height, y0 + band)
+            if y1 - y0 < 64:
+                continue
+            # Rules are measured against the strip, which is what lets its
+            # short column rules count; cell sizes are still judged against
+            # the page, or every row would look too tall to be a table's.
+            for box in _grid_masks(
+                ink[y0:y1, :],
+                page_width=width,
+                page_height=height,
+            ):
+                masks.append(LayoutBox(box.x, box.y + y0, box.width, box.height))
     return masks
 
 
-def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
-    """Detect every repeated-cell grid that should be masked in page scans."""
+# The drawing border: four long rules, each within this fraction of its own
+# edge of the sheet, at least this fraction of the sheet long, and meeting the
+# other three at the corners. Everything between the border and the paper edge
+# -- a boilerplate column down the margin, a print stamp under the frame -- is
+# outside the drawing and never a dimension. All four sides are required: one
+# long line near an edge is just as likely a shaft's outline, and masking
+# beyond it would delete the dimensions over it.
+BORDER_EDGE_BAND_RATIO = 0.15
+BORDER_MIN_LENGTH_RATIO = 0.6
+BORDER_CORNER_TOLERANCE_RATIO = 0.02
+# Rules this close to the paper edge are the scan's own edge, not a border.
+BORDER_PAPER_EDGE_RATIO = 0.003
+
+
+def _border_sides(ink: np.ndarray) -> tuple[int, int, int, int] | None:
+    """The drawing border's left, top, right and bottom rules, if it has one."""
+
+    height, width = ink.shape
+    horizontal = _extract_axis_lines(ink, horizontal=True)
+    vertical = _extract_axis_lines(ink, horizontal=False)
+
+    def outermost(
+        segments: Sequence[_LineSegment],
+        extent: int,
+        length: int,
+        *,
+        far: bool,
+    ) -> list[_LineSegment]:
+        band = extent * BORDER_EDGE_BAND_RATIO
+        paper = extent * BORDER_PAPER_EDGE_RATIO
+        found = [
+            segment
+            for segment in segments
+            if segment.end - segment.start >= length * BORDER_MIN_LENGTH_RATIO
+            and (
+                paper <= extent - segment.coordinate <= band
+                if far
+                else paper <= segment.coordinate <= band
+            )
+        ]
+        return sorted(found, key=lambda s: -s.coordinate if far else s.coordinate)
+
+    tolerance = max(width, height) * BORDER_CORNER_TOLERANCE_RATIO
+    tops = outermost(horizontal, height, width, far=False)
+    bottoms = outermost(horizontal, height, width, far=True)
+    lefts = outermost(vertical, width, height, far=False)
+    rights = outermost(vertical, width, height, far=True)
+    # The outermost rule on each side that closes the rectangle with the
+    # others; an inner rule (a header table's row line) is tried only if the
+    # outer one does not.
+    for top in tops:
+        for bottom in bottoms:
+            for left in lefts:
+                for right in rights:
+                    if all(
+                        segment.start <= low + tolerance
+                        and segment.end >= high - tolerance
+                        for segment, low, high in (
+                            (top, left.coordinate, right.coordinate),
+                            (bottom, left.coordinate, right.coordinate),
+                            (left, top.coordinate, bottom.coordinate),
+                            (right, top.coordinate, bottom.coordinate),
+                        )
+                    ):
+                        return (
+                            left.coordinate,
+                            top.coordinate,
+                            right.coordinate,
+                            bottom.coordinate,
+                        )
+    return None
+
+
+def _outside_border_masks(
+    border: LayoutBox | None,
+    *,
+    width: int,
+    height: int,
+) -> list[LayoutBox]:
+    """The strips between the drawing border and the paper edge."""
+
+    if border is None:
+        return []
+    left, top, right, bottom = border.x, border.y, border.x1 - 1, border.y1 - 1
+    # Stop short of the rule itself, which a title block or a tolerance table
+    # inside the border may share as its own outer edge.
+    gap = max(2, int(round(min(width, height) / 600)))
+    strips = (
+        LayoutBox(0, 0, left - gap, height),
+        LayoutBox(right + gap + 1, 0, width - right - gap - 1, height),
+        LayoutBox(0, 0, width, top - gap),
+        LayoutBox(0, bottom + gap + 1, width, height - bottom - gap - 1),
+    )
+    return [strip for strip in strips if strip.width > 0 and strip.height > 0]
+
+
+def detect_drawing_border(image: Image.Image) -> LayoutBox | None:
+    """The drawing border as a box, or None when the sheet has no full frame."""
+
+    width, height = image.size
+    if width < 64 or height < 64:
+        return None
+    return _border_box(_ink_map(image))
+
+
+def _border_box(ink: np.ndarray) -> LayoutBox | None:
+    sides = _border_sides(ink)
+    if sides is None:
+        return None
+    left, top, right, bottom = sides
+    return LayoutBox(left, top, right - left + 1, bottom - top + 1)
+
+
+def detect_table_masks(
+    image: Image.Image,
+    *,
+    include_border: bool = True,
+) -> tuple[LayoutBox, ...]:
+    """Detect every repeated-cell grid that should be masked in page scans,
+    plus the strips outside the drawing border unless told otherwise."""
 
     width, height = image.size
     if width < 64 or height < 64:
@@ -819,6 +1120,12 @@ def detect_table_masks(image: Image.Image) -> tuple[LayoutBox, ...]:
         x1 = min(width, box.x1 + padding)
         y1 = min(height, box.y1 + padding)
         padded.append(LayoutBox(x0, y0, x1 - x0, y1 - y0))
+    # Unpadded: the strips already stop just short of the border rule, and
+    # padding would carry them over it onto values drawn against the frame.
+    if include_border:
+        padded.extend(
+            _outside_border_masks(_border_box(ink), width=width, height=height)
+        )
     return tuple(sorted(padded, key=lambda box: (box.y, box.x)))
 
 
@@ -1058,14 +1365,28 @@ def analyze_page_layout(image: Image.Image) -> PageLayout:
     """Analyze one complete rendered drawing in source-page coordinates."""
 
     rgb = image.convert("RGB")
-    masks = detect_table_masks(rgb)
-    panels, overlaps = build_adaptive_panels(rgb, masks)
+    tables = detect_table_masks(rgb, include_border=False)
+    border = detect_drawing_border(rgb)
+    # Panels are split around the tables alone. The border strips hold
+    # almost no ink, but feeding them in still moves the split lines, and
+    # every value near a moved line reads a little differently.
+    panels, overlaps = build_adaptive_panels(rgb, tables)
+    masks = tuple(
+        sorted(
+            tables
+            + tuple(
+                _outside_border_masks(border, width=rgb.width, height=rgb.height)
+            ),
+            key=lambda box: (box.y, box.x),
+        )
+    )
     return PageLayout(
         width=rgb.width,
         height=rgb.height,
         table_masks=masks,
         panels=panels,
         overlaps=overlaps,
+        border=border,
     )
 
 
