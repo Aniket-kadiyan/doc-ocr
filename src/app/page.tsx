@@ -1,5 +1,5 @@
-import { DrawingViewerLoader } from "@/components/DrawingViewerLoader";
+import { ModuleNavigation } from "@/components/ModuleNavigation";
 
 export default function Home() {
-  return <DrawingViewerLoader />;
+  return <ModuleNavigation />;
 }

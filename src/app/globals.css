@@ -3,6 +3,13 @@
 :root {
   --background: #f1f5f9;
   --foreground: #0f172a;
+  --qtracx-blue: #3978c9;
+  --qtracx-blue-dark: #285f9f;
+  --qtracx-surface: #ffffff;
+  --qtracx-canvas: #f4f8fc;
+  --qtracx-border: #dce4ee;
+  --qtracx-text: #182231;
+  --qtracx-muted: #657286;
 }
 
 body {
@@ -17,7 +24,8 @@ body {
     sans-serif;
 }
 
-.qtracx-auth {
+.qtracx-auth,
+.qtracx-module-grid {
   font-family:
     "Outfit",
     "Segoe UI",
@@ -38,6 +46,14 @@ body {
     80px 80px,
     16px 16px,
     16px 16px;
+}
+
+.qtracx-module-grid {
+  background-color: #f4f8fc;
+  background-image:
+    linear-gradient(rgba(116, 151, 187, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(116, 151, 187, 0.055) 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 * {
