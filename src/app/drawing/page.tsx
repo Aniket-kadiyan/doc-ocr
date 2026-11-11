@@ -6,5 +6,9 @@ export const metadata: Metadata = {
 };
 
 export default function DrawingWorkspacePage() {
-    return <DrawingViewerLoader />;
+    return (
+        <div className="qtracx-drawing-route">
+            <DrawingViewerLoader />
+        </div>
+    );
 }

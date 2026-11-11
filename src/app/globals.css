@@ -10,6 +10,7 @@
   --qtracx-border: #dce4ee;
   --qtracx-text: #182231;
   --qtracx-muted: #657286;
+  --qtracx-titlebar-height: 72px;
 }
 
 body {
@@ -25,6 +26,7 @@ body {
 }
 
 .qtracx-auth,
+.qtracx-app-shell,
 .qtracx-module-grid {
   font-family:
     "Outfit",
@@ -36,10 +38,16 @@ body {
 .qtracx-auth-grid {
   background-color: #f1f7fd;
   background-image:
-    linear-gradient(rgba(105, 151, 197, 0.13) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(105, 151, 197, 0.13) 1px, transparent 1px),
-    linear-gradient(rgba(105, 151, 197, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(105, 151, 197, 0.06) 1px, transparent 1px);
+    linear-gradient(rgba(105, 151, 197, 0.13) 1px,
+      transparent 1px),
+    linear-gradient(90deg,
+      rgba(105, 151, 197, 0.13) 1px,
+      transparent 1px),
+    linear-gradient(rgba(105, 151, 197, 0.06) 1px,
+      transparent 1px),
+    linear-gradient(90deg,
+      rgba(105, 151, 197, 0.06) 1px,
+      transparent 1px);
   background-position: -1px -1px;
   background-size:
     80px 80px,
@@ -51,9 +59,27 @@ body {
 .qtracx-module-grid {
   background-color: #f4f8fc;
   background-image:
-    linear-gradient(rgba(116, 151, 187, 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(116, 151, 187, 0.055) 1px, transparent 1px);
+    linear-gradient(rgba(116, 151, 187, 0.055) 1px,
+      transparent 1px),
+    linear-gradient(90deg,
+      rgba(116, 151, 187, 0.055) 1px,
+      transparent 1px);
   background-size: 32px 32px;
+}
+
+.qtracx-user-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.qtracx-drawing-route {
+  height: calc(100vh - var(--qtracx-titlebar-height));
+  min-height: 0;
+  overflow: hidden;
+}
+
+.qtracx-drawing-route>div {
+  height: 100%;
+  min-height: 0;
 }
 
 * {

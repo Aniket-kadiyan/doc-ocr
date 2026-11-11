@@ -22,6 +22,7 @@ import {
   AUTHENTICATION_REQUIRED_EVENT,
   DEMO_EXPIRED_EVENT,
 } from "@/lib/requestDiagnostics";
+import { AuthenticatedAppShell } from "@/components/AuthenticatedAppShell";
 
 type AuthenticationState =
   | "loading"
@@ -35,18 +36,34 @@ interface AuthenticationContextValue {
   logout: () => Promise<void>;
 }
 
-const AuthenticationContext = createContext<AuthenticationContextValue | null>(null);
+const AuthenticationContext =
+  createContext<AuthenticationContextValue | null>(null);
 
 export function useAuthentication(): AuthenticationContextValue {
   const value = useContext(AuthenticationContext);
-  if (!value) throw new Error("Authentication context is unavailable");
+
+  if (!value) {
+    throw new Error("Authentication context is unavailable");
+  }
+
   return value;
 }
 
 function UserIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.5" />
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-5 w-5"
+    >
+      <circle
+        cx="12"
+        cy="8"
+        r="3.25"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
       <path
         d="M5.75 19c.43-3.17 2.63-5 6.25-5s5.82 1.83 6.25 5"
         stroke="currentColor"
@@ -57,9 +74,18 @@ function UserIcon() {
   );
 }
 
-function LockIcon({ className = "h-5 w-5" }: { className?: string }) {
+function LockIcon({
+  className = "h-5 w-5",
+}: {
+  className?: string;
+}) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className={className}>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+    >
       <rect
         x="5.5"
         y="10"
@@ -80,14 +106,26 @@ function LockIcon({ className = "h-5 w-5" }: { className?: string }) {
 
 function EyeIcon({ hidden }: { hidden: boolean }) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-5 w-5"
+    >
       <path
         d="M3.5 12s3.1-5 8.5-5 8.5 5 8.5 5-3.1 5-8.5 5-8.5-5-8.5-5Z"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
-      <circle cx="12" cy="12" r="2.25" stroke="currentColor" strokeWidth="1.5" />
+      <circle
+        cx="12"
+        cy="12"
+        r="2.25"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+
       {hidden && (
         <path
           d="M5 4.5 19 19.5"
@@ -102,8 +140,19 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 
 function ErrorIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-5 w-5 shrink-0">
-      <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="1.4" />
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="none"
+      className="h-5 w-5 shrink-0"
+    >
+      <circle
+        cx="10"
+        cy="10"
+        r="8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
       <path
         d="M10 5.8v5.1M10 14.1v.1"
         stroke="currentColor"
@@ -143,6 +192,7 @@ function BrandPanel() {
         <p className="text-[14px] font-semibold tracking-[0.09em]">
           DRAWING TO HIGH QUALITY INTELLIGENCE
         </p>
+
         <p className="mt-2 text-[10px] font-medium tracking-[0.18em] text-[#647387]">
           SCHEMATIC • ILLUSTRATIVE ONLY
         </p>
@@ -183,7 +233,9 @@ function LoadingScreen() {
           priority
           className="mx-auto h-auto w-[210px]"
         />
+
         <div className="mx-auto mt-5 h-7 w-7 animate-spin rounded-full border-[3px] border-[#dce5f2] border-t-[#3573c9]" />
+
         <p className="mt-4 text-sm font-medium text-[#5d6672]">
           Checking your QTraX session…
         </p>
@@ -196,19 +248,24 @@ function DemoExpiredScreen() {
   return (
     <main className="qtracx-auth min-h-screen bg-white text-black lg:grid lg:grid-cols-[48.4%_51.6%]">
       <BrandPanel />
+
       <section className="flex min-h-screen items-center px-6 py-12 sm:px-10">
         <div className="mx-auto w-full max-w-[501px]">
           <MobileBrand />
+
           <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-[#fff1ef] text-[#a23a30]">
             <LockIcon className="h-7 w-7" />
           </div>
+
           <h1 className="text-[38px] font-medium leading-tight tracking-[-0.025em] sm:text-[46px]">
             Demo period expired
           </h1>
+
           <p className="mt-5 text-[18px] leading-7 text-[#666d76]">
             This temporary QTraX demonstration has ended. Authentication and
             application functions are no longer available.
           </p>
+
           <p className="mt-4 text-[15px] leading-6 text-[#666d76]">
             Contact your QTraX representative or system administrator if you
             need continued access.
@@ -225,7 +282,11 @@ interface LoginScreenProps {
   onRetry: () => Promise<void>;
 }
 
-function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps) {
+function LoginScreen({
+  serviceUnavailable,
+  onLogin,
+  onRetry,
+}: LoginScreenProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -237,23 +298,39 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
     const normalizedUsername = username.trim();
-    const nextUsernameError = normalizedUsername ? "" : "Enter your User ID.";
-    const nextPasswordError = password ? "" : "Enter your password.";
+    const nextUsernameError = normalizedUsername
+      ? ""
+      : "Enter your User ID.";
+    const nextPasswordError = password
+      ? ""
+      : "Enter your password.";
 
     setUsernameError(nextUsernameError);
     setPasswordError(nextPasswordError);
     setError("");
-    if (nextUsernameError || nextPasswordError) return;
+
+    if (nextUsernameError || nextPasswordError) {
+      return;
+    }
 
     setSubmitting(true);
+
     try {
       await onLogin(normalizedUsername, password);
     } catch (caught) {
-      if (caught instanceof AuthenticationApiError && caught.status === 401) {
-        setError("Unable to sign in. Check your credentials and try again.");
+      if (
+        caught instanceof AuthenticationApiError &&
+        caught.status === 401
+      ) {
+        setError(
+          "Unable to sign in. Check your credentials and try again."
+        );
       } else {
-        setError("QTraX could not contact the authentication service.");
+        setError(
+          "QTraX could not contact the authentication service."
+        );
       }
     } finally {
       setSubmitting(false);
@@ -272,6 +349,7 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
             <h1 className="text-[40px] font-medium leading-[1.12] tracking-[-0.025em] text-black sm:text-[48px]">
               Welcome back
             </h1>
+
             <p className="mt-3 text-[18px] font-normal leading-6 text-[#727272] sm:text-[20px]">
               Sign in to continue to QTraX
             </p>
@@ -283,6 +361,7 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
               className="mt-7 flex items-start gap-2.5 rounded-lg border border-[#e9b7ae] bg-[#fff5f3] px-4 py-3 text-[14px] text-[#9d3024]"
             >
               <ErrorIcon />
+
               <p className="leading-5">
                 The authentication service is currently unavailable.{" "}
                 <button
@@ -304,10 +383,12 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
               >
                 User ID
               </label>
+
               <div className="relative mt-4">
                 <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-[#575d65]">
                   <UserIcon />
                 </span>
+
                 <input
                   id="qtracx-user-id"
                   autoFocus
@@ -315,19 +396,26 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
                   value={username}
                   onChange={(event) => {
                     setUsername(event.target.value);
-                    if (usernameError) setUsernameError("");
+
+                    if (usernameError) {
+                      setUsernameError("");
+                    }
                   }}
                   aria-invalid={Boolean(usernameError)}
-                  aria-describedby={usernameError ? "qtracx-user-id-error" : undefined}
+                  aria-describedby={
+                    usernameError
+                      ? "qtracx-user-id-error"
+                      : undefined
+                  }
                   maxLength={64}
                   placeholder="Enter your User ID"
-                  className={`h-[50px] w-full rounded-lg border bg-white pl-[54px] pr-4 text-[16px] text-black outline-none transition placeholder:text-[#8b8b8b] focus:ring-[3px] ${
-                    usernameError
+                  className={`h-[50px] w-full rounded-lg border bg-white pl-[54px] pr-4 text-[16px] text-black outline-none transition placeholder:text-[#8b8b8b] focus:ring-[3px] ${usernameError
                       ? "border-[#c64a3d] focus:border-[#c64a3d] focus:ring-[#f6d8d4]"
                       : "border-[#b6b6b6] focus:border-[#3573c9] focus:ring-[#d9e8fb]"
-                  }`}
+                    }`}
                 />
               </div>
+
               {usernameError && (
                 <p
                   id="qtracx-user-id-error"
@@ -347,10 +435,12 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
               >
                 Password
               </label>
+
               <div className="relative mt-4">
                 <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-[#575d65]">
                   <LockIcon />
                 </span>
+
                 <input
                   id="qtracx-password"
                   type={passwordVisible ? "text" : "password"}
@@ -358,27 +448,41 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
                   value={password}
                   onChange={(event) => {
                     setPassword(event.target.value);
-                    if (passwordError) setPasswordError("");
+
+                    if (passwordError) {
+                      setPasswordError("");
+                    }
                   }}
                   aria-invalid={Boolean(passwordError)}
-                  aria-describedby={passwordError ? "qtracx-password-error" : undefined}
+                  aria-describedby={
+                    passwordError
+                      ? "qtracx-password-error"
+                      : undefined
+                  }
                   maxLength={128}
                   placeholder="Enter your password"
-                  className={`h-[50px] w-full rounded-lg border bg-white pl-[54px] pr-[54px] text-[16px] text-black outline-none transition placeholder:text-[#8b8b8b] focus:ring-[3px] ${
-                    passwordError
+                  className={`h-[50px] w-full rounded-lg border bg-white pl-[54px] pr-[54px] text-[16px] text-black outline-none transition placeholder:text-[#8b8b8b] focus:ring-[3px] ${passwordError
                       ? "border-[#c64a3d] focus:border-[#c64a3d] focus:ring-[#f6d8d4]"
                       : "border-[#b6b6b6] focus:border-[#3573c9] focus:ring-[#d9e8fb]"
-                  }`}
+                    }`}
                 />
+
                 <button
                   type="button"
-                  onClick={() => setPasswordVisible((visible) => !visible)}
-                  aria-label={passwordVisible ? "Hide password" : "Show password"}
+                  onClick={() =>
+                    setPasswordVisible((visible) => !visible)
+                  }
+                  aria-label={
+                    passwordVisible
+                      ? "Hide password"
+                      : "Show password"
+                  }
                   className="absolute right-5 top-1/2 -translate-y-1/2 rounded text-[#575d65] transition hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3573c9]"
                 >
                   <EyeIcon hidden={passwordVisible} />
                 </button>
               </div>
+
               {passwordError && (
                 <p
                   id="qtracx-password-error"
@@ -412,6 +516,7 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
                   className="h-4 w-4 animate-spin rounded-full border-2 border-white/45 border-t-white"
                 />
               )}
+
               {submitting ? "Signing in" : "Sign in"}
             </button>
 
@@ -445,59 +550,32 @@ function LoginScreen({ serviceUnavailable, onLogin, onRetry }: LoginScreenProps)
   );
 }
 
-function SessionControl() {
-  const { user, logout } = useAuthentication();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-
-  const signOut = async () => {
-    setBusy(true);
-    setError(false);
-    try {
-      await logout();
-    } catch {
-      setError(true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="fixed bottom-4 right-4 z-[100] flex items-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
-      <div className="min-w-0 text-right">
-        <p className="max-w-48 truncate text-xs font-semibold text-slate-800">
-          {user.display_name}
-        </p>
-        <p className={`text-[11px] ${error ? "text-red-600" : "text-slate-500"}`}>
-          {error ? "Sign out failed" : user.username}
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={() => void signOut()}
-        disabled={busy}
-        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-      >
-        {busy ? "Signing out…" : "Sign out"}
-      </button>
-    </div>
-  );
-}
-
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthenticationState>("loading");
-  const [user, setUser] = useState<AuthenticatedUser | null>(null);
+export function AuthProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const [state, setState] =
+    useState<AuthenticationState>("loading");
+  const [user, setUser] =
+    useState<AuthenticatedUser | null>(null);
 
   const restore = useCallback(async () => {
     setState("loading");
+
     try {
       const restored = await readAuthenticatedUser();
       setUser(restored);
-      setState(restored ? "authenticated" : "unauthenticated");
+
+      setState(
+        restored ? "authenticated" : "unauthenticated"
+      );
     } catch (caught) {
       setUser(null);
+
       setState(
-        caught instanceof AuthenticationApiError && caught.status === 423
+        caught instanceof AuthenticationApiError &&
+          caught.status === 423
           ? "demo_expired"
           : "unavailable"
       );
@@ -506,27 +584,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void restore();
+
     const expire = () => {
       setUser(null);
       setState("unauthenticated");
     };
+
     const demoExpired = () => {
       setUser(null);
       setState("demo_expired");
     };
-    window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, expire);
-    window.addEventListener(DEMO_EXPIRED_EVENT, demoExpired);
+
+    window.addEventListener(
+      AUTHENTICATION_REQUIRED_EVENT,
+      expire
+    );
+
+    window.addEventListener(
+      DEMO_EXPIRED_EVENT,
+      demoExpired
+    );
+
     return () => {
-      window.removeEventListener(AUTHENTICATION_REQUIRED_EVENT, expire);
-      window.removeEventListener(DEMO_EXPIRED_EVENT, demoExpired);
+      window.removeEventListener(
+        AUTHENTICATION_REQUIRED_EVENT,
+        expire
+      );
+
+      window.removeEventListener(
+        DEMO_EXPIRED_EVENT,
+        demoExpired
+      );
     };
   }, [restore]);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const authenticated = await loginUser(username, password);
-    setUser(authenticated);
-    setState("authenticated");
-  }, []);
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const authenticated = await loginUser(
+        username,
+        password
+      );
+
+      setUser(authenticated);
+      setState("authenticated");
+    },
+    []
+  );
 
   const logout = useCallback(async () => {
     await logoutUser();
@@ -534,10 +637,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState("unauthenticated");
   }, []);
 
-  const context = useMemo(() => (user ? { user, logout } : null), [logout, user]);
+  const context = useMemo(
+    () => (user ? { user, logout } : null),
+    [logout, user]
+  );
 
-  if (state === "loading") return <LoadingScreen />;
-  if (state === "demo_expired") return <DemoExpiredScreen />;
+  if (state === "loading") {
+    return <LoadingScreen />;
+  }
+
+  if (state === "demo_expired") {
+    return <DemoExpiredScreen />;
+  }
+
   if (state !== "authenticated" || !context) {
     return (
       <LoginScreen
@@ -550,8 +662,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthenticationContext.Provider value={context}>
-      {children}
-      <SessionControl />
+      <AuthenticatedAppShell
+        user={context.user}
+        logout={context.logout}
+      >
+        {children}
+      </AuthenticatedAppShell>
     </AuthenticationContext.Provider>
   );
 }

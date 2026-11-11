@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useAuthentication } from "@/components/AuthProvider";
@@ -126,7 +125,12 @@ function AdministrationIcon() {
                 strokeWidth="1.4"
                 strokeLinejoin="round"
             />
-            <circle cx="22.7" cy="21.4" r="1.7" fill="currentColor" />
+            <circle
+                cx="22.7"
+                cy="21.4"
+                r="1.7"
+                fill="currentColor"
+            />
         </svg>
     );
 }
@@ -165,6 +169,7 @@ function ModuleCard({
 
             <div className="mt-auto flex items-center justify-between pt-8 text-[15px] font-semibold text-[#2f6fc4]">
                 <span>{action}</span>
+
                 <span className="transition-transform duration-200 group-hover:translate-x-1">
                     <ArrowIcon />
                 </span>
@@ -178,30 +183,8 @@ export function ModuleNavigation() {
     const isAdministrator = user.roles.includes("admin");
 
     return (
-        <main className="qtracx-module-grid min-h-screen bg-[#f4f8fc] text-[#182231]">
-            <header className="border-b border-[#dce4ee] bg-white/95 backdrop-blur">
-                <div className="mx-auto flex min-h-[86px] max-w-[1440px] items-center justify-between gap-6 px-6 sm:px-10 lg:px-14">
-                    <Image
-                        src="/auth/qtracx-logo.png"
-                        alt="QTraX"
-                        width={419}
-                        height={209}
-                        priority
-                        className="h-auto w-[155px]"
-                    />
-
-                    <div className="min-w-0 text-right">
-                        <p className="truncate text-sm font-semibold text-[#263342]">
-                            {user.display_name}
-                        </p>
-                        <p className="truncate text-xs text-[#758296]">
-                            {isAdministrator ? "Administrator" : user.username}
-                        </p>
-                    </div>
-                </div>
-            </header>
-
-            <section className="mx-auto max-w-[1320px] px-6 pb-16 pt-14 sm:px-10 lg:px-14 lg:pt-20">
+        <main className="qtracx-module-grid flex min-h-full flex-col bg-[#f4f8fc] text-[#182231]">
+            <section className="mx-auto w-full max-w-[1320px] flex-1 px-6 pb-16 pt-14 sm:px-10 lg:px-14 lg:pt-20">
                 <div className="max-w-3xl">
                     <p className="text-xs font-bold uppercase tracking-[0.22em] text-[#3978c9]">
                         QTraX workspace
@@ -212,8 +195,8 @@ export function ModuleNavigation() {
                     </h1>
 
                     <p className="mt-4 max-w-2xl text-[17px] leading-7 text-[#657286]">
-                        Select the workspace you want to open. Your available modules depend
-                        on your account access.
+                        Welcome, {user.display_name}. Select the workspace you
+                        want to open.
                     </p>
                 </div>
 
