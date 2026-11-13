@@ -8,6 +8,7 @@ import {
   fitBalloonFontSize,
   getAnchoredBalloonGeometry,
 } from "@/lib/balloonStyle";
+import { balloonTopLeftAnchor } from "@/lib/balloonGeometry";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 
 export type BalloonMarkerStatus = "ok" | "review";
@@ -48,8 +49,7 @@ export function BalloonMarker({
   const boundaryColor = review
     ? BALLOON_REVIEW_BOUNDARY_COLOR
     : BALLOON_OK_BOUNDARY_COLOR;
-  const anchorX = bbox.x + bbox.width / 2;
-  const anchorY = bbox.y;
+  const { x: anchorX, y: anchorY } = balloonTopLeftAnchor(bbox);
   const geometry = getAnchoredBalloonGeometry(
     style,
     anchorX,

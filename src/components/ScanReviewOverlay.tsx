@@ -75,7 +75,7 @@ export function ScanReviewOverlay({
 
             {review ? (
               <BalloonMarker
-                bbox={bbox}
+                bbox={box}
                 label={`R-${candidate.reviewNumber ?? "?"}`}
                 scale={safeScale}
                 status="review"

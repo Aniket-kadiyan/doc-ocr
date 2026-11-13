@@ -16,6 +16,11 @@ import {
   BALLOON_SIZES,
   BALLOON_STYLE_SCHEMA_VERSION,
 } from "@/types/balloonStyle";
+import {
+  balloonGeometry,
+  balloonTopLeftAnchor,
+} from "@/lib/balloonGeometry";
+import type { Annotation } from "@/types/annotation";
 
 const manifestPath = fileURLToPath(
   new URL("../../public/balloon-styles/manifest.json", import.meta.url)
@@ -145,6 +150,46 @@ describe("balloon geometry", () => {
     expect(normal.y + style.anchor.y * normal.height).toBeCloseTo(anchorY);
     expect(zoomed.x + style.anchor.x * zoomed.width).toBeCloseTo(anchorX);
     expect(zoomed.y + style.anchor.y * zoomed.height).toBeCloseTo(anchorY);
+  });
+
+  it("anchors markers to the displayed box top-left without changing stored geometry", () => {
+    const annotation: Annotation = {
+      id: "top-left-anchor",
+      page: 1,
+      number: 7,
+      kind: "dimension",
+      label: "",
+      bbox: { x: 40, y: 60, width: 90, height: 24 },
+      orientedBox: {
+        x: 44,
+        y: 57,
+        width: 82,
+        height: 20,
+        rotation: 18,
+      },
+      value: "12.5",
+      type: "Linear",
+      confidence: 1,
+      rotation: 0,
+      createdAt: 1,
+      range: "0",
+    };
+
+    const storedBox = structuredClone(annotation.bbox);
+    const storedOrientedBox = structuredClone(annotation.orientedBox);
+    const geometry = balloonGeometry(annotation);
+    const anchor = balloonTopLeftAnchor(geometry.box);
+    const normal = getAnchoredBalloonGeometry(style, anchor.x, anchor.y, 1);
+    const zoomed = getAnchoredBalloonGeometry(style, anchor.x, anchor.y, 2);
+
+    expect(anchor).toEqual({ x: 44, y: 57 });
+    expect(normal.x + style.anchor.x * normal.width).toBeCloseTo(44);
+    expect(normal.y + style.anchor.y * normal.height).toBeCloseTo(57);
+    expect(zoomed.x + style.anchor.x * zoomed.width).toBeCloseTo(44);
+    expect(zoomed.y + style.anchor.y * zoomed.height).toBeCloseTo(57);
+    expect(annotation.bbox).toEqual(storedBox);
+    expect(annotation.orientedBox).toEqual(storedOrientedBox);
+    expect(annotation.number).toBe(7);
   });
 
   it("shrinks longer balloon numbers without going below the configured minimum", () => {

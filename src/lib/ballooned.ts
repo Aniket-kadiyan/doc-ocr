@@ -1,5 +1,8 @@
 import type { Annotation } from "@/types/annotation";
-import { balloonGeometry } from "@/lib/balloonGeometry";
+import {
+  balloonGeometry,
+  balloonTopLeftAnchor,
+} from "@/lib/balloonGeometry";
 import {
   fitBalloonFontSize,
   getAnchoredBalloonGeometry,
@@ -64,8 +67,7 @@ function drawBalloon(
 
   if (renderStyle) {
     const { style, artworkImage } = renderStyle;
-    const anchorX = annotation.bbox.x + annotation.bbox.width / 2;
-    const anchorY = annotation.bbox.y;
+    const { x: anchorX, y: anchorY } = balloonTopLeftAnchor(g.box);
     const marker = getAnchoredBalloonGeometry(style, anchorX, anchorY, 1);
     ctx.drawImage(artworkImage, marker.x, marker.y, marker.width, marker.height);
     const digits = String(annotation.number);

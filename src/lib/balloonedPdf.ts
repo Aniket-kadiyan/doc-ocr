@@ -9,6 +9,7 @@ import {
   BALLOON_FONT_SIZE,
   BALLOON_RADIUS,
   balloonGeometry,
+  balloonTopLeftAnchor,
 } from "@/lib/balloonGeometry";
 import type { BalloonedPage } from "@/lib/ballooned";
 import type { PageReferenceTable } from "@/types/referencePoint";
@@ -128,16 +129,17 @@ function drawBalloon(
   doc.setLineDashPattern([], 0);
 
   if (balloonStyle && balloonArtworkPng) {
+    const sourceAnchor = balloonTopLeftAnchor(g.box);
     const sourceMarker = getAnchoredBalloonGeometry(
       balloonStyle,
-      annotation.bbox.x + annotation.bbox.width / 2,
-      annotation.bbox.y,
+      sourceAnchor.x,
+      sourceAnchor.y,
       1
     );
     const width = Math.max(sourceMarker.width * s, MIN_BALLOON_RADIUS * 2);
     const height = width * (sourceMarker.height / sourceMarker.width);
-    const anchorX = px(annotation.bbox.x + annotation.bbox.width / 2);
-    const anchorY = py(annotation.bbox.y);
+    const anchorX = px(sourceAnchor.x);
+    const anchorY = py(sourceAnchor.y);
     const x = anchorX - balloonStyle.anchor.x * width;
     const y = anchorY - balloonStyle.anchor.y * height;
     doc.addImage(balloonArtworkPng, "PNG", x, y, width, height);

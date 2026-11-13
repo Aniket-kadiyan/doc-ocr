@@ -26,7 +26,7 @@ export function Balloon({
 }: BalloonProps) {
   return (
     <BalloonMarker
-      bbox={annotation.bbox}
+      bbox={annotation.orientedBox ?? annotation.bbox}
       label={String(annotation.number)}
       scale={scale}
       status="ok"
