@@ -15,6 +15,7 @@ import {
 } from "@/types/documentMetadata";
 import { normalizeBalloonStyleSelection } from "@/lib/balloonStyle";
 import type { BalloonStyleSelection } from "@/types/balloonStyle";
+import { normalizePageRotations } from "@/lib/pageRotation";
 
 interface BuildChecksheetSnapshotArgs {
   checksheetName: string;
@@ -130,6 +131,7 @@ export function buildChecksheetCreationSnapshot({
       source_project_id: projectId,
       source_file_type: project.fileType,
       pdf_render_scale: PDF_RENDER_SCALE,
+      page_rotations: normalizePageRotations(project.pageRotations),
       metadata: normalizeDocumentMetadata(metadata),
       balloon_style: normalizeBalloonStyleSelection(
         balloonStyle ?? project.balloonStyle

@@ -22,6 +22,7 @@ const ChecksheetDrawingPreview = dynamic(
 interface ChecksheetPreviewLoaderProps {
   document: ChecksheetRunResponse["document"];
   pdfRenderScale: number;
+  pageRotations: ChecksheetRunResponse["revision"]["page_rotations"];
   row: ChecksheetRow | null;
   balloonStyle: ChecksheetRunResponse["revision"]["balloon_style"];
 }

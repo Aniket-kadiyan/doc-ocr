@@ -27,10 +27,13 @@ import { referenceColor } from "@/lib/referenceColors";
 import { layoutReferenceTags } from "@/lib/referenceTagLayout";
 import type { Annotation } from "@/types/annotation";
 import type { ChecksheetRunResponse, ChecksheetRow } from "@/types/checksheet";
+import { pageRotationFor } from "@/lib/pageRotation";
+import type { PageRotations } from "@/types/pageRotation";
 
 interface ChecksheetDrawingPreviewProps {
   document: ChecksheetRunResponse["document"];
   pdfRenderScale: number;
+  pageRotations: PageRotations;
   row: ChecksheetRow | null;
 }
 
@@ -103,6 +106,7 @@ function focusTransform(
 export function ChecksheetDrawingPreview({
   document,
   pdfRenderScale,
+  pageRotations,
   row,
 }: ChecksheetDrawingPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,6 +121,7 @@ export function ChecksheetDrawingPreview({
   const [mode, setMode] = useState<ViewMode>("fit");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const pageRotation = row ? pageRotationFor(pageRotations, row.page) : 0;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -169,9 +174,14 @@ export function ChecksheetDrawingPreview({
         const rendered =
           document.file_type === "pdf"
             ? pdfDocument
-              ? await renderPdfPage(pdfDocument, row.page, pdfRenderScale)
+              ? await renderPdfPage(
+                  pdfDocument,
+                  row.page,
+                  pdfRenderScale,
+                  pageRotation
+                )
               : null
-            : await loadImageFile(sourceFile, row.page);
+            : await loadImageFile(sourceFile, row.page, pageRotation);
         if (!rendered || cancelled) return;
         const image = await canvasImage(rendered.canvas);
         if (cancelled) return;
@@ -191,7 +201,14 @@ export function ChecksheetDrawingPreview({
     return () => {
       cancelled = true;
     };
-  }, [document.file_type, pdfDocument, pdfRenderScale, row, sourceFile]);
+  }, [
+    document.file_type,
+    pageRotation,
+    pdfDocument,
+    pdfRenderScale,
+    row,
+    sourceFile,
+  ]);
 
   useEffect(() => {
     const element = containerRef.current;

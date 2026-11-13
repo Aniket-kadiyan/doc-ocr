@@ -186,6 +186,7 @@ class ChecksheetStorage:
                         source_document_id TEXT NOT NULL
                             REFERENCES source_documents(id),
                         pdf_render_scale REAL NOT NULL CHECK (pdf_render_scale > 0),
+                        page_rotations_json TEXT NOT NULL DEFAULT '{}',
                         balloon_style_json TEXT NOT NULL DEFAULT
                             '{"styleId":"circle","styleVersion":1,"size":"medium"}',
                         created_at TEXT NOT NULL,
@@ -318,6 +319,11 @@ class ChecksheetStorage:
                         "balloon_style_json TEXT NOT NULL DEFAULT "
                         "'{\"styleId\":\"circle\",\"styleVersion\":1,\"size\":\"medium\"}'"
                     )
+                if "page_rotations_json" not in revision_columns:
+                    connection.execute(
+                        "ALTER TABLE checksheet_revisions ADD COLUMN "
+                        "page_rotations_json TEXT NOT NULL DEFAULT '{}'"
+                    )
                 connection.commit()
             finally:
                 connection.close()
@@ -438,8 +444,9 @@ class ChecksheetStorage:
             """
             INSERT INTO checksheet_revisions (
                 id, checksheet_id, revision_number, source_document_id,
-                pdf_render_scale, balloon_style_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                pdf_render_scale, page_rotations_json,
+                balloon_style_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision_id,
@@ -447,6 +454,7 @@ class ChecksheetStorage:
                 revision_number,
                 document_id,
                 snapshot.pdf_render_scale,
+                json.dumps(snapshot.page_rotations, sort_keys=True),
                 json.dumps(snapshot.balloon_style.model_dump(by_alias=True)),
                 created_at,
             ),
@@ -868,6 +876,7 @@ class ChecksheetStorage:
                     d.archived_at,
                     r.revision_number,
                     r.pdf_render_scale,
+                    r.page_rotations_json,
                     r.balloon_style_json,
                     doc.id AS document_id,
                     doc.original_name,
@@ -930,6 +939,12 @@ class ChecksheetStorage:
                 "id": str(row["revision_id"]),
                 "revision_number": int(row["revision_number"]),
                 "pdf_render_scale": float(row["pdf_render_scale"]),
+                "page_rotations": {
+                    int(page): int(rotation)
+                    for page, rotation in json.loads(
+                        str(row["page_rotations_json"] or "{}")
+                    ).items()
+                },
                 "metadata": metadata,
                 "balloon_style": json.loads(
                     str(row["balloon_style_json"])
@@ -1227,14 +1242,16 @@ class ChecksheetStorage:
                 """
                 INSERT INTO checksheet_revisions (
                     id, checksheet_id, revision_number, source_document_id,
-                    pdf_render_scale, balloon_style_json, created_at
-                ) VALUES (?, ?, 1, ?, ?, ?, ?)
+                    pdf_render_scale, page_rotations_json,
+                    balloon_style_json, created_at
+                ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
                 """,
                 (
                     new_revision_id,
                     new_checksheet_id,
                     revision["source_document_id"],
                     revision["pdf_render_scale"],
+                    revision["page_rotations_json"],
                     revision["balloon_style_json"],
                     now,
                 ),

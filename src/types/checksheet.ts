@@ -6,6 +6,7 @@ import type {
   ReferenceMarker,
 } from "@/types/referencePoint";
 import type { BalloonStyleSelection } from "@/types/balloonStyle";
+import type { PageRotations } from "@/types/pageRotation";
 
 export type ChecksheetRunStatus = "draft" | "completed";
 export type ChecksheetItemKind = "balloon" | "reference";
@@ -42,6 +43,7 @@ export interface ChecksheetSnapshotPayload {
   source_project_id?: string;
   source_file_type: "pdf" | "image";
   pdf_render_scale: number;
+  page_rotations: PageRotations;
   metadata: DocumentMetadata;
   balloon_style: BalloonStyleSelection;
   scan_candidates: ChecksheetScanCandidate[];
@@ -114,6 +116,7 @@ export interface ChecksheetRunResponse {
     id: string;
     revision_number: number;
     pdf_render_scale: number;
+    page_rotations: PageRotations;
     metadata: DocumentMetadata;
     balloon_style: BalloonStyleSelection;
     scan_candidates: ChecksheetScanCandidate[];

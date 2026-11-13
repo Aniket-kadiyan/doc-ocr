@@ -147,6 +147,10 @@ class ChecksheetSnapshot(BaseModel):
     source_project_id: str | None = Field(default=None, max_length=128)
     source_file_type: Literal["pdf", "image"]
     pdf_render_scale: float = Field(default=1.5, gt=0, le=10)
+    page_rotations: dict[int, Literal[0, 90, 180, 270]] = Field(
+        default_factory=dict,
+        max_length=10000,
+    )
     metadata: ChecksheetMetadata = Field(default_factory=ChecksheetMetadata)
     balloon_style: ChecksheetBalloonStyle = Field(
         default_factory=ChecksheetBalloonStyle
@@ -165,6 +169,20 @@ class ChecksheetSnapshot(BaseModel):
         if not stripped:
             raise ValueError("must not be blank")
         return stripped
+
+    @field_validator("page_rotations")
+    @classmethod
+    def validate_page_rotations(
+        cls,
+        values: dict[int, Literal[0, 90, 180, 270]],
+    ) -> dict[int, Literal[90, 180, 270]]:
+        if any(page < 1 for page in values):
+            raise ValueError("page rotation keys must be positive page numbers")
+        return {
+            page: rotation
+            for page, rotation in sorted(values.items())
+            if rotation != 0
+        }
 
     @field_validator("reading_columns")
     @classmethod
