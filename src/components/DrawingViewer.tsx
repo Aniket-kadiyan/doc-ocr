@@ -39,7 +39,7 @@ import {
 import { BALLOON_OK_BOUNDARY_COLOR } from "@/lib/balloonStyle";
 import {
   areAllValueBalloonsHidden,
-  areAllValueBalloonsVisible,
+  areAnyValueBalloonsVisible,
 } from "@/lib/balloonVisibility";
 import {
   runSectionScanQueue,
@@ -303,6 +303,7 @@ export function DrawingViewer() {
     setLastDebugDump(null);
   }, [lastDebugDump, notifyInfo]);
   const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
+  const [reviewBalloonsVisible, setReviewBalloonsVisible] = useState(true);
   const scanCandidatesRef = useRef<ScanCandidate[]>([]);
   const candidateOrderRef = useRef(0);
   const [selectedScanSections, setSelectedScanSections] = useState<
@@ -377,12 +378,27 @@ export function DrawingViewer() {
   const valueAnnotations = annotations.filter(
     (annotation) => annotation.kind !== "label"
   );
-  const balloonsVisible = areAllValueBalloonsVisible(annotations);
+  const okBalloonsVisible = areAnyValueBalloonsVisible(annotations);
   const balloonsGloballyHidden = areAllValueBalloonsHidden(annotations);
   const pageScanCandidates = scanCandidates.filter(
     (candidate) =>
       candidate.page === currentPage && candidate.state !== "ignored"
   );
+  const reviewCandidates = scanCandidates.filter(
+    (candidate) => candidate.state === "review"
+  );
+  const pageReviewCandidates = pageScanCandidates.filter(
+    (candidate) => candidate.state === "review"
+  );
+  const visiblePageScanCandidates = pageScanCandidates.filter(
+    (candidate) =>
+      candidate.state !== "review" || reviewBalloonsVisible
+  );
+  const hasOkBalloons = valueAnnotations.length > 0;
+  const hasReviewBalloons = reviewCandidates.length > 0;
+  const balloonsVisible =
+    okBalloonsVisible ||
+    (hasReviewBalloons && reviewBalloonsVisible);
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
@@ -611,6 +627,11 @@ export function DrawingViewer() {
     setStoreProjectId(projectId);
     projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
+
+  // Visibility filters are workspace controls, not persisted project data.
+  useEffect(() => {
+    setReviewBalloonsVisible(true);
+  }, [projectId]);
 
   useEffect(() => {
     void saveProjectBalloonStyle(projectId, balloonStyleSelection).catch(() => {
@@ -1438,14 +1459,40 @@ export function DrawingViewer() {
     }
   }, [scanProgress]);
 
-  const toggleBalloons = useCallback(() => {
+  const setOkBalloonVisibility = useCallback((visible: boolean) => {
     setSelectedId(null);
-    setAllBalloonVisibility(!balloonsVisible);
+    setAllBalloonVisibility(visible);
     void saveAnnotations(
       projectId,
       useAnnotationStore.getState().annotations
     );
-  }, [balloonsVisible, projectId, setAllBalloonVisibility]);
+  }, [projectId, setAllBalloonVisibility]);
+
+  const setReviewBalloonVisibility = useCallback(
+    (visible: boolean) => {
+      if (!visible) {
+        const selected = scanCandidatesRef.current.find(
+          (candidate) => candidate.id === selectedScanCandidateId
+        );
+        if (selected?.state === "review") {
+          setSelectedScanCandidateId(null);
+          setPending(null);
+        }
+      }
+      setReviewBalloonsVisible(visible);
+    },
+    [selectedScanCandidateId, setPending]
+  );
+
+  const toggleBalloons = useCallback(() => {
+    const nextVisible = !balloonsVisible;
+    setOkBalloonVisibility(nextVisible);
+    setReviewBalloonVisibility(nextVisible);
+  }, [
+    balloonsVisible,
+    setOkBalloonVisibility,
+    setReviewBalloonVisibility,
+  ]);
 
   const renderReferencePage = useCallback(
     async (
@@ -2065,7 +2112,11 @@ export function DrawingViewer() {
         totalPages={totalPages}
         scale={scale}
         balloonsVisible={balloonsVisible}
-        hasBalloons={valueAnnotations.length > 0}
+        okBalloonsVisible={okBalloonsVisible}
+        reviewBalloonsVisible={reviewBalloonsVisible}
+        hasOkBalloons={hasOkBalloons}
+        hasReviewBalloons={hasReviewBalloons}
+        hasBalloons={hasOkBalloons || hasReviewBalloons}
         onSelectScanSection={() => {
           setSelectionError(null);
           setSelectedScanSections([]);
@@ -2085,6 +2136,8 @@ export function DrawingViewer() {
           setIsDrawingValue(!isDrawingValue);
         }}
         onToggleBalloons={toggleBalloons}
+        onSetOkBalloonsVisible={setOkBalloonVisibility}
+        onSetReviewBalloonsVisible={setReviewBalloonVisibility}
         onZoomIn={() => setScale(Math.min(scale + 0.25, 4))}
         onZoomOut={() => setScale(Math.max(scale - 0.25, 0.5))}
         onPrevPage={() => setCurrentPage(Math.max(1, currentPage - 1))}
@@ -2168,6 +2221,28 @@ export function DrawingViewer() {
                         );
                       })}
 
+                    {!reviewBalloonsVisible &&
+                      pageReviewCandidates.map((candidate) => {
+                        const box =
+                          candidate.orientedBox ?? candidate.valueBox;
+                        const rotation =
+                          candidate.orientedBox?.rotation ?? 0;
+                        return (
+                          <Rect
+                            key={`whiteout-review-${candidate.id}`}
+                            x={box.x}
+                            y={box.y}
+                            width={box.width}
+                            height={box.height}
+                            rotation={rotation}
+                            fill="#ffffff"
+                            stroke="#ffffff"
+                            strokeWidth={1 / scale}
+                            listening={false}
+                          />
+                        );
+                      })}
+
                     {gdtResult && (
                       <GdtOverlay
                         frames={framesForPage(gdtResult, currentPage)}
@@ -2222,10 +2297,10 @@ export function DrawingViewer() {
                       );
                     })}
 
-                    {pageScanCandidates.length > 0 &&
+                    {visiblePageScanCandidates.length > 0 &&
                       scanProgress === null && (
                         <ScanReviewOverlay
-                          candidates={pageScanCandidates}
+                          candidates={visiblePageScanCandidates}
                           scale={scale}
                           disabled={drawingActive || isProcessing}
                           selectedCandidateId={selectedScanCandidateId}

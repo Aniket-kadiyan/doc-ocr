@@ -5,7 +5,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { ExportPanel } from "@/components/ExportPanel";
 import { WorkspaceSettingsPanel } from "@/components/WorkspaceSettingsPanel";
@@ -27,6 +26,10 @@ interface ToolbarProps {
   totalPages: number;
   scale: number;
   balloonsVisible: boolean;
+  okBalloonsVisible: boolean;
+  reviewBalloonsVisible: boolean;
+  hasOkBalloons: boolean;
+  hasReviewBalloons: boolean;
   hasBalloons: boolean;
   onSelectScanSection: () => void;
   onScanWholePage: () => void;
@@ -35,6 +38,8 @@ interface ToolbarProps {
   findingGdtSymbols: boolean;
   onToggleDrawValue: () => void;
   onToggleBalloons: () => void;
+  onSetOkBalloonsVisible: (visible: boolean) => void;
+  onSetReviewBalloonsVisible: (visible: boolean) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onPrevPage: () => void;
@@ -230,6 +235,10 @@ export function Toolbar({
   totalPages,
   scale,
   balloonsVisible,
+  okBalloonsVisible,
+  reviewBalloonsVisible,
+  hasOkBalloons,
+  hasReviewBalloons,
   hasBalloons,
   onSelectScanSection,
   onScanWholePage,
@@ -238,6 +247,8 @@ export function Toolbar({
   findingGdtSymbols,
   onToggleDrawValue,
   onToggleBalloons,
+  onSetOkBalloonsVisible,
+  onSetReviewBalloonsVisible,
   onZoomIn,
   onZoomOut,
   onPrevPage,
@@ -250,11 +261,13 @@ export function Toolbar({
   scanCandidates,
 }: ToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const visibilityMenuRef = useRef<HTMLDivElement>(null);
   const [drawerExpanded, setDrawerExpanded] = useState(true);
   const [drawerTop, setDrawerTop] = useState(0);
   const [detectionOpen, setDetectionOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [progressVisible, setProgressVisibleState] = useState(true);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
 
   useEffect(() => {
     setDrawerExpanded(
@@ -281,6 +294,31 @@ export function Toolbar({
       );
     };
   }, []);
+
+  useEffect(() => {
+    if (!visibilityOpen) return;
+
+    const closeOutside = (event: MouseEvent) => {
+      if (
+        event.target instanceof Node &&
+        !visibilityMenuRef.current?.contains(event.target)
+      ) {
+        setVisibilityOpen(false);
+      }
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVisibilityOpen(false);
+    };
+
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [visibilityOpen]);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -338,6 +376,11 @@ export function Toolbar({
     if (!hasProgressDetails) return;
 
     setScanProgressVisible(!progressVisible);
+  };
+
+  const toggleAllBalloons = () => {
+    setVisibilityOpen(false);
+    onToggleBalloons();
   };
 
   return (
@@ -585,25 +628,115 @@ export function Toolbar({
 
           <ToolbarDivider />
 
-          <button
-            type="button"
-            onClick={onToggleBalloons}
-            disabled={!canSaveProject || !hasBalloons}
-            title={
-              balloonsVisible
-                ? "Hide balloons and white out their values"
-                : "Show balloons"
-            }
-            className={`qtracx-topbar-action ${balloonsVisible
-                ? ""
-                : "border-blue-200 bg-blue-50 text-blue-700"
-              }`}
-          >
-            <ActionIcon name="balloon" />
-            <span>
-              {balloonsVisible ? "Hide balloons" : "Show balloons"}
-            </span>
-          </button>
+          <div ref={visibilityMenuRef} className="relative flex">
+            <button
+              type="button"
+              onClick={toggleAllBalloons}
+              disabled={!canSaveProject || !hasBalloons}
+              title={
+                balloonsVisible
+                  ? "Hide all balloons and white out their values"
+                  : "Show all balloons"
+              }
+              className={`qtracx-topbar-action rounded-r-none border-r-0 ${balloonsVisible
+                  ? ""
+                  : "border-blue-200 bg-blue-50 text-blue-700"
+                }`}
+            >
+              <ActionIcon name="balloon" />
+              <span>
+                {balloonsVisible ? "Hide balloons" : "Show balloons"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                setVisibilityOpen((current) => !current)
+              }
+              disabled={!canSaveProject || !hasBalloons}
+              aria-haspopup="menu"
+              aria-expanded={visibilityOpen}
+              title="More balloon visibility options"
+              className={`qtracx-topbar-action rounded-l-none px-2 ${visibilityOpen
+                  ? "border-blue-200 bg-blue-50 text-blue-700"
+                  : ""
+                }`}
+            >
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="h-4 w-4"
+              >
+                <path d="m5 7.5 5 5 5-5" />
+              </svg>
+              <span className="sr-only">
+                More balloon visibility options
+              </span>
+            </button>
+
+            {visibilityOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 top-[calc(100%+0.5rem)] z-[80] w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-xl"
+              >
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={okBalloonsVisible}
+                  disabled={!hasOkBalloons}
+                  onClick={() =>
+                    onSetOkBalloonsVisible(!okBalloonsVisible)
+                  }
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] ${okBalloonsVisible
+                        ? "border-emerald-600 bg-emerald-600 text-white"
+                        : "border-slate-300 bg-white"
+                      }`}
+                  >
+                    {okBalloonsVisible ? "✓" : ""}
+                  </span>
+                  <span>Show OK values</span>
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={reviewBalloonsVisible}
+                  disabled={!hasReviewBalloons}
+                  onClick={() =>
+                    onSetReviewBalloonsVisible(
+                      !reviewBalloonsVisible
+                    )
+                  }
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] ${reviewBalloonsVisible
+                        ? "border-red-600 bg-red-600 text-white"
+                        : "border-slate-300 bg-white"
+                      }`}
+                  >
+                    {reviewBalloonsVisible ? "✓" : ""}
+                  </span>
+                  <span>Show review values</span>
+                </button>
+
+                <p className="mt-2 border-t border-slate-100 px-3 pt-2 text-xs text-slate-500">
+                  The main button controls both categories.
+                </p>
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
