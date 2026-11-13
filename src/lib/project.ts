@@ -16,6 +16,8 @@ import {
 import type { PageReferenceTable } from "@/types/referencePoint";
 import { normalizeBalloonStyleSelection } from "@/lib/balloonStyle";
 import type { BalloonStyleSelection } from "@/types/balloonStyle";
+import { normalizePageRotations } from "@/lib/pageRotation";
+import type { PageRotations } from "@/types/pageRotation";
 
 /**
  * Self-contained project bundle: the source drawing (embedded as a data URL so
@@ -24,7 +26,7 @@ import type { BalloonStyleSelection } from "@/types/balloonStyle";
  * project data.
  */
 export const PROJECT_FORMAT = "doc-ocr-box.project";
-export const PROJECT_VERSION = 5;
+export const PROJECT_VERSION = 6;
 
 export interface ProjectSource {
   fileName: string;
@@ -311,6 +313,8 @@ export interface ProjectBundle {
   referenceTables: PageReferenceTable[];
   /** Registry key only. SVG artwork remains deployment-owned. */
   balloonStyle: BalloonStyleSelection;
+  /** Clockwise rotation per 1-based page; omitted pages are 0 degrees. */
+  pageRotations: PageRotations;
   /** Optional/legacy: older project files embedded a verification payload that
    * just mirrored `annotations`. New saves omit it; "Send for Verification"
    * rebuilds it on demand. */
@@ -390,6 +394,7 @@ export function buildProjectBundle(args: {
   metadata?: Partial<DocumentMetadata> | null;
   referenceTables?: readonly PageReferenceTable[];
   balloonStyle?: Partial<BalloonStyleSelection> | null;
+  pageRotations?: PageRotations;
   savedAt: number;
 }): string {
   const bundle: ProjectBundle = {
@@ -403,6 +408,7 @@ export function buildProjectBundle(args: {
     metadata: normalizeDocumentMetadata(args.metadata),
     referenceTables: normalizePageReferenceTables(args.referenceTables ?? []),
     balloonStyle: normalizeBalloonStyleSelection(args.balloonStyle),
+    pageRotations: normalizePageRotations(args.pageRotations),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -434,6 +440,7 @@ export function parseProjectBundle(text: string): ProjectBundle {
       Array.isArray(b.referenceTables) ? b.referenceTables : []
     ),
     balloonStyle: normalizeBalloonStyleSelection(b.balloonStyle),
+    pageRotations: normalizePageRotations(b.pageRotations),
   };
 }
 

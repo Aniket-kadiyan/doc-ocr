@@ -15,6 +15,7 @@ import {
 } from "@/lib/progressVisibility";
 import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
+import type { PageRotation } from "@/types/pageRotation";
 
 interface ToolbarProps {
   isSelectingScanArea: boolean;
@@ -22,8 +23,10 @@ interface ToolbarProps {
   hasProgressDetails: boolean;
   isDrawingValue: boolean;
   isProcessing: boolean;
+  isRotatingPage: boolean;
   currentPage: number;
   totalPages: number;
+  pageRotation: PageRotation;
   scale: number;
   balloonsVisible: boolean;
   okBalloonsVisible: boolean;
@@ -44,6 +47,7 @@ interface ToolbarProps {
   onZoomOut: () => void;
   onPrevPage: () => void;
   onNextPage: () => void;
+  onRotatePage: () => void;
   onUpload: () => void;
   onSaveProject: () => void;
   onLoadProject: () => void;
@@ -67,7 +71,8 @@ type IconName =
   | "balloon"
   | "progress"
   | "previous"
-  | "next";
+  | "next"
+  | "rotate";
 
 function ActionIcon({ name }: { name: IconName }) {
   return (
@@ -175,6 +180,12 @@ function ActionIcon({ name }: { name: IconName }) {
 
       {name === "previous" && <path d="m15 18-6-6 6-6" />}
       {name === "next" && <path d="m9 18 6-6-6-6" />}
+      {name === "rotate" && (
+        <>
+          <path d="M20 7v5h-5" />
+          <path d="M18.2 15.2A8 8 0 1 1 19.7 9" />
+        </>
+      )}
     </svg>
   );
 }
@@ -231,8 +242,10 @@ export function Toolbar({
   hasProgressDetails,
   isDrawingValue,
   isProcessing,
+  isRotatingPage,
   currentPage,
   totalPages,
+  pageRotation,
   scale,
   balloonsVisible,
   okBalloonsVisible,
@@ -253,6 +266,7 @@ export function Toolbar({
   onZoomOut,
   onPrevPage,
   onNextPage,
+  onRotatePage,
   onSaveProject,
   onLoadProject,
   onRemoveDrawing,
@@ -443,7 +457,7 @@ export function Toolbar({
               !findingReferencePoints &&
               !findingGdtSymbols && (
                 <span className="truncate text-xs font-medium text-blue-700">
-                  Running OCR…
+                  {isRotatingPage ? "Rotating page…" : "Running OCR…"}
                 </span>
               )}
           </div>
@@ -626,6 +640,22 @@ export function Toolbar({
             <ActionIcon name="next" />
           </button>
 
+          <button
+            type="button"
+            onClick={onRotatePage}
+            disabled={
+              !canSaveProject ||
+              isProcessing ||
+              isSelectingScanArea ||
+              isDrawingValue
+            }
+            title={`Rotate current page clockwise (currently ${pageRotation}°)`}
+            aria-label={`Rotate current page clockwise. Current rotation ${pageRotation} degrees`}
+            className="qtracx-topbar-square"
+          >
+            <ActionIcon name="rotate" />
+          </button>
+
           <ToolbarDivider />
 
           <div ref={visibilityMenuRef} className="relative flex">
@@ -806,7 +836,7 @@ export function Toolbar({
               !findingReferencePoints &&
               !findingGdtSymbols && (
                 <span className="whitespace-nowrap text-xs font-medium text-blue-700">
-                  Running OCR…
+                  {isRotatingPage ? "Rotating page…" : "Running OCR…"}
                 </span>
               )}
           </div>
