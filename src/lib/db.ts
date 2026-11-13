@@ -7,6 +7,7 @@ import {
 } from "@/types/documentMetadata";
 import { normalizePageReferenceTables } from "@/lib/referenceValues";
 import type { PageReferenceTable } from "@/types/referencePoint";
+import type { PageDrawingSections } from "@/types/drawingSection";
 import {
   normalizeBalloonStyleSelection,
 } from "@/lib/balloonStyle";
@@ -24,6 +25,8 @@ export interface ProjectRecord {
   metadata?: DocumentMetadata;
   /** Optional for compatibility with projects saved before reference support. */
   referenceTables?: PageReferenceTable[];
+  /** Each page's drawing sections from its latest whole-page scan. */
+  drawingSections?: PageDrawingSections[];
   /** Optional for compatibility with projects saved before selectable balloons. */
   balloonStyle?: BalloonStyleSelection;
   updatedAt: number;
@@ -141,6 +144,16 @@ export async function saveProjectReferenceTables(
 ): Promise<void> {
   await db.projects.update(projectId, {
     referenceTables: normalizePageReferenceTables(referenceTables),
+    updatedAt: Date.now(),
+  });
+}
+
+export async function saveProjectDrawingSections(
+  projectId: string,
+  drawingSections: readonly PageDrawingSections[]
+): Promise<void> {
+  await db.projects.update(projectId, {
+    drawingSections: [...drawingSections],
     updatedAt: Date.now(),
   });
 }

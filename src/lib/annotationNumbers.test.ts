@@ -31,6 +31,29 @@ describe("renumberValueAnnotations", () => {
     expect(result.find(({ id }) => id === "label")?.number).toBe(1);
   });
 
+  it("gives notes the last numbers, after every dimension", () => {
+    const result = renumberValueAnnotations([
+      makeAnnotation({ id: "dim-a", number: 1 }),
+      makeAnnotation({ id: "note", number: 2, type: "General Note", value: "NOTES" }),
+      makeAnnotation({ id: "dim-b", number: 3 }),
+      makeAnnotation({
+        id: "points",
+        number: 4,
+        type: "Material",
+        value: "1. MAT'L GRADE 65-45-12\n2. HOT DIP GALVANIZE",
+      }),
+      makeAnnotation({ id: "dim-c", number: 5 }),
+    ]);
+
+    expect(result.map(({ id, number }) => ({ id, number }))).toEqual([
+      { id: "dim-a", number: 1 },
+      { id: "note", number: 4 },
+      { id: "dim-b", number: 2 },
+      { id: "points", number: 5 },
+      { id: "dim-c", number: 3 },
+    ]);
+  });
+
   it("returns the original array when no changes are needed", () => {
     const input = [
       makeAnnotation({ id: "a", number: 1 }),
@@ -81,5 +104,25 @@ describe("moveValueAnnotationToNumber", () => {
     expect(moveValueAnnotationToNumber(annotations, "missing", 2)).toBe(
       annotations
     );
+  });
+});
+
+describe("moveValueAnnotationToNumber with notes", () => {
+  it("keeps a note after the dimensions when moved into them", () => {
+    const result = moveValueAnnotationToNumber(
+      [
+        makeAnnotation({ id: "a", number: 1 }),
+        makeAnnotation({ id: "b", number: 2 }),
+        makeAnnotation({ id: "note", number: 3, type: "Note", value: "NOTE" }),
+      ],
+      "note",
+      1
+    );
+
+    expect(result.map(({ id, number }) => ({ id, number }))).toEqual([
+      { id: "a", number: 1 },
+      { id: "b", number: 2 },
+      { id: "note", number: 3 },
+    ]);
   });
 });

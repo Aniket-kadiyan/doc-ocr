@@ -8,6 +8,7 @@ import type {
   ScanProgress,
   ScanScopeKind,
 } from "@/types/scanJob";
+import type { DrawingSection } from "@/types/drawingSection";
 import {
   getOcrApiUrl,
   mapPageSegmentRegions,
@@ -22,6 +23,7 @@ import {
   isOcrDebugDumpForce,
 } from "@/lib/ocrDebugDump";
 import {
+  isCustomSymbolScanEnabled,
   isGdtScanEnabled,
   isSlantedScanEnabled,
 } from "@/lib/scanSettings";
@@ -123,6 +125,8 @@ export interface ScanJobResult {
   reviewCandidates: SegmentCandidateOutcome[];
   otherCandidates: SegmentCandidateOutcome[];
   filterRuleCounts: Record<string, number>;
+  /** The page's drawing sections; empty unless this was a whole-page scan. */
+  sections: DrawingSection[];
 }
 
 export class ScanJobCancelledError extends Error {
@@ -348,6 +352,7 @@ export async function runScanJob({
   form.append("page", String(page));
   form.append("gdt", String(isGdtScanEnabled()));
   form.append("slanted", String(isSlantedScanEnabled()));
+  form.append("custom_symbols", String(isCustomSymbolScanEnabled()));
   // The uploaded image is the crop taken at displayScale, so everything
   // describing it has to be in those same pixels. The scope and the existing
   // balloons arrive in viewer units; sending them unscaled while scanning a
@@ -491,6 +496,16 @@ export async function runScanJob({
     snapshot.result.review_count ?? reviewCandidates.length;
   const filterRuleCounts = snapshot.result.filter_rule_counts ?? {};
   const skippedExisting = snapshot.result.skipped_existing_count ?? 0;
+  const sections: DrawingSection[] =
+    coordinateSpace === "page"
+      ? (snapshot.result.sections ?? []).map((section) => ({
+          id: section.id,
+          kind: section.kind,
+          outlines: section.outlines.map((outline) =>
+            outline.flatMap(([x, y]) => [x / displayScale, y / displayScale])
+          ),
+        }))
+      : [];
 
   return {
     regions,
@@ -504,5 +519,6 @@ export async function runScanJob({
     reviewCandidates,
     otherCandidates,
     filterRuleCounts,
+    sections,
   };
 }

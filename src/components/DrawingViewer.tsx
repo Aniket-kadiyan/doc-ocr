@@ -72,6 +72,7 @@ import {
   saveProject,
   saveProjectMetadata,
   saveProjectReferenceTables,
+  saveProjectDrawingSections,
   saveProjectBalloonStyle,
   getMostRecentProject,
   deleteProject,
@@ -108,6 +109,13 @@ import {
 import { framesForPage, overlayItems } from "@/lib/gdtSymbols";
 import type { GdtPageResult, GdtRegistry } from "@/types/gdt";
 import { ScanDebugOverlay } from "@/components/ScanDebugOverlay";
+import { DrawingSectionsOverlay } from "@/components/DrawingSectionsOverlay";
+import {
+  SCAN_SETTINGS_EVENT,
+  isSectionNumberingEnabled,
+  isSectionOverlayEnabled,
+} from "@/lib/scanSettings";
+import type { PageDrawingSections } from "@/types/drawingSection";
 import { ScanReviewOverlay } from "@/components/ScanReviewOverlay";
 import { SCAN_DEBUG_OVERLAY_ENABLED } from "@/lib/featureFlags";
 import type { Annotation, BBox } from "@/types/annotation";
@@ -269,6 +277,18 @@ export function DrawingViewer() {
     PageReferenceTable[]
   >([]);
   const referenceTablesRef = useRef<PageReferenceTable[]>([]);
+  // Each page's sub-drawings from its latest whole-page scan, outlined over
+  // the page when the section overlay setting is on.
+  const [drawingSections, setDrawingSections] = useState<
+    PageDrawingSections[]
+  >([]);
+  const [showDrawingSections, setShowDrawingSections] = useState(false);
+  useEffect(() => {
+    const sync = () => setShowDrawingSections(isSectionOverlayEnabled());
+    sync();
+    window.addEventListener(SCAN_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(SCAN_SETTINGS_EVENT, sync);
+  }, []);
   const [selectedReferenceSymbol, setSelectedReferenceSymbol] = useState<
     string | null
   >(null);
@@ -340,6 +360,9 @@ export function DrawingViewer() {
     (candidate) =>
       candidate.page === currentPage && candidate.state !== "ignored"
   );
+  const pageDrawingSections = drawingSections.find(
+    (entry) => entry.page === currentPage
+  )?.sections;
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
@@ -636,6 +659,7 @@ export function DrawingViewer() {
     setAnnotations(migration.annotations);
     restoreScanCandidates(storedCandidates);
     replaceReferenceTables(recent.referenceTables ?? []);
+    setDrawingSections(recent.drawingSections ?? []);
     await saveAnnotations(recent.id, migration.annotations);
     const warning = legacyMigrationWarning(migration.orphanLabelCount);
     if (warning) setSelectionError(warning);
@@ -669,6 +693,7 @@ export function DrawingViewer() {
     setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
     replaceReferenceTables([]);
+    setDrawingSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -744,6 +769,7 @@ export function DrawingViewer() {
     setSelectedScanCandidateId(null);
     setSelectedScanSections([]);
     replaceReferenceTables([]);
+    setDrawingSections([]);
     setEditingValueId(null);
     setIsDrawingValue(false);
     setIsSegmenting(false);
@@ -770,6 +796,7 @@ export function DrawingViewer() {
     candidateOrderRef.current = 0;
     setSelectedScanSections([]);
     replaceReferenceTables([]);
+    setDrawingSections([]);
     setIsDrawingValue(false);
     setIsSegmenting(false);
     setActiveMetadataField(null);
@@ -1181,8 +1208,19 @@ export function DrawingViewer() {
           liveAnnotations,
           scanPage,
           undefined,
-          scopeKind
+          scopeKind,
+          isSectionNumberingEnabled()
         );
+        if (scopeKind === "page" && scanResult.sections.length > 0) {
+          setDrawingSections((current) => {
+            const next = [
+              ...current.filter((entry) => entry.page !== scanPage),
+              { page: scanPage, sections: scanResult.sections },
+            ];
+            void saveProjectDrawingSections(projectAtStart, next);
+            return next;
+          });
+        }
         const now = Date.now();
         const newAnnotations: Annotation[] = annotationsFromRegions(
           filtered.accepted,
@@ -2213,6 +2251,13 @@ export function DrawingViewer() {
                         scale={scale}
                         selectedKey={gdtSelectedKey}
                         onSelect={(key) => setGdtSelectedKey(key)}
+                      />
+                    )}
+
+                    {showDrawingSections && pageDrawingSections && (
+                      <DrawingSectionsOverlay
+                        sections={pageDrawingSections}
+                        scale={scale}
                       />
                     )}
 

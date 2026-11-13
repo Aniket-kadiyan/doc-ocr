@@ -10,9 +10,12 @@ inference, recognition, or value filtering.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from math import inf
 from typing import Mapping, Sequence
+
+from PIL import Image
 
 from detection_passes import DetectionTile
 
@@ -67,6 +70,46 @@ PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
 # entire image by one angle adds multiple full-page OCR calls but finds no
 # extra values; the neighbourhood pass below remains enabled.
 PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE = 3000
+# A section scan's slanted, notes and GD&T passes read a copy of the page that
+# is blank beyond the section and this margin. They used to read the whole
+# page and drop what fell outside afterwards: on 113-M02-292A a 1.7 MP section
+# spent 20.5 of its 23 minutes there and found nothing outside. The margin is
+# context for a note, frame or leader that crosses the section's edge.
+SECTION_CONTEXT_MARGIN_FRAC = 0.25
+SECTION_CONTEXT_MARGIN_MIN_PX = 300
+
+
+def section_context_box(
+    scope: Mapping[str, float],
+    size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """The section plus its context margin, clamped to the page."""
+
+    width, height = size
+    margin = max(
+        SECTION_CONTEXT_MARGIN_MIN_PX,
+        SECTION_CONTEXT_MARGIN_FRAC * max(float(scope["width"]), float(scope["height"])),
+    )
+    return (
+        max(0, int(float(scope["x"]) - margin)),
+        max(0, int(float(scope["y"]) - margin)),
+        min(width, int(float(scope["x"]) + float(scope["width"]) + margin + 0.5)),
+        min(height, int(float(scope["y"]) + float(scope["height"]) + margin + 0.5)),
+    )
+
+
+def blank_outside_section(image: Image.Image, scope: Mapping[str, float]) -> Image.Image:
+    """
+    The page with everything beyond the section's context blanked.
+
+    Same size, so every pass keeps working, and publishing, in page
+    coordinates; only the text it has to read shrinks to the section.
+    """
+
+    box = section_context_box(scope, image.size)
+    blank = Image.new(image.mode, image.size, "white")
+    blank.paste(image.crop(box), box[:2])
+    return blank
 
 
 def bbox_overlap_fraction(
@@ -448,3 +491,170 @@ def assign_candidate_ids(
         replace(candidate, candidate_id=f"C{index:04d}")
         for index, candidate in enumerate(candidates, start=1)
     ]
+
+
+# One limit of a stacked pair: a plain decimal, the upper one optionally with
+# its Ø or R prefix. Anything richer ("3×2.03", "(0.902 REF)") is its own
+# callout that only happens to sit above or below another.
+_LIMIT_UPPER = re.compile(r"^([ØR]?)(\d+\.(\d+))$")
+_LIMIT_LOWER = re.compile(r"^(\d+\.(\d+))$")
+_QUALIFIER = re.compile(r"^(MAX|MIN|REF)\.?$", re.IGNORECASE)
+# Two lines of one callout: the gap between them is under this share of the
+# line height, they are about the same height, and they overlap across most
+# of the narrower one.
+STACK_MAX_GAP_LINES = 0.8
+STACK_HEIGHT_RATIO = 1.5
+STACK_MIN_OVERLAP = 0.6
+
+
+def _stacked_below(upper: Mapping[str, float], lower: Mapping[str, float], vertical: bool) -> bool:
+    """Whether ``lower`` is the next line of ``upper`` in one stacked callout.
+
+    Text written up the page turns the stack on its side: its first line is
+    the one on the left.
+    """
+    if vertical:
+        u0, u1, l0, l1 = upper["x"], upper["x"] + upper["width"], lower["x"], lower["x"] + lower["width"]
+        a0, a1, b0, b1 = upper["y"], upper["y"] + upper["height"], lower["y"], lower["y"] + lower["height"]
+    else:
+        u0, u1, l0, l1 = upper["y"], upper["y"] + upper["height"], lower["y"], lower["y"] + lower["height"]
+        a0, a1, b0, b1 = upper["x"], upper["x"] + upper["width"], lower["x"], lower["x"] + lower["width"]
+    upper_line, lower_line = u1 - u0, l1 - l0
+    if min(upper_line, lower_line) <= 0:
+        return False
+    if max(upper_line, lower_line) > STACK_HEIGHT_RATIO * min(upper_line, lower_line):
+        return False
+    gap = l0 - u1
+    if not -0.25 * min(upper_line, lower_line) <= gap <= STACK_MAX_GAP_LINES * max(upper_line, lower_line):
+        return False
+    overlap = min(a1, b1) - max(a0, b0)
+    return overlap >= STACK_MIN_OVERLAP * min(a1 - a0, b1 - b0)
+
+
+def _union(a: Mapping[str, float], b: Mapping[str, float]) -> dict[str, float]:
+    x0, y0 = min(a["x"], b["x"]), min(a["y"], b["y"])
+    x1 = max(a["x"] + a["width"], b["x"] + b["width"])
+    y1 = max(a["y"] + a["height"], b["y"] + b["height"])
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+
+def _is_vertical(region: Mapping[str, object]) -> bool:
+    return region.get("orientation") == "vertical"
+
+
+def group_stacked_values(
+    regions: list[dict],
+    word_boxes: Sequence[tuple[str, Mapping[str, float]]] = (),
+) -> tuple[list[dict], int]:
+    """Join the lines of one stacked callout into a single value.
+
+    The detector boxes text lines, so a limit dimension drawn as "4.15" over
+    "3.97" arrived as two balloons, and "5.20" over "MAX" as a bare 5.20. Read
+    together they are one requirement: ``4.15/3.97`` and ``5.20 MAX``. Only
+    two plain decimals with the same number of places pair as limits, upper
+    above lower and the larger one first; a qualifier word joins the value it
+    sits directly under. Returns the regions and how many were absorbed.
+    """
+    absorbed: set[int] = set()
+    out = [dict(region) for region in regions]
+    order = sorted(range(len(out)), key=lambda i: (out[i]["bbox"]["y"], out[i]["bbox"]["x"]))
+    for i in order:
+        if i in absorbed:
+            continue
+        upper = out[i]
+        m_up = _LIMIT_UPPER.match(str(upper.get("text") or "").replace(" ", ""))
+        if not m_up:
+            continue
+        vertical = _is_vertical(upper)
+        for j in order:
+            if j == i or j in absorbed or _is_vertical(out[j]) != vertical:
+                continue
+            m_low = _LIMIT_LOWER.match(str(out[j].get("text") or "").replace(" ", ""))
+            if not m_low or len(m_low.group(2)) != len(m_up.group(3)):
+                continue
+            if float(m_low.group(1)) >= float(m_up.group(2)):
+                continue
+            if not _stacked_below(upper["bbox"], out[j]["bbox"], vertical):
+                continue
+            upper["text"] = f"{m_up.group(1)}{m_up.group(2)}/{m_low.group(1)}"
+            upper["bbox"] = _union(upper["bbox"], out[j]["bbox"])
+            upper["stacked_with"] = out[j].get("candidate_id")
+            upper["grouped"] = True
+            absorbed.add(j)
+            break
+    regions_out = [region for index, region in enumerate(out) if index not in absorbed]
+
+    for region in regions_out:
+        text = str(region.get("text") or "").strip()
+        if not re.fullmatch(r"[ØR]?\d+(?:\.\d+)?", text):
+            continue
+        for word, box in word_boxes:
+            qualifier = _QUALIFIER.match(str(word or "").strip())
+            if qualifier and _stacked_below(region["bbox"], box, _is_vertical(region)):
+                region["text"] = f"{text} {qualifier.group(1).upper()}"
+                region["bbox"] = _union(region["bbox"], box)
+                region["grouped"] = True
+                break
+    return regions_out, len(absorbed)
+
+
+# A reading this much inside a published value that runs the other way is a
+# piece of that value read across its lines, not a callout of its own.
+CROSS_DIRECTION_INSIDE_SHARE = 0.6
+
+
+def drop_cross_direction_fragments(
+    regions: list[dict],
+    review_candidates: list[dict],
+) -> tuple[list[dict], list[dict], int]:
+    """Keep one reading direction per box.
+
+    A callout written up the page is read bottom to top; nothing inside its
+    box reads left to right, and the reverse. A reading that crosses the lines
+    of a published value -- on 2H-G772 a vertical "43" taken through the
+    horizontal "4.15/3.97" stack -- is dropped, whether it was published or
+    waiting for review. Returns both lists and how many were dropped.
+    """
+
+    def direction(region: Mapping[str, object]) -> str:
+        return "vertical" if _is_vertical(region) else "horizontal"
+
+    def crosses(item: Mapping[str, object]) -> bool:
+        box = item["bbox"]
+        area = max(float(box["width"]) * float(box["height"]), 1.0)
+        for owner in regions:
+            if owner is item or direction(owner) == direction(item):
+                continue
+            # A note block or a frame is not one value: a real vertical
+            # dimension can sit inside a paragraph's bounding box.
+            if owner.get("type") == "GD&T" or "Note" in str(owner.get("type") or ""):
+                continue
+            owner_area = float(owner["bbox"]["width"]) * float(owner["bbox"]["height"])
+            if (
+                area < owner_area
+                and bbox_overlap_fraction(box, owner["bbox"])
+                >= CROSS_DIRECTION_INSIDE_SHARE
+            ):
+                return True
+        return False
+
+    kept_regions = [region for region in regions if not crosses(region)]
+    kept_review = [item for item in review_candidates if not crosses(item)]
+    dropped = (len(regions) - len(kept_regions)) + (len(review_candidates) - len(kept_review))
+    return kept_regions, kept_review, dropped
+
+
+_LIMIT_PAIR = re.compile(r"^\(?([ØR]?)(\d+\.(\d+))/(\d+\.(\d+))\)?$")
+
+
+def is_limit_pair(text: str) -> bool:
+    """Whether ``text`` already reads as one limit dimension, upper/lower.
+
+    Such a box is tall because it holds two lines, but it is one requirement
+    read correctly: splitting it costs a detector and OCR pass, and the
+    grouping step would join the halves straight back.
+    """
+    match = _LIMIT_PAIR.match(str(text or "").replace(" ", ""))
+    if not match or len(match.group(3)) != len(match.group(5)):
+        return False
+    return float(match.group(2)) > float(match.group(4))

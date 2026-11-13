@@ -37,6 +37,7 @@ export function annotationsFromRegions(
       kind: "dimension" as const,
       needsReview: region.needsReview || !region.recognized,
       range: deriveRange(value) || undefined,
+      customSymbolId: region.customSymbolId,
     };
   });
 }

@@ -64,7 +64,9 @@ def test_gdt_scan_reports_each_frame_cell_ocr(monkeypatch) -> None:
     import gdt_pipeline
 
     pipeline = object.__new__(OcrPipeline)
-    pipeline.recognize = lambda _crop: {"text": "0.1", "confidence": 0.9}
+    pipeline._predict_text_recognition = lambda crops, *, batch_size: [
+        ("0.1", 0.9) for _ in crops
+    ]
     monkeypatch.setattr(
         gdt_config,
         "get_config",
@@ -90,3 +92,49 @@ def test_gdt_scan_reports_each_frame_cell_ocr(monkeypatch) -> None:
     assert [event["completed"] for event in events] == [0, 1, 1, 2]
     assert events[0]["label"] == "Reading GD&T frame cell 1"
     assert events[-1]["label"] == "Read GD&T frame cell 2"
+
+
+def test_slanted_recovery_reports_what_each_zoom_kept(monkeypatch) -> None:
+    import region_detect
+    import run_report
+
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._slant_neighbourhoods = lambda *_args, **_kwargs: [
+        (0, 0, 20, 20)
+    ]
+
+    def angled(view, *, tally=None, **_kwargs):
+        # The 1x read rejects one cluster; the 1.5x read keeps one value.
+        if view.width == 20:
+            tally.count(read=1, rejected_low_confidence=1)
+            return []
+        tally.count(read=1, values=1)
+        return [{"text": "R4.5", "bbox": {"x": 3, "y": 3, "width": 6, "height": 3}}]
+
+    pipeline._angled_in_roi = angled
+    pipeline._neighbourhood_sign = lambda *_args, **_kwargs: None
+    pipeline._leader_angles_for_roi = lambda *_args, **_kwargs: []
+    pipeline._supersede_fused_base = lambda *_args, **_kwargs: set()
+    pipeline._dedupe_angled = lambda found, _base: found
+    monkeypatch.setattr(region_detect, "detect_leader_lines", lambda _image: [])
+    report = run_report.RunReport("scan-job", "zooms", "test scan")
+    monkeypatch.setattr(report, "_write_running", lambda: None)
+    report.start()
+
+    with run_report.activate(report):
+        result = pipeline._detect_angled_regions(
+            Image.new("RGB", (20, 20), "white"), [], whole_image=False
+        )
+
+    assert [r["text"] for r in result] == ["R4.5"]
+    zoom_1x = report.steps[("Neighbourhood 01", "Zoom 1x")]
+    zoom_15x = report.steps[("Neighbourhood 01", "Zoom 1.5x")]
+    assert zoom_1x.counts == {"read": 1, "rejected_low_confidence": 1}
+    assert zoom_15x.counts == {"read": 1, "values": 1}
+    assert report.steps[("Dedupe slanted reads",)].counts == {
+        "before": 1,
+        "after": 1,
+        "kept_from_whole_area": 0,
+        "kept_from_1x": 0,
+        "kept_from_1_5x": 1,
+    }

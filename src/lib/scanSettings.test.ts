@@ -2,8 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SCAN_SETTINGS_EVENT,
   isGdtScanEnabled,
+  isSectionNumberingEnabled,
+  isSectionOverlayEnabled,
   isSlantedScanEnabled,
   setGdtScanEnabled,
+  setSectionNumberingEnabled,
+  setSectionOverlayEnabled,
   setSlantedScanEnabled,
 } from "@/lib/scanSettings";
 
@@ -78,5 +82,23 @@ describe("slanted-callout scan setting", () => {
     setSlantedScanEnabled(true);
     expect(isGdtScanEnabled()).toBe(false);
     setGdtScanEnabled(true);
+  });
+});
+
+describe("drawing section settings", () => {
+  it("numbers by section and hides the outlines by default", () => {
+    stubBrowser(memoryStorage());
+    expect(isSectionNumberingEnabled()).toBe(true);
+    expect(isSectionOverlayEnabled()).toBe(false);
+  });
+
+  it("persists each setting on its own", () => {
+    stubBrowser(memoryStorage());
+    setSectionNumberingEnabled(false);
+    setSectionOverlayEnabled(true);
+    expect(isSectionNumberingEnabled()).toBe(false);
+    expect(isSectionOverlayEnabled()).toBe(true);
+    setSectionNumberingEnabled(true);
+    setSectionOverlayEnabled(false);
   });
 });

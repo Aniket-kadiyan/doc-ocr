@@ -7,6 +7,7 @@ from typing import Any
 from PIL import Image
 
 from ocr_pipeline import OcrPipeline
+from page_scan import blank_outside_section, section_context_box
 from page_layout import LayoutBox, LayoutPanel, PageLayout
 
 
@@ -102,3 +103,64 @@ def test_section_and_page_return_the_same_value_from_the_same_panel() -> None:
     assert len(detector_sizes) < page_detector_calls
     assert (80, 100) not in detector_sizes
 
+
+
+def test_section_context_keeps_the_section_and_its_margin_only() -> None:
+    page = Image.new("RGB", (4000, 3000), "black")
+    scope = {"x": 1500, "y": 1000, "width": 800, "height": 600}
+    box = section_context_box(scope, page.size)
+    # 25% of the long side is 200 px, below the 300 px floor.
+    assert box == (1200, 700, 2600, 1900)
+    view = blank_outside_section(page, scope)
+    assert view.size == page.size
+    assert view.getpixel((1200, 700)) == (0, 0, 0)
+    assert view.getpixel((2599, 1899)) == (0, 0, 0)
+    assert view.getpixel((1199, 1000)) == (255, 255, 255)
+    assert view.getpixel((100, 100)) == (255, 255, 255)
+    # Clamped at the page edge.
+    assert section_context_box({"x": 0, "y": 0, "width": 100, "height": 100}, page.size)[:2] == (0, 0)
+
+
+def test_section_scan_reads_slanted_notes_and_frames_from_the_section_only() -> None:
+    pipeline = object.__new__(OcrPipeline)
+    pipeline._text_detector_available = True
+    pipeline._page_batch_recognition_available = True
+    pipeline._detector_only_boxes = lambda image, *, target_long_edge: []
+    pipeline._recognize_page_batch = lambda crops, **_kwargs: []
+    pipeline.recognize = lambda crop, **_kwargs: _ready_result("25.0")
+    seen: dict[str, Image.Image] = {}
+
+    def remember(name, result):
+        def call(image, *_args, **_kwargs):
+            seen[name] = image
+            return result
+        return call
+
+    pipeline.detect_regions = remember("slanted detector", [])
+    pipeline._detect_angled_regions = remember("slanted", [])
+    pipeline._notes_regions = remember("notes", [])
+    pipeline._frame_regions = remember("frames", [])
+
+    layout = PageLayout(
+        width=2000,
+        height=1000,
+        table_masks=(),
+        panels=(LayoutPanel("P1", LayoutBox(0, 0, 2000, 1000)),),
+        overlaps=(),
+    )
+    image = Image.new("RGB", (2000, 1000), "black")
+    pipeline.segment_page(
+        image,
+        layout=layout,
+        scope_bbox={"x": 1500, "y": 400, "width": 200, "height": 200},
+    )
+    assert set(seen) == {"slanted detector", "slanted", "notes", "frames"}
+    for name, view in seen.items():
+        assert view.size == image.size, name
+        # Far from the section the page is blank; inside it the ink is kept.
+        assert view.getpixel((100, 100)) == (255, 255, 255), name
+        assert view.getpixel((1600, 500)) == (0, 0, 0), name
+
+    seen.clear()
+    pipeline.segment_page(image, layout=layout)
+    assert all(view is image for view in seen.values())

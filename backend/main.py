@@ -15,6 +15,7 @@ import os
 import re
 from enum import Enum
 from functools import partial
+from pathlib import Path
 from threading import Lock
 from time import perf_counter
 from typing import Any
@@ -53,6 +54,7 @@ from debug_dump import dump_status
 from database import DatabaseManager
 from demo_lock import DemoAccessWindow, DemoLockMiddleware
 from gdt_routes import router as gdt_router
+from custom_symbol_routes import router as custom_symbol_router
 from inference_gate import inference_priority
 from ocr_capacity import build_ocr_capacity_status
 from ocr_pipeline import get_pipeline
@@ -104,6 +106,7 @@ app.include_router(auth_router)
 protected_request = [Depends(require_protected_request)]
 app.include_router(checksheet_router, dependencies=protected_request)
 app.include_router(gdt_router, dependencies=protected_request)
+app.include_router(custom_symbol_router, dependencies=protected_request)
 
 
 @app.middleware("http")
@@ -654,6 +657,77 @@ def _check_rule_labels(
     return counts
 
 
+def _tag_page_sections(
+    seg: dict[str, Any],
+    image: Image.Image,
+    table_masks: Any = None,
+) -> None:
+    """Tag a whole-page result's regions with their drawing section, so the
+    client can number balloons one sub-drawing at a time, and keep the
+    sections for its overlay. Best effort: a page whose sectioning fails
+    keeps plain top-to-bottom numbering."""
+    try:
+        from drawing_sections import detect_drawing_sections, tag_regions_with_sections
+
+        sections = detect_drawing_sections(image, table_masks=table_masks)
+        tag_regions_with_sections(
+            [*seg.get("regions", []), *seg.get("review_candidates", [])],
+            sections,
+        )
+        seg["sections"] = [section.to_dict() for section in sections]
+    except Exception as error:
+        logger.warning(
+            "Drawing sectioning failed; balloons keep page order",
+            extra={"event": "drawing_sections_failed", **safe_exception_details(error)},
+        )
+
+
+def _apply_custom_symbols(
+    seg: dict[str, Any],
+    image: Image.Image,
+    symbols: list[Any],
+    *,
+    scope_bbox: dict[str, float] | None,
+    existing_value_boxes: list[dict[str, float]],
+    report_progress: ProgressReporter,
+) -> None:
+    """Find the user's library symbols on the page and add them as balloons.
+
+    Best effort, like sectioning: a failure here is logged and the scan keeps
+    every value it already read.
+    """
+    if not symbols:
+        return
+    report_progress(
+        stage="finalizing",
+        message=f"Matching {len(symbols)} custom symbol{'s' if len(symbols) != 1 else ''}",
+        percent=97,
+        completed=0,
+        total=1,
+        operation_label="Custom symbol matching",
+    )
+    try:
+        from custom_symbols import detect_custom_symbols, merge_custom_symbol_matches
+
+        matches = detect_custom_symbols(
+            image,
+            symbols,
+            scope_bbox=scope_bbox,
+            skip_boxes=existing_value_boxes,
+        )
+        added = merge_custom_symbol_matches(seg, matches)
+    except Exception as error:
+        logger.warning(
+            "Custom symbol matching failed; scan keeps its other values",
+            extra={"event": "custom_symbols_failed", **safe_exception_details(error)},
+        )
+        return
+    logger.info(
+        "Custom symbols matched",
+        extra={"event": "custom_symbols_matched", "symbols": len(symbols), "matches": added},
+    )
+
+
 def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
     """Apply the API's dimension classification to one complete scan result."""
 
@@ -721,6 +795,9 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         "review_candidates": review_candidates,
         "candidate_outcomes": candidate_outcomes,
         "label_completeness": label_completeness,
+        # Whole-page scans only: the sheet's sub-drawings, for the client's
+        # section overlay.
+        "sections": list(seg.get("sections", [])),
     }
 
 
@@ -808,6 +885,10 @@ async def create_scan_job(
         True,
         description="Read dimensions drawn along angled leaders",
     ),
+    custom_symbols: bool = Form(
+        True,
+        description="Look for the enabled symbols in the custom symbol library",
+    ),
     debug_dump: bool = Query(
         False,
         description="Write pipeline steps to backend/debug_output/",
@@ -849,6 +930,13 @@ async def create_scan_job(
         "width": scope_width,
         "height": scope_height,
     }
+    # The library as it stands when the scan is queued; edits made while the
+    # job waits apply to the next scan.
+    library_symbols: list[Any] = []
+    if custom_symbols:
+        from custom_symbols import get_custom_symbol_store
+
+        library_symbols = get_custom_symbol_store().enabled_templates()
 
     def run_scan(report_progress: ProgressReporter) -> dict[str, Any]:
         image = Image.open(io.BytesIO(raw)).convert("RGB")
@@ -899,6 +987,16 @@ async def create_scan_job(
                         scope_kind=scope_kind,
                         scope=scope_bbox,
                     )
+                    _apply_custom_symbols(
+                        seg,
+                        image,
+                        library_symbols,
+                        scope_bbox=scope_bbox if scope_kind == "section" else None,
+                        existing_value_boxes=saved_value_boxes,
+                        report_progress=report_progress,
+                    )
+                    if scope_kind == "page":
+                        _tag_page_sections(seg, image)
                     report_progress(
                         stage="finalizing",
                         message=(
@@ -965,6 +1063,16 @@ async def create_scan_job(
             scope_bbox=scope_bbox if scope_kind == "section" else None,
         )
         seg["coordinate_space"] = "page"
+        _apply_custom_symbols(
+            seg,
+            image,
+            library_symbols,
+            scope_bbox=scope_bbox if scope_kind == "section" else None,
+            existing_value_boxes=saved_value_boxes,
+            report_progress=report_progress,
+        )
+        if scope_kind == "page":
+            _tag_page_sections(seg, image, layout.table_masks)
         return _serialize_segment_result(seg)
 
     def run_background_scan(
@@ -980,6 +1088,7 @@ async def create_scan_job(
             "scope_kind": scope_kind,
             "gdt": gdt,
             "slanted": slanted,
+            "custom_symbols": len(library_symbols),
             "page": page,
             "scope_bbox": scope_bbox,
             # Liveness thresholds scale with the actual selected drawing area.
@@ -1270,10 +1379,28 @@ if __name__ == "__main__":
         if transport_security.active
         else {}
     )
+    # A reload ends the process and every scan running in it, so only
+    # application code triggers one: saving a test, benchmark or script used
+    # to kill a half-hour section scan at 99%.
+    reload_arguments = (
+        {
+            "reload_dirs": [str(Path(__file__).resolve().parent)],
+            "reload_excludes": [
+                "test_*.py",
+                "benchmarks/*",
+                "scripts/*",
+                "migrations/*",
+                ".venv/*",
+            ],
+        }
+        if runtime_config.backend_reload
+        else {}
+    )
     uvicorn.run(
         "main:app",
         host=runtime_config.backend_host,
         port=runtime_config.backend_port,
         reload=runtime_config.backend_reload,
+        **reload_arguments,
         **tls_arguments,
     )

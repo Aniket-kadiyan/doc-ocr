@@ -95,8 +95,10 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   updateAnnotation: (id, patch) =>
     set((state) => ({
-      annotations: state.annotations.map((a) =>
-        a.id === id ? { ...a, ...patch } : a
+      // Renumbered because an edited type or value can make it a note, and
+      // notes take the last numbers.
+      annotations: renumberValueAnnotations(
+        state.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a))
       ),
     })),
 

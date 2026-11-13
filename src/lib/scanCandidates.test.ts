@@ -105,6 +105,46 @@ describe("scan candidate duplicate protection", () => {
     expect(result.skippedDuplicates).toBe(1);
   });
 
+  it("orders survivors one drawing section at a time", () => {
+    const inSection = (text: string, rank: number, valueBox: BBox) => ({
+      ...makeRegion(text, valueBox),
+      sectionRank: rank,
+    });
+    const result = filterNewScanRegions(
+      [
+        inSection("right view top", 1, { x: 500, y: 10, width: 20, height: 10 }),
+        inSection("left view low", 0, { x: 10, y: 300, width: 20, height: 10 }),
+        inSection("left view top", 0, { x: 10, y: 50, width: 20, height: 10 }),
+      ],
+      [],
+      1,
+      undefined,
+      "page"
+    );
+
+    expect(result.accepted.map((region) => region.text)).toEqual([
+      "left view top",
+      "left view low",
+      "right view top",
+    ]);
+  });
+
+  it("numbers top to bottom when section numbering is off", () => {
+    const result = filterNewScanRegions(
+      [
+        { ...makeRegion("low", { x: 10, y: 300, width: 20, height: 10 }), sectionRank: 0 },
+        { ...makeRegion("high", { x: 500, y: 10, width: 20, height: 10 }), sectionRank: 1 },
+      ],
+      [],
+      1,
+      undefined,
+      "page",
+      false
+    );
+
+    expect(result.accepted.map((region) => region.text)).toEqual(["high", "low"]);
+  });
+
   it("keeps contained page objects when their sizes differ", () => {
     const parent = makeRegion("parent", {
       x: 10,

@@ -139,3 +139,47 @@ def test_a_line_with_no_rule_through_it_is_not_cut() -> None:
     assert pipeline._split_at_interior_rules(
         image, InkMap(image), {"x": 40, "y": 50, "width": 285, "height": 40}
     ) is None
+
+
+def test_clusters_that_cannot_publish_are_not_read(monkeypatch) -> None:
+    """No digit in the detector's read, or ink too squat for any text: no OCR."""
+
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    import region_detect
+    from run_report import StepHandle
+
+    image = Image.new("RGB", (400, 200), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 20, 109, 33), fill="black")  # long ink, "AB"
+    draw.rectangle((20, 120, 109, 133), fill="black")  # long ink, "12"
+    draw.rectangle((250, 100, 267, 117), fill="black")  # square ink, "5"
+    boxes = [
+        {"x": 15, "y": 17, "w": 100, "h": 20, "text": "AB"},
+        {"x": 15, "y": 117, "w": 100, "h": 20, "text": "12"},
+        {"x": 248, "y": 98, "w": 22, "h": 22, "text": "5"},
+    ]
+    pipeline = object.__new__(OcrPipeline)
+    monkeypatch.setattr(region_detect, "dominant_slant_angles", lambda *_a, **_k: [30.0])
+    pipeline._rotate_expand = lambda img, _angle, **_k: (img, np.eye(3))
+    pipeline._paddle_det_boxes = lambda _img: [dict(b) for b in boxes]
+    pipeline._text_scale = lambda _boxes: 20.0
+    read: list[tuple[int, int]] = []
+
+    def recognize(crop, **_kwargs):
+        read.append(crop.size)
+        return {"text": "", "confidence": 0.0}
+
+    pipeline.recognize = recognize
+    tally = StepHandle()
+
+    pipeline._angled_in_roi(image, sign=1.0, tally=tally)
+
+    assert len(read) == 1
+    assert tally.counts == {
+        "skipped_no_digit": 1,
+        "skipped_square_patch": 1,
+        "read": 1,
+        "rejected_not_text": 1,
+    }

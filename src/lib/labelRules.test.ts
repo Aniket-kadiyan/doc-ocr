@@ -192,15 +192,16 @@ describe("exports", () => {
     const sheet = buildInspectionSheet(annotations);
     const expected = pairs(sheet.rows);
     // The sheet itself: one row per value, nothing dropped or merged, the
-    // falsy "0" kept, the multiline note on one line.
+    // falsy "0" kept, the multiline note on one line and numbered last.
     expect(expected).toEqual([
       "Diameter = Ø12",
       "Linear Dimension = 0",
       'Through Hole, "c/bore" & <spec> = 4X Ø6.6 THRU',
-      "General Notes = 1. FREE FROM BURRS 2. BREAK EDGES",
       "Radius = R5",
       "DWG = 47630",
+      "General Notes = 1. FREE FROM BURRS 2. BREAK EDGES",
     ]);
+    expect(sheet.rows.find((row) => row[1] === "General Notes")?.[0]).toBe("6");
     // The title-field section: the read field by its keyword, and the
     // keyword that was not read as a blank row rather than no row.
     const titleRows = sheet.rows.filter((row) => row[0] === "" && row[1]).slice(0, 2);

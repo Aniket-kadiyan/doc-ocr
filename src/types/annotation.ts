@@ -119,6 +119,8 @@ export interface Annotation {
   /** Editable tolerance; numeric values default to "0" and embedded ± values
    * are normalized to "+x, -x". */
   range?: string;
+  /** The custom symbol library entry this balloon is a match of. */
+  customSymbolId?: string;
   /** Legacy browser-based inspector readings retained for older projects and
    * values-only CSV/JSON exports. Internal checksheet runs use backend storage. */
   extras?: Record<string, string>;

@@ -107,14 +107,20 @@ export function filterNewScanRegions(
   existing: Annotation[],
   page: number,
   overlapThreshold = DEFAULT_OVERLAP_THRESHOLD,
-  scopeKind: ScanScopeKind = "section"
+  scopeKind: ScanScopeKind = "section",
+  orderBySection = true
 ): FilteredScanRegions {
   const existingValues = existing.filter(
     (annotation) => annotation.kind !== "label" && annotation.page === page
   );
 
+  // Accepted order is balloon order: top to bottom, and by default one
+  // drawing section after another first.
+  const sectionRank = (region: SegmentRegion) =>
+    orderBySection ? region.sectionRank ?? 0 : 0;
   const ordered = [...candidates].sort(
     (left, right) =>
+      sectionRank(left) - sectionRank(right) ||
       left.valueBox.y - right.valueBox.y ||
       left.valueBox.x - right.valueBox.x
   );

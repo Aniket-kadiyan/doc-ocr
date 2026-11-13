@@ -185,6 +185,13 @@ export interface SegmentRegion {
    * Konva-drawable box (top-left corner + size + clockwise rotation degrees).
    */
   orientedBox?: BBox & { rotation: number };
+  /** Drawing section (sub-view) the value lies in; whole-page scans only. */
+  sectionId?: string;
+  /** That section's place in the sheet's reading order; balloons are
+   * numbered one section at a time. */
+  sectionRank?: number;
+  /** Library symbol this region is a match of, when it came from one. */
+  customSymbolId?: string;
 }
 
 export interface ApiSegmentRegion {
@@ -210,6 +217,9 @@ export interface ApiSegmentRegion {
   page_filter_reason?: string;
   review_reason?: string;
   recovery_attempted?: boolean;
+  section_id?: string;
+  section_rank?: number;
+  custom_symbol_id?: string;
 }
 
 export interface ApiSegmentResponse {
@@ -225,7 +235,15 @@ export interface ApiSegmentResponse {
   coordinate_space?: "scope" | "page";
   regions: ApiSegmentRegion[];
   review_candidates?: ApiSegmentRegion[];
+  /** Whole-page scans: the sheet's sub-drawings, in scanned-image pixels. */
+  sections?: ApiDrawingSection[];
   candidate_outcomes?: ApiCandidateOutcome[];
+}
+
+export interface ApiDrawingSection {
+  id: string;
+  kind: "view" | "text";
+  outlines: [number, number][][];
 }
 
 export interface ApiCandidateOutcome {
@@ -290,6 +308,9 @@ function mappedSegmentRegion(
     recoveryAttempted: r.recovery_attempted,
     valueBox,
     orientedBox,
+    sectionId: r.section_id,
+    sectionRank: r.section_rank,
+    customSymbolId: r.custom_symbol_id,
   };
 }
 
