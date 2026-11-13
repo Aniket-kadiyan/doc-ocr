@@ -11,6 +11,7 @@ import {
   normalizeBalloonStyleSelection,
 } from "@/lib/balloonStyle";
 import type { BalloonStyleSelection } from "@/types/balloonStyle";
+import { normalizeReviewCandidateNumbers } from "@/lib/scanCandidateLifecycle";
 
 export interface ProjectRecord {
   id: string;
@@ -91,6 +92,7 @@ export async function saveScanCandidates(
   projectId: string,
   candidates: ScanCandidate[]
 ): Promise<void> {
+  const normalized = normalizeReviewCandidateNumbers(candidates);
   await db.transaction("rw", db.scanCandidates, async () => {
     const existing = await db.scanCandidates
       .where("projectId")
@@ -100,7 +102,7 @@ export async function saveScanCandidates(
       existing.map((candidate) => candidate.id)
     );
     await db.scanCandidates.bulkPut(
-      candidates.map((candidate) => ({ ...candidate, projectId }))
+      normalized.map((candidate) => ({ ...candidate, projectId }))
     );
   });
 }
@@ -112,12 +114,14 @@ export async function loadScanCandidates(
     .where("projectId")
     .equals(projectId)
     .toArray();
-  return stored
+  return normalizeReviewCandidateNumbers(
+    stored
     .map(({ projectId: _projectId, ...candidate }) => {
       void _projectId;
       return candidate;
     })
-    .sort((left, right) => left.order - right.order);
+    .sort((left, right) => left.order - right.order)
+  );
 }
 
 export async function saveProject(project: ProjectRecord): Promise<void> {

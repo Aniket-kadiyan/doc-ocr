@@ -13,6 +13,9 @@ import {
 
 const FALLBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="202" height="310" viewBox="0 0 202 310"><line data-balloon-connector="true" x1="101" y1="193" x2="101" y2="305" stroke="#111827" stroke-width="10" stroke-linecap="round"/><circle data-balloon-boundary="true" cx="101" cy="99" r="94" fill="#fff" stroke="#111827" stroke-width="10"/><text data-balloon-label="true"></text></svg>`;
 
+export const BALLOON_OK_BOUNDARY_COLOR = "#16a34a";
+export const BALLOON_REVIEW_BOUNDARY_COLOR = "#dc2626";
+
 const FALLBACK_DEFINITION: BalloonStyleDefinition = {
   id: "circle",
   name: "Circle",
@@ -56,7 +59,9 @@ export const FALLBACK_BALLOON_STYLE: BalloonStyle = {
   artwork: {
     mimeType: "image/svg+xml",
     path: FALLBACK_DEFINITION.sizes.medium.artwork.path,
-    dataUrl: svgDataUrl(FALLBACK_SVG),
+    dataUrl: svgDataUrl(
+      colorBalloonBoundary(FALLBACK_SVG, BALLOON_OK_BOUNDARY_COLOR)
+    ),
     width: 202,
     height: 310,
   },
@@ -64,6 +69,16 @@ export const FALLBACK_BALLOON_STYLE: BalloonStyle = {
   anchor: FALLBACK_DEFINITION.anchor,
   display: FALLBACK_DEFINITION.sizes.medium.display,
   text: FALLBACK_DEFINITION.text,
+};
+
+export const FALLBACK_REVIEW_BALLOON_STYLE: BalloonStyle = {
+  ...FALLBACK_BALLOON_STYLE,
+  artwork: {
+    ...FALLBACK_BALLOON_STYLE.artwork,
+    dataUrl: svgDataUrl(
+      colorBalloonBoundary(FALLBACK_SVG, BALLOON_REVIEW_BOUNDARY_COLOR)
+    ),
+  },
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -254,13 +269,42 @@ export function validateBalloonSvg(svg: string): string {
   if (!/data-balloon-label\s*=\s*["']true["']/i.test(trimmed)) {
     throw new Error("Balloon SVG must contain the data-balloon-label marker.");
   }
+  if (!/data-balloon-boundary\s*=\s*["']true["']/i.test(trimmed)) {
+    throw new Error("Balloon SVG must contain the data-balloon-boundary marker.");
+  }
   return trimmed;
+}
+
+/** Recolour only the SVG element explicitly marked as the balloon boundary. */
+export function colorBalloonBoundary(svg: string, color: string): string {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) {
+    throw new Error("Balloon boundary colour must be a six-digit hex colour.");
+  }
+  let found = false;
+  const coloured = validateBalloonSvg(svg).replace(
+    /<[^>]*data-balloon-boundary\s*=\s*["']true["'][^>]*>/gi,
+    (element) => {
+      found = true;
+      if (/\sstroke\s*=\s*["'][^"']*["']/i.test(element)) {
+        return element.replace(
+          /\sstroke\s*=\s*["'][^"']*["']/i,
+          ` stroke="${color}"`
+        );
+      }
+      return /\s*\/>$/.test(element)
+        ? element.replace(/\s*\/>$/, ` stroke="${color}"/>`)
+        : element.replace(/>$/, ` stroke="${color}">`);
+    }
+  );
+  if (!found) throw new Error("Balloon SVG boundary marker could not be coloured.");
+  return coloured;
 }
 
 export function resolveBalloonStyle(
   manifest: BalloonStyleManifest,
   requested: Partial<BalloonStyleSelection> | null | undefined,
-  svg: string
+  svg: string,
+  boundaryColor = BALLOON_OK_BOUNDARY_COLOR
 ): BalloonStyle {
   const selection = normalizeBalloonStyleSelection(requested, manifest);
   const definition = manifest.styles.find(
@@ -276,7 +320,7 @@ export function resolveBalloonStyle(
     artwork: {
       mimeType: "image/svg+xml",
       path: size.artwork.path,
-      dataUrl: svgDataUrl(validateBalloonSvg(svg)),
+      dataUrl: svgDataUrl(colorBalloonBoundary(svg, boundaryColor)),
       width: size.artwork.width,
       height: size.artwork.height,
     },

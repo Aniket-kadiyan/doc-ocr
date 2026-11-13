@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  BALLOON_OK_BOUNDARY_COLOR,
+  BALLOON_REVIEW_BOUNDARY_COLOR,
+  colorBalloonBoundary,
   fitBalloonFontSize,
   getAnchoredBalloonGeometry,
   normalizeBalloonStyleSelection,
@@ -76,6 +79,25 @@ describe("balloon style registry", () => {
         manifest
       )
     ).toEqual(manifest.defaultSelection);
+  });
+
+  it("colours only the marked boundary for accepted and review balloons", () => {
+    const svg = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../public/balloon-styles/circle/v1/medium.svg",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    const accepted = colorBalloonBoundary(svg, BALLOON_OK_BOUNDARY_COLOR);
+    const review = colorBalloonBoundary(svg, BALLOON_REVIEW_BOUNDARY_COLOR);
+
+    expect(accepted).toContain(`stroke="${BALLOON_OK_BOUNDARY_COLOR}"`);
+    expect(review).toContain(`stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`);
+    expect(accepted).toContain('data-balloon-connector="true"');
+    expect(accepted).toContain('data-balloon-connector="true" x1="101"');
   });
 });
 

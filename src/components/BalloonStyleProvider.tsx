@@ -10,7 +10,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BALLOON_REVIEW_BOUNDARY_COLOR,
   FALLBACK_BALLOON_STYLE,
+  FALLBACK_REVIEW_BALLOON_STYLE,
   normalizeBalloonStyleSelection,
   parseBalloonStyleManifest,
   resolveBalloonStyle,
@@ -25,6 +27,8 @@ import {
 interface BalloonStyleContextValue {
   style: BalloonStyle;
   artworkImage: HTMLImageElement | null;
+  reviewStyle: BalloonStyle;
+  reviewArtworkImage: HTMLImageElement | null;
   manifest: BalloonStyleManifest | null;
   selection: BalloonStyleSelection;
   setSelection: (selection: BalloonStyleSelection) => void;
@@ -35,6 +39,8 @@ interface BalloonStyleContextValue {
 const defaultValue: BalloonStyleContextValue = {
   style: FALLBACK_BALLOON_STYLE,
   artworkImage: null,
+  reviewStyle: FALLBACK_REVIEW_BALLOON_STYLE,
+  reviewArtworkImage: null,
   manifest: null,
   selection: DEFAULT_BALLOON_STYLE_SELECTION,
   setSelection: () => undefined,
@@ -85,6 +91,11 @@ export function BalloonStyleProvider({
   );
   const [style, setStyle] = useState<BalloonStyle>(FALLBACK_BALLOON_STYLE);
   const [artworkImage, setArtworkImage] = useState<HTMLImageElement | null>(null);
+  const [reviewStyle, setReviewStyle] = useState<BalloonStyle>(
+    FALLBACK_REVIEW_BALLOON_STYLE
+  );
+  const [reviewArtworkImage, setReviewArtworkImage] =
+    useState<HTMLImageElement | null>(null);
   const [ready, setReady] = useState(false);
   const selection = useMemo(
     () =>
@@ -108,8 +119,14 @@ export function BalloonStyleProvider({
     let cancelled = false;
     void (async () => {
       try {
-        const fallbackImage = await loadArtwork(FALLBACK_BALLOON_STYLE);
-        if (!cancelled) setArtworkImage(fallbackImage);
+        const [fallbackImage, fallbackReviewImage] = await Promise.all([
+          loadArtwork(FALLBACK_BALLOON_STYLE),
+          loadArtwork(FALLBACK_REVIEW_BALLOON_STYLE),
+        ]);
+        if (!cancelled) {
+          setArtworkImage(fallbackImage);
+          setReviewArtworkImage(fallbackReviewImage);
+        }
       } catch {
         // Balloon.tsx has a vector last-resort rendering path.
       }
@@ -146,11 +163,23 @@ export function BalloonStyleProvider({
         const asset = definition.sizes[normalized.size].artwork;
         const response = await fetch(asset.path, { cache: "no-store" });
         if (!response.ok) throw new Error(`${asset.path} returned HTTP ${response.status}.`);
-        const resolved = resolveBalloonStyle(manifest, normalized, await response.text());
-        const image = await loadArtwork(resolved);
+        const svg = await response.text();
+        const resolved = resolveBalloonStyle(manifest, normalized, svg);
+        const resolvedReview = resolveBalloonStyle(
+          manifest,
+          normalized,
+          svg,
+          BALLOON_REVIEW_BOUNDARY_COLOR
+        );
+        const [image, reviewImage] = await Promise.all([
+          loadArtwork(resolved),
+          loadArtwork(resolvedReview),
+        ]);
         if (!cancelled) {
           setStyle(resolved);
           setArtworkImage(image);
+          setReviewStyle(resolvedReview);
+          setReviewArtworkImage(reviewImage);
           setReady(true);
           if (controlledSelection == null) {
             setInternalSelection((current) =>
@@ -176,13 +205,24 @@ export function BalloonStyleProvider({
     () => ({
       style,
       artworkImage,
+      reviewStyle,
+      reviewArtworkImage,
       manifest,
       selection,
       setSelection,
       ready,
       source: manifest && style !== FALLBACK_BALLOON_STYLE ? "configured" : "fallback",
     }),
-    [artworkImage, manifest, ready, selection, setSelection, style]
+    [
+      artworkImage,
+      manifest,
+      ready,
+      reviewArtworkImage,
+      reviewStyle,
+      selection,
+      setSelection,
+      style,
+    ]
   );
 
   return (

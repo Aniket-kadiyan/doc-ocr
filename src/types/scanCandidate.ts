@@ -20,6 +20,8 @@ export interface ScanCandidate {
   page: number;
   order: number;
   state: ScanCandidateState;
+  /** Stable user-facing sequence for candidates awaiting review (R-1, R-2…). */
+  reviewNumber?: number;
   /** State restored when an ignored candidate is returned to the queue. */
   restoreState?: RestorableScanCandidateState;
   text: string;

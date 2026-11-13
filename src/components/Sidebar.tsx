@@ -436,7 +436,7 @@ export function Sidebar({
                     : ""
                 }
               >
-                <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-red-700">
                   Review required · {reviews.length}
                 </h3>
                 <ul>
@@ -453,13 +453,15 @@ export function Sidebar({
                           className={`w-full rounded-lg border border-dashed px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                             selected
                               ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300"
-                              : "border-slate-300 bg-white hover:bg-amber-50"
+                              : "border-red-300 bg-white hover:bg-red-50"
                           }`}
                         >
                           <span className="flex items-start gap-2">
-                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-400 text-xs font-bold text-slate-600">
-                              ?
-                            </span>
+                            <BalloonThumbnail
+                              number={`R-${candidate.reviewNumber ?? "?"}`}
+                              selected={selected}
+                              status="review"
+                            />
                             <span className="min-w-0 flex-1">
                               <span className="block truncate font-mono text-xs text-slate-800">
                                 {candidate.text.trim() ||
@@ -554,6 +556,10 @@ export function Sidebar({
                             "Unread"}
                         </span>
                         <span className="mt-1 block text-[10px] text-slate-400">
+                          {candidate.restoreState === "review" &&
+                          candidate.reviewNumber
+                            ? `R-${candidate.reviewNumber} · `
+                            : ""}
                           Page {candidate.page}
                           {candidate.reason ? ` · ${candidate.reason}` : ""}
                         </span>

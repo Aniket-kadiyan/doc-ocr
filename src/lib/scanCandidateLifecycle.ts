@@ -11,6 +11,51 @@ export interface MergedScanCandidates {
   skippedAccepted: number;
 }
 
+const belongsToReviewSequence = (candidate: ScanCandidate) =>
+  candidate.state === "review" ||
+  (candidate.state === "ignored" && candidate.restoreState === "review");
+
+const validReviewNumber = (value: unknown): value is number =>
+  Number.isInteger(value) && Number(value) > 0;
+
+/**
+ * Give every review candidate a durable R-number without renumbering existing
+ * candidates when an earlier candidate is accepted or ignored. Old projects
+ * that predate review numbers are upgraded deterministically by scan order.
+ */
+export function normalizeReviewCandidateNumbers(
+  candidates: readonly ScanCandidate[]
+): ScanCandidate[] {
+  const assigned = new Map<string, number>();
+  const used = new Set<number>();
+  let nextNumber = 1;
+
+  for (const candidate of [...candidates].sort(
+    (left, right) => left.order - right.order
+  )) {
+    if (!belongsToReviewSequence(candidate)) continue;
+
+    const existing = candidate.reviewNumber;
+    if (validReviewNumber(existing) && !used.has(existing)) {
+      assigned.set(candidate.id, existing);
+      used.add(existing);
+      nextNumber = Math.max(nextNumber, existing + 1);
+      continue;
+    }
+
+    while (used.has(nextNumber)) nextNumber += 1;
+    assigned.set(candidate.id, nextNumber);
+    used.add(nextNumber);
+    nextNumber += 1;
+  }
+
+  return candidates.map((candidate) => {
+    const reviewNumber = assigned.get(candidate.id);
+    if (candidate.reviewNumber === reviewNumber) return candidate;
+    return { ...candidate, reviewNumber };
+  });
+}
+
 const overlapsAnnotation = (
   candidate: ScanCandidate,
   annotations: readonly Annotation[],
@@ -63,7 +108,7 @@ export function mergeScanCandidates(args: {
   overlapThreshold?: number;
 }): MergedScanCandidates {
   const overlapThreshold = args.overlapThreshold ?? 0.55;
-  const candidates = args.existing.filter(
+  const candidates = normalizeReviewCandidateNumbers(args.existing).filter(
     (candidate) =>
       !overlapsAnnotation(candidate, args.acceptedAnnotations, overlapThreshold)
   );
@@ -90,20 +135,28 @@ export function mergeScanCandidates(args: {
 
     const existing = candidates[matchIndex];
     const ignored = existing.state === "ignored";
+    const state = ignored
+      ? "ignored"
+      : existing.state === "review" || incoming.state === "review"
+        ? "review"
+        : incoming.state;
+    const restoreState = ignored
+      ? existing.restoreState ?? "other"
+      : undefined;
+    const keepsReviewNumber =
+      state === "review" ||
+      (state === "ignored" && restoreState === "review");
     const sourceIds = mergedSourceIds(existing, incoming);
     candidates[matchIndex] = {
       ...existing,
       ...incoming,
       id: existing.id,
       order: existing.order,
-      state: ignored
-        ? "ignored"
-        : existing.state === "review" || incoming.state === "review"
-          ? "review"
-          : incoming.state,
-      restoreState: ignored
-        ? existing.restoreState ?? "other"
+      state,
+      reviewNumber: keepsReviewNumber
+        ? existing.reviewNumber ?? incoming.reviewNumber
         : undefined,
+      restoreState,
       createdAt: existing.createdAt,
       updatedAt: Math.max(existing.updatedAt, incoming.updatedAt),
       duplicateSourceIds: sourceIds,
@@ -113,7 +166,9 @@ export function mergeScanCandidates(args: {
   }
 
   return {
-    candidates: candidates.sort((left, right) => left.order - right.order),
+    candidates: normalizeReviewCandidateNumbers(candidates).sort(
+      (left, right) => left.order - right.order
+    ),
     mergedDuplicates,
     skippedAccepted,
   };

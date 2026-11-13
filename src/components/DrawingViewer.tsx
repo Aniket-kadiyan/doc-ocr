@@ -33,8 +33,10 @@ import { filterNewScanRegions } from "@/lib/scanCandidates";
 import {
   ignoreScanCandidate,
   mergeScanCandidates,
+  normalizeReviewCandidateNumbers,
   restoreScanCandidate,
 } from "@/lib/scanCandidateLifecycle";
+import { BALLOON_OK_BOUNDARY_COLOR } from "@/lib/balloonStyle";
 import {
   areAllValueBalloonsHidden,
   areAllValueBalloonsVisible,
@@ -422,8 +424,9 @@ export function DrawingViewer() {
 
   const replaceScanCandidates = useCallback(
     (next: ScanCandidate[]) => {
-      scanCandidatesRef.current = next;
-      setScanCandidates(next);
+      const normalized = normalizeReviewCandidateNumbers(next);
+      scanCandidatesRef.current = normalized;
+      setScanCandidates(normalized);
     },
     []
   );
@@ -2186,7 +2189,7 @@ export function DrawingViewer() {
 
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
-                      const stroke = highlighted ? "#2563eb" : "#dc2626";
+                      const stroke = BALLOON_OK_BOUNDARY_COLOR;
                       const box = ann.orientedBox ?? ann.bbox;
                       const rotation = ann.orientedBox?.rotation ?? 0;
                       return (
@@ -2209,6 +2212,10 @@ export function DrawingViewer() {
                               ? 0.15
                               : 1
                           }
+                          shadowColor="#2563eb"
+                          shadowBlur={highlighted ? 8 / scale : 0}
+                          shadowOpacity={highlighted ? 0.9 : 0}
+                          shadowEnabled={highlighted}
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
                         />
