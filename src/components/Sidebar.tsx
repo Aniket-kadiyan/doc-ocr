@@ -35,6 +35,9 @@ interface SidebarProps {
   onMetadataClear: (field: DocumentMetadataField) => void;
 }
 
+const INSPECTOR_COLLAPSED_KEY =
+  "qtracx.workspace-inspector-collapsed";
+
 /** One sidebar record per ballooned value. Label, method, and tool are optional
  * metadata on that same record rather than separate annotations. */
 export function Sidebar({
@@ -65,6 +68,7 @@ export function Sidebar({
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
   const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const values = annotations
     .filter((annotation) => annotation.kind !== "label")
     .sort((left, right) => left.number - right.number);
@@ -86,6 +90,39 @@ export function Sidebar({
   const balloonControlsDisabled = disabled || activeMetadataField !== null;
   const balloonListRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setCollapsed(
+      window.localStorage.getItem(INSPECTOR_COLLAPSED_KEY) ===
+      "true"
+    );
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--qtracx-inspector-width",
+      collapsed ? "3.5rem" : "18rem"
+    );
+
+    return () => {
+      document.documentElement.style.removeProperty(
+        "--qtracx-inspector-width"
+      );
+    };
+  }, [collapsed]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((current) => {
+      const next = !current;
+
+      window.localStorage.setItem(
+        INSPECTOR_COLLAPSED_KEY,
+        next ? "true" : "false"
+      );
+
+      return next;
+    });
+  };
+
   // Keep the corresponding row visible when a value is selected on the
   // drawing.
   useEffect(() => {
@@ -97,11 +134,28 @@ export function Sidebar({
   }, [selectedId, activeTab]);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+    <aside
+      data-collapsed={collapsed ? "true" : "false"}
+      className={`qtracx-inspector relative flex shrink-0 flex-col border-l border-slate-200 bg-slate-50 transition-[width] duration-200 ${collapsed ? "w-14" : "w-72"
+        }`}
+    >
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        title={collapsed ? "Expand inspector" : "Collapse inspector"}
+        className="qtracx-inspector-toggle"
+      >
+        <span aria-hidden="true">{collapsed ? "‹" : "›"}</span>
+        <span className="sr-only">
+          {collapsed ? "Expand inspector" : "Collapse inspector"}
+        </span>
+      </button>
+
       <div
         role="tablist"
         aria-label="Drawing details"
-        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pt-2"
+        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pr-11 pt-2"
       >
         <button
           type="button"

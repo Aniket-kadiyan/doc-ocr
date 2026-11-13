@@ -98,6 +98,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
 import { ScanProgressBanner } from "@/components/ScanProgressBanner";
+import { useNotifications } from "@/components/NotificationProvider";
 import { GdtOverlay } from "@/components/GdtOverlay";
 import { GdtPanel } from "@/components/GdtPanel";
 import {
@@ -212,7 +213,8 @@ async function readTitleFieldAnnotations(
 }
 
 export function DrawingViewer() {
-  const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
+  const { error: ocrError } = useClientOcr();
+  const { notifyError, notifyInfo } = useNotifications();
   const {
     selection: balloonStyleSelection,
     setSelection: setBalloonStyleSelection,
@@ -259,6 +261,45 @@ export function DrawingViewer() {
   const [scanScope, setScanScope] = useState<BBox | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
+
+  useEffect(() => {
+    if (!ocrError) return;
+
+    notifyError(`OCR failed to load: ${ocrError}`, {
+      id: "ocr-runtime-error",
+      title: "OCR unavailable",
+      durationMs: 0,
+    });
+  }, [notifyError, ocrError]);
+
+  useEffect(() => {
+    if (!selectionError) return;
+
+    notifyError(selectionError, {
+      id: "workspace-error",
+      title: "Action could not be completed",
+      action: scanOverlay
+        ? {
+            label: "Dismiss scan overlay",
+            onClick: () => {
+              setScanOverlay(null);
+              setScanScope(null);
+            },
+          }
+        : undefined,
+    });
+    setSelectionError(null);
+  }, [notifyError, scanOverlay, selectionError]);
+
+  useEffect(() => {
+    if (!lastDebugDump) return;
+
+    notifyInfo(`OCR debug: ${lastDebugDump}`, {
+      id: "ocr-debug-output",
+      title: "Diagnostic output",
+    });
+    setLastDebugDump(null);
+  }, [lastDebugDump, notifyInfo]);
   const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
   const scanCandidatesRef = useRef<ScanCandidate[]>([]);
   const candidateOrderRef = useRef(0);
@@ -918,7 +959,6 @@ export function DrawingViewer() {
         return;
       }
       setSelectionError(null);
-      setScanSummary(null);
       setSelectedScanSections([]);
       setSelectedId(null);
       setSelectedScanCandidateId(null);
@@ -948,7 +988,6 @@ export function DrawingViewer() {
       setActiveMetadataField(null);
       setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       try {
         // Intentionally use the same single-value reader as Draw Value. This
         // fills metadata without creating an annotation or balloon.
@@ -990,7 +1029,6 @@ export function DrawingViewer() {
 
       setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       try {
         const ocrResult = await runOCR(source, bbox, 1);
         if (ocrResult.debugDumpDir) {
@@ -1081,7 +1119,6 @@ export function DrawingViewer() {
         : "";
       if (manageProcessing) setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       setScanOverlay(null);
       setScanScope(bbox);
       setScanProgress({
@@ -1634,7 +1671,6 @@ export function DrawingViewer() {
     if (!source) return;
 
     setSelectionError(null);
-    setScanSummary(null);
     setSelectedScanSections([]);
     setActiveMetadataField(null);
     setIsDrawingValue(false);
@@ -1938,88 +1974,12 @@ export function DrawingViewer() {
         }}
       />
 
-      {!ocrReady && !ocrError && (
-        <div className="bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-800">
-          {engineLabel}
-        </div>
-      )}
-      {ocrReady && !ocrError && (
-        <div className="bg-emerald-50 px-4 py-1.5 text-center text-xs text-emerald-800">
-          Active OCR: {engineLabel}
-        </div>
-      )}
-      {ocrError && (
-        <div className="bg-red-50 px-4 py-1.5 text-center text-xs text-red-700">
-          OCR failed to load: {ocrError}
-        </div>
-      )}
-      {selectionError && (
-        <div className="flex items-center justify-center gap-3 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
-          <span>{selectionError}</span>
-          {scanOverlay && (
-            <button
-              type="button"
-              onClick={() => {
-                setScanOverlay(null);
-                setScanScope(null);
-              }}
-              className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
-            >
-              Dismiss scan overlay
-            </button>
-          )}
-        </div>
-      )}
-      {scanSummary && (
-        <div
-          className={`px-4 py-1.5 text-center text-xs ${
-            scanSummary.reviewRequired > 0
-              ? "bg-slate-100 text-slate-900"
-              : "bg-emerald-50 text-emerald-900"
-          }`}
-        >
-          {scanSummary.detected} detected
-          {" · "}
-          {scanSummary.recognized} recognized
-          {" · "}
-          {scanSummary.eligible} eligible
-          {" · "}
-          {scanSummary.excluded} other detection
-          {scanSummary.excluded === 1 ? "" : "s"}
-          {" · "}
-          {scanSummary.reviewRequired} review required
-          {" · "}
-          {scanSummary.unread} unread
-          {" · "}
-          {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
-          {" · "}
-          {scanSummary.skippedExisting} existing object
-          {scanSummary.skippedExisting === 1 ? "" : "s"} skipped
-          {scanSummary.skippedDuplicates > 0 && (
-            <>
-              {" · "}
-              {scanSummary.skippedDuplicates} duplicate candidate
-              {scanSummary.skippedDuplicates === 1 ? "" : "s"} merged
-            </>
-          )}
-        </div>
-      )}
-      {pageScanCandidates.length > 0 && scanProgress === null && (
-        <div className="bg-slate-100 px-4 py-1.5 text-center text-xs text-slate-700">
-          Amber boxes need review. Muted boxes are filtered detections retained
-          under Other. Click either to accept, edit, ignore, or leave it for later.
-        </div>
-      )}
-      {scanProgress && (
+      {(scanProgress || scanSummary) && (
         <ScanProgressBanner
           progress={scanProgress}
+          summary={scanSummary}
           onStop={() => void stopActiveScan()}
         />
-      )}
-      {lastDebugDump && (
-        <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
-          OCR debug: {lastDebugDump}
-        </div>
       )}
       {isDrawingValue && (
         <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
@@ -2095,6 +2055,7 @@ export function DrawingViewer() {
       <Toolbar
         isSelectingScanArea={isSegmenting}
         isScanRunning={scanProgress !== null}
+        hasProgressDetails={scanProgress !== null || scanSummary !== null}
         isDrawingValue={isDrawingValue}
         isProcessing={isProcessing}
         currentPage={currentPage}
@@ -2104,7 +2065,6 @@ export function DrawingViewer() {
         hasBalloons={valueAnnotations.length > 0}
         onSelectScanSection={() => {
           setSelectionError(null);
-          setScanSummary(null);
           setSelectedScanSections([]);
           setActiveMetadataField(null);
           setIsDrawingValue(false);
@@ -2116,7 +2076,6 @@ export function DrawingViewer() {
         findingGdtSymbols={findingGdtSymbols}
         onToggleDrawValue={() => {
           setSelectionError(null);
-          setScanSummary(null);
           setSelectedScanSections([]);
           setActiveMetadataField(null);
           setIsSegmenting(false);

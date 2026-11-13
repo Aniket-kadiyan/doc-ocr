@@ -12,6 +12,7 @@ import {
     useState,
 } from "react";
 import type { AuthenticatedUser } from "@/lib/authClient";
+import { useNotifications } from "@/components/NotificationProvider";
 
 interface AuthenticatedAppShellProps {
     user: AuthenticatedUser;
@@ -24,7 +25,8 @@ interface AppShellContextValue {
     setDocumentName: (name: string | null) => void;
 }
 
-const AppShellContext = createContext<AppShellContextValue | null>(null);
+const AppShellContext =
+    createContext<AppShellContextValue | null>(null);
 
 export function useAppShell(): AppShellContextValue {
     const value = useContext(AppShellContext);
@@ -81,6 +83,7 @@ function HomeIcon() {
                 strokeWidth="1.6"
                 strokeLinejoin="round"
             />
+
             <path
                 d="M9 20v-6h6v6"
                 stroke="currentColor"
@@ -130,7 +133,10 @@ function SignOutIcon() {
 }
 
 function initials(user: AuthenticatedUser): string {
-    const names = user.display_name.trim().split(/\s+/).filter(Boolean);
+    const names = user.display_name
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
 
     return `${names[0]?.[0] ?? user.username[0] ?? "U"}${names[1]?.[0] ?? ""
         }`.toUpperCase();
@@ -142,9 +148,11 @@ export function AuthenticatedAppShell({
     children,
 }: AuthenticatedAppShellProps) {
     const pathname = usePathname();
-    const [documentName, setDocumentName] = useState<string | null>(null);
+    const { notifyError } = useNotifications();
+
+    const [documentName, setDocumentName] =
+        useState<string | null>(null);
     const [signingOut, setSigningOut] = useState(false);
-    const [signOutError, setSignOutError] = useState("");
 
     const details = routeDetails(pathname);
     const isModuleNavigation = pathname === "/";
@@ -167,12 +175,15 @@ export function AuthenticatedAppShell({
 
     const signOut = async () => {
         setSigningOut(true);
-        setSignOutError("");
 
         try {
             await logout();
         } catch {
-            setSignOutError("Sign out failed. Please try again.");
+            notifyError("Sign out failed. Please try again.", {
+                id: "sign-out-error",
+                title: "Could not sign out",
+            });
+
             setSigningOut(false);
         }
     };
@@ -234,7 +245,9 @@ export function AuthenticatedAppShell({
                                 </span>
 
                                 <span className="block max-w-44 truncate text-xs text-[#788597]">
-                                    {isAdministrator ? "Administrator" : user.username}
+                                    {isAdministrator
+                                        ? "Administrator"
+                                        : user.username}
                                 </span>
                             </span>
 
@@ -293,20 +306,13 @@ export function AuthenticatedAppShell({
                                     {signingOut ? "Signing out…" : "Sign out"}
                                 </button>
                             </div>
-
-                            {signOutError && (
-                                <p
-                                    role="alert"
-                                    className="border-t border-[#f0d8d4] bg-[#fff7f5] px-4 py-3 text-xs text-[#a53b32]"
-                                >
-                                    {signOutError}
-                                </p>
-                            )}
                         </div>
                     </details>
                 </header>
 
-                <div className="min-h-0 flex-1">{children}</div>
+                <div className="min-h-0 flex-1">
+                    {children}
+                </div>
             </div>
         </AppShellContext.Provider>
     );
