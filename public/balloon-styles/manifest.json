@@ -14,9 +14,9 @@
       "anchor": { "x": 0.5, "y": 0.996774 },
       "text": { "color": "#111827", "fontFamily": "Arial, sans-serif", "fontWeight": "bold", "minFontSize": 7, "maxFontSize": 13, "padding": 2 },
       "sizes": {
-        "small": { "artwork": { "path": "/balloon-styles/circle/v1/small.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } },
-        "medium": { "artwork": { "path": "/balloon-styles/circle/v1/medium.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 32, "sidebarWidth": 22 } },
-        "large": { "artwork": { "path": "/balloon-styles/circle/v1/large.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 40, "sidebarWidth": 28 } }
+        "small": { "artwork": { "path": "/balloon-styles/circle/v1/small.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 14, "sidebarWidth": 10 } },
+        "medium": { "artwork": { "path": "/balloon-styles/circle/v1/medium.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 18, "sidebarWidth": 14 } },
+        "large": { "artwork": { "path": "/balloon-styles/circle/v1/large.svg", "width": 202, "height": 310 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } }
       }
     },
     {
@@ -27,9 +27,9 @@
       "anchor": { "x": 0.5, "y": 0.985 },
       "text": { "color": "#111827", "fontFamily": "Arial, sans-serif", "fontWeight": "bold", "minFontSize": 7, "maxFontSize": 13, "padding": 2 },
       "sizes": {
-        "small": { "artwork": { "path": "/balloon-styles/square/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } },
-        "medium": { "artwork": { "path": "/balloon-styles/square/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 32, "sidebarWidth": 22 } },
-        "large": { "artwork": { "path": "/balloon-styles/square/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 40, "sidebarWidth": 28 } }
+        "small": { "artwork": { "path": "/balloon-styles/square/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 14, "sidebarWidth": 10 } },
+        "medium": { "artwork": { "path": "/balloon-styles/square/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 18, "sidebarWidth": 14 } },
+        "large": { "artwork": { "path": "/balloon-styles/square/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } }
       }
     },
     {
@@ -40,9 +40,9 @@
       "anchor": { "x": 0.5, "y": 0.985 },
       "text": { "color": "#111827", "fontFamily": "Arial, sans-serif", "fontWeight": "bold", "minFontSize": 7, "maxFontSize": 13, "padding": 2 },
       "sizes": {
-        "small": { "artwork": { "path": "/balloon-styles/hexagon/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } },
-        "medium": { "artwork": { "path": "/balloon-styles/hexagon/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 32, "sidebarWidth": 22 } },
-        "large": { "artwork": { "path": "/balloon-styles/hexagon/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 40, "sidebarWidth": 28 } }
+        "small": { "artwork": { "path": "/balloon-styles/hexagon/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 14, "sidebarWidth": 10 } },
+        "medium": { "artwork": { "path": "/balloon-styles/hexagon/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 18, "sidebarWidth": 14 } },
+        "large": { "artwork": { "path": "/balloon-styles/hexagon/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } }
       }
     },
     {
@@ -53,9 +53,9 @@
       "anchor": { "x": 0.5, "y": 0.985 },
       "text": { "color": "#111827", "fontFamily": "Arial, sans-serif", "fontWeight": "bold", "minFontSize": 7, "maxFontSize": 13, "padding": 2 },
       "sizes": {
-        "small": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } },
-        "medium": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 32, "sidebarWidth": 22 } },
-        "large": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 40, "sidebarWidth": 28 } }
+        "small": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/small.svg", "width": 30, "height": 45 }, "display": { "drawingWidth": 14, "sidebarWidth": 10 } },
+        "medium": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/medium.svg", "width": 40, "height": 60 }, "display": { "drawingWidth": 18, "sidebarWidth": 14 } },
+        "large": { "artwork": { "path": "/balloon-styles/rounded-rectangle/v1/large.svg", "width": 50, "height": 75 }, "display": { "drawingWidth": 24, "sidebarWidth": 18 } }
       }
     }
   ]

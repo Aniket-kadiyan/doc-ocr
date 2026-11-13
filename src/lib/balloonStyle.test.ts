@@ -40,7 +40,25 @@ describe("balloon style registry", () => {
         expect(validateBalloonSvg(readFileSync(path, "utf8"))).toContain(
           "data-balloon-label"
         );
+        expect(readFileSync(path, "utf8")).toContain(
+          "data-balloon-connector"
+        );
+        expect(readFileSync(path, "utf8")).toContain(
+          "data-balloon-boundary"
+        );
       }
+      expect(definition.sizes.small.display).toEqual({
+        drawingWidth: 14,
+        sidebarWidth: 10,
+      });
+      expect(definition.sizes.medium.display).toEqual({
+        drawingWidth: 18,
+        sidebarWidth: 14,
+      });
+      expect(definition.sizes.large.display).toEqual({
+        drawingWidth: 24,
+        sidebarWidth: 18,
+      });
     }
   });
 
@@ -77,8 +95,8 @@ describe("balloon geometry", () => {
     const normal = getAnchoredBalloonGeometry(style, anchorX, anchorY, 1);
     const zoomed = getAnchoredBalloonGeometry(style, anchorX, anchorY, 2);
 
-    expect(normal.width).toBeCloseTo(32);
-    expect(zoomed.width * 2).toBeCloseTo(32);
+    expect(normal.width).toBeCloseTo(18);
+    expect(zoomed.width * 2).toBeCloseTo(18);
     expect(normal.x + style.anchor.x * normal.width).toBeCloseTo(anchorX);
     expect(normal.y + style.anchor.y * normal.height).toBeCloseTo(anchorY);
     expect(zoomed.x + style.anchor.x * zoomed.width).toBeCloseTo(anchorX);
@@ -86,8 +104,8 @@ describe("balloon geometry", () => {
   });
 
   it("shrinks longer balloon numbers without going below the configured minimum", () => {
-    const one = fitBalloonFontSize("1", 20, 27, 32, style);
-    const threeDigits = fitBalloonFontSize("128", 20, 27, 32, style);
+    const one = fitBalloonFontSize("1", 20, 27, 18, style);
+    const threeDigits = fitBalloonFontSize("128", 20, 27, 18, style);
 
     expect(threeDigits).toBeLessThan(one);
     expect(threeDigits).toBeGreaterThanOrEqual(style.text.minFontSize);

@@ -73,20 +73,17 @@ export function Balloon({
         />
       ) : (
         <>
-          {/* Last-resort shape if even the built-in artwork cannot decode. */}
           <Line
             points={[
+              geometry.x + geometry.width / 2,
+              geometry.y + geometry.width * 0.95,
               anchorX,
               anchorY,
-              geometry.x + geometry.width * 0.18,
-              geometry.y + geometry.height * 0.52,
-              geometry.x + geometry.width * 0.82,
-              geometry.y + geometry.height * 0.52,
             ]}
-            closed
-            fill="#f97316"
             stroke="#111827"
             strokeWidth={2 / scale}
+            lineCap="round"
+            listening={false}
           />
           <Circle
             x={geometry.x + geometry.width / 2}

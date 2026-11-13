@@ -11,7 +11,7 @@ import {
   type NormalizedRect,
 } from "@/types/balloonStyle";
 
-const FALLBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="202" height="310" viewBox="0 0 202 310"><defs><linearGradient id="tail" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff9a1f"/><stop offset="1" stop-color="#ff7100"/></linearGradient></defs><path d="M101 305 29 164 173 164Z" fill="url(#tail)" stroke="#050505" stroke-width="10" stroke-linejoin="round"/><circle cx="101" cy="99" r="94" fill="#fff" stroke="#050505" stroke-width="10"/><text data-balloon-label="true"></text></svg>`;
+const FALLBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="202" height="310" viewBox="0 0 202 310"><line data-balloon-connector="true" x1="101" y1="193" x2="101" y2="305" stroke="#111827" stroke-width="10" stroke-linecap="round"/><circle data-balloon-boundary="true" cx="101" cy="99" r="94" fill="#fff" stroke="#111827" stroke-width="10"/><text data-balloon-label="true"></text></svg>`;
 
 const FALLBACK_DEFINITION: BalloonStyleDefinition = {
   id: "circle",
@@ -30,15 +30,15 @@ const FALLBACK_DEFINITION: BalloonStyleDefinition = {
   sizes: {
     small: {
       artwork: { path: "/balloon-styles/circle/v1/small.svg", width: 202, height: 310 },
-      display: { drawingWidth: 24, sidebarWidth: 18 },
+      display: { drawingWidth: 14, sidebarWidth: 10 },
     },
     medium: {
       artwork: { path: "/balloon-styles/circle/v1/medium.svg", width: 202, height: 310 },
-      display: { drawingWidth: 32, sidebarWidth: 22 },
+      display: { drawingWidth: 18, sidebarWidth: 14 },
     },
     large: {
       artwork: { path: "/balloon-styles/circle/v1/large.svg", width: 202, height: 310 },
-      display: { drawingWidth: 40, sidebarWidth: 28 },
+      display: { drawingWidth: 24, sidebarWidth: 18 },
     },
   },
 };
@@ -162,7 +162,12 @@ const readDefinition = (value: unknown, index: number): BalloonStyleDefinition =
           },
           display: {
             drawingWidth: readNumber(display.drawingWidth, `${path}.sizes.${size}.display.drawingWidth`, 12, 160),
-            sidebarWidth: readNumber(display.sidebarWidth, `${path}.sizes.${size}.display.sidebarWidth`, 12, 80),
+            sidebarWidth: readNumber(
+              display.sidebarWidth,
+              `${path}.sizes.${size}.display.sidebarWidth`,
+              8,
+              80
+            ),
           },
         },
       ];
