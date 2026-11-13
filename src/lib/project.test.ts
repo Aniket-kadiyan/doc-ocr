@@ -235,6 +235,7 @@ describe("project and integration exports", () => {
       styleVersion: 1,
       size: "medium",
     });
+    expect(bundle.pageRotations).toEqual({});
     expect(serialized).toContain('"balloonStyle"');
     expect(serialized).not.toContain("artwork");
   });
@@ -266,6 +267,7 @@ describe("project and integration exports", () => {
       styleVersion: 1,
       size: "medium",
     });
+    expect(parseProjectBundle(serialized).pageRotations).toEqual({});
   });
 
   it("round-trips unresolved candidates without adding them to exports", () => {
@@ -287,10 +289,30 @@ describe("project and integration exports", () => {
       bundle.projectName
     );
 
-    expect(bundle.version).toBe(5);
+    expect(bundle.version).toBe(6);
     expect(bundle.scanCandidates).toEqual([retainedCandidate]);
     expect(exported.items).toHaveLength(values.length);
     expect(JSON.stringify(exported)).not.toContain("candidate-1");
+  });
+
+  it("round-trips per-page clockwise rotations", () => {
+    const serialized = buildProjectBundle({
+      projectName: "Rotated pages",
+      source: {
+        fileName: "drawing.pdf",
+        mimeType: "application/pdf",
+        fileType: "pdf",
+        dataUrl: "data:application/pdf;base64,AA==",
+      },
+      annotations: values,
+      pageRotations: { 1: 90, 3: 270 },
+      savedAt: 123,
+    });
+
+    expect(parseProjectBundle(serialized).pageRotations).toEqual({
+      1: 90,
+      3: 270,
+    });
   });
 
   it("persists individual visibility without removing hidden values from exports", () => {

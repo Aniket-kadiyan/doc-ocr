@@ -7,6 +7,8 @@ import {
   type SourceFileKind,
 } from "@/lib/sourceFile";
 import { apiRequestError, fetchWithRequestId } from "@/lib/requestDiagnostics";
+import { rotateCanvasPage } from "@/lib/pageRotation";
+import type { PageRotation } from "@/types/pageRotation";
 
 /** Base PDF raster scale used by stored annotation coordinates and previews. */
 export const PDF_RENDER_SCALE = 1.5;
@@ -49,10 +51,14 @@ export async function loadPdfDocument(file: File): Promise<pdfjs.PDFDocumentProx
 export async function renderPdfPage(
   doc: pdfjs.PDFDocumentProxy,
   pageNum: number,
-  scale: number
+  scale: number,
+  rotation: PageRotation = 0
 ): Promise<{ canvas: HTMLCanvasElement; width: number; height: number }> {
   const page = await doc.getPage(pageNum);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({
+    scale,
+    rotation: (page.rotate + rotation) % 360,
+  });
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas context unavailable");
@@ -145,7 +151,8 @@ async function loadTiffPage(
 /** Render one 1-based page from a raster drawing. TIFF frames behave as pages. */
 export async function loadImageFile(
   file: File,
-  page = 1
+  page = 1,
+  rotation: PageRotation = 0
 ): Promise<RenderedImagePage> {
   if (!Number.isInteger(page) || page < 1) {
     throw new Error("The image page must be a positive whole number.");
@@ -157,10 +164,22 @@ export async function loadImageFile(
   if (isCadKind(sourceFormat)) {
     throw new Error("Convert DWG/DXF drawings with openableDrawing first.");
   }
-  if (isTiffKind(sourceFormat)) return loadTiffPage(file, page);
-  if (page !== 1) throw new Error("This image contains only one page.");
-  const rendered = await blobToCanvas(file);
-  return { ...rendered, totalPages: 1, sourceFormat };
+  let rendered: RenderedImagePage;
+  if (isTiffKind(sourceFormat)) {
+    rendered = await loadTiffPage(file, page);
+  } else {
+    if (page !== 1) throw new Error("This image contains only one page.");
+    const decoded = await blobToCanvas(file);
+    rendered = { ...decoded, totalPages: 1, sourceFormat };
+  }
+
+  const canvas = rotateCanvasPage(rendered.canvas, rotation);
+  return {
+    ...rendered,
+    canvas,
+    width: canvas.width,
+    height: canvas.height,
+  };
 }
 
 /**

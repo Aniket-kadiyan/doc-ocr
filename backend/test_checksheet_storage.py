@@ -17,6 +17,7 @@ def _snapshot(
     include_references: bool = False,
     with_candidate: bool = False,
     balloon_style: dict[str, object] | None = None,
+    page_rotations: dict[int, int] | None = None,
 ) -> ChecksheetSnapshot:
     payload: dict[str, object] = {
         "name": name,
@@ -83,6 +84,8 @@ def _snapshot(
         payload["metadata"] = metadata
     if balloon_style is not None:
         payload["balloon_style"] = balloon_style
+    if page_rotations is not None:
+        payload["page_rotations"] = page_rotations
     if with_candidate:
         payload["scan_candidates"] = [
             {
@@ -237,6 +240,39 @@ def test_balloon_style_is_revision_data_and_survives_duplicate(tmp_path: Path) -
     }
     duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
     assert duplicate["revision"]["balloon_style"] == created["revision"]["balloon_style"]
+
+
+def test_page_rotations_are_revision_data_and_survive_duplicate(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(
+        storage,
+        _snapshot(page_rotations={1: 90, 3: 270}),
+    )
+
+    assert created["revision"]["page_rotations"] == {1: 90, 3: 270}
+    duplicate = storage.duplicate_checksheet(created["checksheet"]["id"])
+    assert duplicate["revision"]["page_rotations"] == created["revision"][
+        "page_rotations"
+    ]
+
+
+def test_existing_revision_table_gains_blank_page_rotations(
+    tmp_path: Path,
+) -> None:
+    storage = ChecksheetStorage(tmp_path)
+    created = _create(storage, _snapshot())
+    with sqlite3.connect(storage.database_path) as connection:
+        connection.execute(
+            "ALTER TABLE checksheet_revisions DROP COLUMN page_rotations_json"
+        )
+
+    reopened = ChecksheetStorage(tmp_path)
+    reopened.initialize()
+    loaded = reopened.get_run(created["checksheet"]["id"], created["run"]["id"])
+
+    assert loaded["revision"]["page_rotations"] == {}
 
 
 def test_candidates_are_revision_data_not_checksheet_rows(tmp_path: Path) -> None:

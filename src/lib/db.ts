@@ -12,6 +12,8 @@ import {
 } from "@/lib/balloonStyle";
 import type { BalloonStyleSelection } from "@/types/balloonStyle";
 import { normalizeReviewCandidateNumbers } from "@/lib/scanCandidateLifecycle";
+import { normalizePageRotations } from "@/lib/pageRotation";
+import type { PageRotations } from "@/types/pageRotation";
 
 export interface ProjectRecord {
   id: string;
@@ -27,6 +29,8 @@ export interface ProjectRecord {
   referenceTables?: PageReferenceTable[];
   /** Optional for compatibility with projects saved before selectable balloons. */
   balloonStyle?: BalloonStyleSelection;
+  /** Optional for compatibility with projects saved before page rotation. */
+  pageRotations?: PageRotations;
   updatedAt: number;
 }
 
@@ -155,6 +159,16 @@ export async function saveProjectBalloonStyle(
 ): Promise<void> {
   await db.projects.update(projectId, {
     balloonStyle: normalizeBalloonStyleSelection(balloonStyle),
+    updatedAt: Date.now(),
+  });
+}
+
+export async function saveProjectPageRotations(
+  projectId: string,
+  pageRotations: PageRotations
+): Promise<void> {
+  await db.projects.update(projectId, {
+    pageRotations: normalizePageRotations(pageRotations),
     updatedAt: Date.now(),
   });
 }

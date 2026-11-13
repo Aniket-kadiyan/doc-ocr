@@ -75,6 +75,7 @@ import {
   saveProjectMetadata,
   saveProjectReferenceTables,
   saveProjectBalloonStyle,
+  saveProjectPageRotations,
   getMostRecentProject,
   deleteProject,
 } from "@/lib/db";
@@ -131,6 +132,12 @@ import type { ScanCandidate } from "@/types/scanCandidate";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 import { DEFAULT_BALLOON_STYLE_SELECTION } from "@/types/balloonStyle";
+import {
+  nextClockwiseRotation,
+  normalizePageRotations,
+  pageRotationFor,
+} from "@/lib/pageRotation";
+import type { PageRotation, PageRotations } from "@/types/pageRotation";
 
 /**
  * Scale the page is re-rendered at for scanning, independent of the viewer's
@@ -216,7 +223,12 @@ async function readTitleFieldAnnotations(
 
 export function DrawingViewer() {
   const { error: ocrError } = useClientOcr();
-  const { notifyError, notifyInfo } = useNotifications();
+  const {
+    notifyError,
+    notifyInfo,
+    notifySuccess,
+    notifyWarning,
+  } = useNotifications();
   const {
     selection: balloonStyleSelection,
     setSelection: setBalloonStyleSelection,
@@ -239,11 +251,14 @@ export function DrawingViewer() {
   const renderedRasterPageRef = useRef<{
     file: File;
     page: number;
+    rotation: PageRotation;
   } | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [rasterFile, setRasterFile] = useState<File | null>(null);
   const [projectId, setProjectId] = useState(() => uuidv4());
+  const [pageRotations, setPageRotations] = useState<PageRotations>({});
+  const [isRotatingPage, setIsRotatingPage] = useState(false);
   const restoredRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedScanCandidateId, setSelectedScanCandidateId] = useState<
@@ -367,6 +382,7 @@ export function DrawingViewer() {
   const resetDocumentMetadata = useDocumentMetadataStore(
     (s) => s.resetMetadata
   );
+  const currentPageRotation = pageRotationFor(pageRotations, currentPage);
 
   const pageAnnotations = annotations.filter(
     (annotation) =>
@@ -486,7 +502,11 @@ export function DrawingViewer() {
    * bitmap and the stage size it belongs to were set a frame apart.
    */
   const renderCurrentPage = useCallback(
-    async (doc: PDFDocumentProxy, page: number) => {
+    async (
+      doc: PDFDocumentProxy,
+      page: number,
+      rotation: PageRotation
+    ) => {
       const seq = ++renderSeqRef.current;
 
       // Two renders of the same page, for two different jobs. The first is the
@@ -498,21 +518,27 @@ export function DrawingViewer() {
       const { canvas, width, height } = await renderPdfPage(
         doc,
         page,
-        PDF_RENDER_SCALE
+        PDF_RENDER_SCALE,
+        rotation
       );
       if (renderSeqRef.current !== seq) return;
       sourceCanvasRef.current = canvas;
       setStageSize({ width, height });
       setKonvaImage(canvas);
 
-      const unscaled = (await doc.getPage(page)).getViewport({ scale: 1 });
+      const pdfPage = await doc.getPage(page);
+      const unscaled = pdfPage.getViewport({
+        scale: 1,
+        rotation: (pdfPage.rotate + rotation) % 360,
+      });
       const displayScale = displayRenderScale(unscaled.width, unscaled.height);
       if (displayScale <= PDF_RENDER_SCALE) return;
       try {
         const { canvas: display } = await renderPdfPage(
           doc,
           page,
-          displayScale
+          displayScale,
+          rotation
         );
         if (renderSeqRef.current !== seq) return;
         setKonvaImage(display);
@@ -525,15 +551,16 @@ export function DrawingViewer() {
   );
 
   const renderCurrentImagePage = useCallback(
-    async (file: File, page: number) => {
+    async (file: File, page: number, rotation: PageRotation) => {
       const seq = ++renderSeqRef.current;
       const { canvas, width, height, totalPages } = await loadImageFile(
         file,
-        page
+        page,
+        rotation
       );
       if (renderSeqRef.current !== seq) return;
       sourceCanvasRef.current = canvas;
-      renderedRasterPageRef.current = { file, page };
+      renderedRasterPageRef.current = { file, page, rotation };
       setTotalPages(totalPages);
       setStageSize({ width, height });
       setKonvaImage(canvas);
@@ -545,21 +572,47 @@ export function DrawingViewer() {
   // pure display transform applied to the Stage below.
   useEffect(() => {
     if (!pdfDoc) return;
-    void renderCurrentPage(pdfDoc, currentPage);
-  }, [pdfDoc, currentPage, renderCurrentPage]);
+    void renderCurrentPage(pdfDoc, currentPage, currentPageRotation)
+      .catch((reason) => {
+        setSelectionError(
+          reason instanceof Error
+            ? reason.message
+            : "Could not render the selected PDF page."
+        );
+      })
+      .finally(() => setIsRotatingPage(false));
+  }, [pdfDoc, currentPage, currentPageRotation, renderCurrentPage]);
 
   useEffect(() => {
     if (!rasterFile) return;
     const rendered = renderedRasterPageRef.current;
-    if (rendered?.file === rasterFile && rendered.page === currentPage) return;
-    void renderCurrentImagePage(rasterFile, currentPage).catch((reason) => {
-      setSelectionError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not render the selected image page."
-      );
-    });
-  }, [currentPage, rasterFile, renderCurrentImagePage]);
+    if (
+      rendered?.file === rasterFile &&
+      rendered.page === currentPage &&
+      rendered.rotation === currentPageRotation
+    ) {
+      setIsRotatingPage(false);
+      return;
+    }
+    void renderCurrentImagePage(
+      rasterFile,
+      currentPage,
+      currentPageRotation
+    )
+      .catch((reason) => {
+        setSelectionError(
+          reason instanceof Error
+            ? reason.message
+            : "Could not render the selected image page."
+        );
+      })
+      .finally(() => setIsRotatingPage(false));
+  }, [
+    currentPage,
+    currentPageRotation,
+    rasterFile,
+    renderCurrentImagePage,
+  ]);
 
   useEffect(() => {
     // Overlay geometry belongs to one exact page/project and is never persisted.
@@ -604,16 +657,25 @@ export function DrawingViewer() {
   const renderPageCanvas = useCallback(
     async (page: number): Promise<HTMLCanvasElement | null> => {
       if (pdfDoc) {
-        const { canvas } = await renderPdfPage(pdfDoc, page, PDF_RENDER_SCALE);
+        const { canvas } = await renderPdfPage(
+          pdfDoc,
+          page,
+          PDF_RENDER_SCALE,
+          pageRotationFor(pageRotations, page)
+        );
         return canvas;
       }
       if (rasterFile) {
-        const { canvas } = await loadImageFile(rasterFile, page);
+        const { canvas } = await loadImageFile(
+          rasterFile,
+          page,
+          pageRotationFor(pageRotations, page)
+        );
         return canvas;
       }
       return null;
     },
-    [pdfDoc, rasterFile]
+    [pageRotations, pdfDoc, rasterFile]
   );
 
   useEffect(() => {
@@ -643,7 +705,7 @@ export function DrawingViewer() {
   // Render a drawing onto the stage. Shared by fresh uploads and project loads
   // so both paths render at the same scale and produce matching bbox coords.
   const loadSource = useCallback(
-    async (file: File) => {
+    async (file: File, rotations: PageRotations) => {
       const sourceKind = await detectSourceFileKind(file);
       if (isPdfKind(sourceKind)) {
         const doc = await loadPdfDocument(file);
@@ -653,12 +715,16 @@ export function DrawingViewer() {
         setTotalPages(doc.numPages);
         setCurrentPage(1);
         setScale(1);
-        await renderCurrentPage(doc, 1);
+        await renderCurrentPage(doc, 1, pageRotationFor(rotations, 1));
       } else {
         setPdfDoc(null);
         setCurrentPage(1);
         setScale(1);
-        await renderCurrentImagePage(file, 1);
+        await renderCurrentImagePage(
+          file,
+          1,
+          pageRotationFor(rotations, 1)
+        );
         setRasterFile(file);
       }
     },
@@ -685,6 +751,8 @@ export function DrawingViewer() {
     setProjectId(recent.id);
     setProjectName(recent.name.replace(/\.[^.]+$/, ""));
     setDocumentMetadata(recent.metadata);
+    const rotations = normalizePageRotations(recent.pageRotations);
+    setPageRotations(rotations);
     setOpenFileName(recent.name);
     sourceFileRef.current = {
       fileName: recent.fileName,
@@ -692,7 +760,7 @@ export function DrawingViewer() {
       fileType: recent.fileType,
       dataUrl: await fileToDataUrl(file),
     };
-    await loadSource(file);
+    await loadSource(file, rotations);
     const [storedAnnotations, storedCandidates] = await Promise.all([
       loadAnnotations(recent.id),
       loadScanCandidates(recent.id),
@@ -726,6 +794,7 @@ export function DrawingViewer() {
     // A new drawing is a new project — fresh id, no stale annotations.
     const id = uuidv4();
     setProjectId(id);
+    setPageRotations({});
     setBalloonStyleSelection(DEFAULT_BALLOON_STYLE_SELECTION);
     setAnnotations([]);
     setSelectedId(null);
@@ -762,9 +831,10 @@ export function DrawingViewer() {
       metadata: normalizeDocumentMetadata(),
       referenceTables: [],
       balloonStyle: DEFAULT_BALLOON_STYLE_SELECTION,
+      pageRotations: {},
       updatedAt: Date.now(),
     });
-    await loadSource(file);
+    await loadSource(file, {});
   };
 
   // Save the whole project — drawing + annotations + verification block — as one
@@ -786,6 +856,7 @@ export function DrawingViewer() {
       metadata,
       referenceTables,
       balloonStyle: balloonStyleSelection,
+      pageRotations,
       savedAt: Date.now(),
     });
     downloadFile(json, `${base}.docbox.json`, "application/json");
@@ -802,6 +873,7 @@ export function DrawingViewer() {
     sourceCanvasRef.current = null;
     sourceFileRef.current = null;
     setOpenFileName(null);
+    setPageRotations({});
     setAnnotations([]);
     setSelectedId(null);
     replaceScanCandidates([]);
@@ -847,13 +919,14 @@ export function DrawingViewer() {
       setOpenFileName(bundle.source.fileName);
       setProjectName(bundle.projectName);
       setDocumentMetadata(bundle.metadata);
+      setPageRotations(bundle.pageRotations);
       replaceReferenceTables(bundle.referenceTables);
       const srcFile = dataUrlToFile(
         bundle.source.dataUrl,
         bundle.source.fileName,
         bundle.source.mimeType
       );
-      await loadSource(srcFile);
+      await loadSource(srcFile, bundle.pageRotations);
       setSelectedId(null);
       setEditingValueId(null);
       const migration = normalizeLegacyAnnotations(bundle.annotations);
@@ -879,6 +952,7 @@ export function DrawingViewer() {
         metadata: bundle.metadata,
         referenceTables: bundle.referenceTables,
         balloonStyle: bundle.balloonStyle,
+        pageRotations: bundle.pageRotations,
         updatedAt: Date.now(),
       });
       await Promise.all([
@@ -1120,7 +1194,8 @@ export function DrawingViewer() {
           const { canvas: hi } = await renderPdfPage(
             pdfDoc,
             scanPage,
-            OCR_RENDER_SCALE
+            OCR_RENDER_SCALE,
+            pageRotationFor(pageRotations, scanPage)
           );
           scanCanvas = hi;
           scanScale = OCR_RENDER_SCALE / PDF_RENDER_SCALE;
@@ -1129,7 +1204,13 @@ export function DrawingViewer() {
           scanScale = 1;
         }
       } else if (rasterFile && scanPage !== currentPage) {
-        scanCanvas = (await loadImageFile(rasterFile, scanPage)).canvas;
+        scanCanvas = (
+          await loadImageFile(
+            rasterFile,
+            scanPage,
+            pageRotationFor(pageRotations, scanPage)
+          )
+        ).canvas;
       }
 
       const projectAtStart = projectIdRef.current;
@@ -1190,7 +1271,13 @@ export function DrawingViewer() {
         // the enhanced PDF pass needs OCR for drawn GD&T or embedded images.
         const sourceFile = sourceFileRef.current;
         let sourcePdf: Blob | undefined;
-        if (sourceFile?.fileType === "pdf") {
+        // Native PDF coordinates are not rotated by the backend. Once the
+        // operator rotates a page, the rendered page is therefore the single
+        // coordinate source of truth for this scan.
+        if (
+          sourceFile?.fileType === "pdf" &&
+          pageRotationFor(pageRotations, scanPage) === 0
+        ) {
           try {
             sourcePdf = await (await fetch(sourceFile.dataUrl)).blob();
           } catch {
@@ -1421,6 +1508,7 @@ export function DrawingViewer() {
       setIsProcessing,
       setIsSegmenting,
       currentPage,
+      pageRotations,
       pdfDoc,
       rasterFile,
     ]
@@ -1494,6 +1582,124 @@ export function DrawingViewer() {
     setReviewBalloonVisibility,
   ]);
 
+  const applyCurrentPageRotation = useCallback(() => {
+    if (!konvaImage || isRotatingPage) return;
+
+    const nextRotation = nextClockwiseRotation(currentPageRotation);
+    const nextRotations = { ...pageRotations };
+    if (nextRotation === 0) {
+      delete nextRotations[currentPage];
+    } else {
+      nextRotations[currentPage] = nextRotation;
+    }
+
+    // Stored geometry belongs to the exact page orientation in which it was
+    // created. Do not transform old boxes: clear only this page and let the
+    // user scan it again in the new working coordinate space.
+    const nextAnnotations = useAnnotationStore
+      .getState()
+      .annotations.filter((annotation) => annotation.page !== currentPage);
+    const nextCandidates = scanCandidatesRef.current.filter(
+      (candidate) => candidate.page !== currentPage
+    );
+    const nextReferences = referenceTablesRef.current.filter(
+      (table) => table.page !== currentPage
+    );
+
+    setAnnotations(nextAnnotations);
+    replaceScanCandidates(nextCandidates);
+    replaceReferenceTables(nextReferences);
+    setSelectedId(null);
+    setSelectedScanCandidateId(null);
+    setSelectedReferenceSymbol(null);
+    setSelectedScanSections([]);
+    setActiveMetadataField(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+    setPending(null);
+    drawStartRef.current = null;
+    currentBoxRef.current = null;
+    setCurrentBox(null);
+    setScanOverlay(null);
+    setScanScope(null);
+    setScanSummary(null);
+    if (gdtResult?.page === currentPage) {
+      setGdtResult(null);
+      setGdtSelectedKey(null);
+    }
+
+    setIsRotatingPage(true);
+    setPageRotations(nextRotations);
+
+    void Promise.all([
+      saveAnnotations(projectId, nextAnnotations),
+      saveScanCandidates(projectId, nextCandidates),
+      saveProjectReferenceTables(projectId, nextReferences),
+      saveProjectPageRotations(projectId, nextRotations),
+    ]).catch(() => {
+      setSelectionError("The rotated page could not be saved locally.");
+    });
+
+    notifySuccess(`Page ${currentPage} rotated to ${nextRotation}°.`, {
+      id: "page-rotation-complete",
+      title: "Page rotated",
+    });
+  }, [
+    currentPage,
+    currentPageRotation,
+    gdtResult?.page,
+    isRotatingPage,
+    konvaImage,
+    notifySuccess,
+    pageRotations,
+    projectId,
+    replaceReferenceTables,
+    replaceScanCandidates,
+    setAnnotations,
+    setIsDrawingValue,
+    setIsSegmenting,
+    setPending,
+  ]);
+
+  const requestCurrentPageRotation = useCallback(() => {
+    if (!konvaImage || isProcessing || isRotatingPage) return;
+
+    const hasPageResults =
+      annotations.some((annotation) => annotation.page === currentPage) ||
+      scanCandidates.some((candidate) => candidate.page === currentPage) ||
+      referenceTables.some((table) => table.page === currentPage) ||
+      gdtResult?.page === currentPage;
+
+    if (!hasPageResults) {
+      applyCurrentPageRotation();
+      return;
+    }
+
+    notifyWarning(
+      "Rotating changes this page's coordinate system. Accepted balloons, review candidates, references, and GD&T results on this page will be cleared. Other pages are unchanged.",
+      {
+        id: "page-rotation-confirmation",
+        title: `Rotate page ${currentPage}?`,
+        durationMs: null,
+        action: {
+          label: "Rotate and clear page results",
+          onClick: applyCurrentPageRotation,
+        },
+      }
+    );
+  }, [
+    annotations,
+    applyCurrentPageRotation,
+    currentPage,
+    gdtResult?.page,
+    isProcessing,
+    isRotatingPage,
+    konvaImage,
+    notifyWarning,
+    referenceTables,
+    scanCandidates,
+  ]);
+
   const renderReferencePage = useCallback(
     async (
       page: number
@@ -1503,7 +1709,11 @@ export function DrawingViewer() {
 
       if (pdfDoc) {
         const pdfPage = await pdfDoc.getPage(page);
-        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const rotation = pageRotationFor(pageRotations, page);
+        const unscaled = pdfPage.getViewport({
+          scale: 1,
+          rotation: (pdfPage.rotate + rotation) % 360,
+        });
         const pixelBudgetScale = Math.sqrt(
           REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
         );
@@ -1514,7 +1724,12 @@ export function DrawingViewer() {
 
         if (renderScale > PDF_RENDER_SCALE) {
           try {
-            const rendered = await renderPdfPage(pdfDoc, page, renderScale);
+            const rendered = await renderPdfPage(
+              pdfDoc,
+              page,
+              renderScale,
+              rotation
+            );
             return {
               canvas: rendered.canvas,
               displayScale: renderScale / PDF_RENDER_SCALE,
@@ -1528,7 +1743,12 @@ export function DrawingViewer() {
           return { canvas: displayedCanvas, displayScale: 1 };
         }
         const fallbackScale = Math.min(PDF_RENDER_SCALE, pixelBudgetScale);
-        const rendered = await renderPdfPage(pdfDoc, page, fallbackScale);
+        const rendered = await renderPdfPage(
+          pdfDoc,
+          page,
+          fallbackScale,
+          rotation
+        );
         return {
           canvas: rendered.canvas,
           displayScale: fallbackScale / PDF_RENDER_SCALE,
@@ -1539,12 +1759,16 @@ export function DrawingViewer() {
         return { canvas: displayedCanvas, displayScale: 1 };
       }
       if (rasterFile) {
-        const rendered = await loadImageFile(rasterFile, page);
+        const rendered = await loadImageFile(
+          rasterFile,
+          page,
+          pageRotationFor(pageRotations, page)
+        );
         return { canvas: rendered.canvas, displayScale: 1 };
       }
       throw new Error("No drawing is available for reference detection.");
     },
-    [currentPage, pdfDoc, rasterFile]
+    [currentPage, pageRotations, pdfDoc, rasterFile]
   );
 
   /** Run reference detection after balloon results have already been saved. */
@@ -1736,14 +1960,23 @@ export function DrawingViewer() {
       let readScale = 1;
       if (pdfDoc) {
         const base = await pdfDoc.getPage(page);
-        const unscaled = base.getViewport({ scale: 1 });
+        const rotation = pageRotationFor(pageRotations, page);
+        const unscaled = base.getViewport({
+          scale: 1,
+          rotation: (base.rotate + rotation) % 360,
+        });
         const budget = Math.sqrt(
           REFERENCE_MAX_PIXELS / (unscaled.width * unscaled.height)
         );
         const renderScale = Math.min(GDT_RENDER_SCALE, budget);
         if (renderScale > PDF_RENDER_SCALE) {
           try {
-            const { canvas } = await renderPdfPage(pdfDoc, page, renderScale);
+            const { canvas } = await renderPdfPage(
+              pdfDoc,
+              page,
+              renderScale,
+              rotation
+            );
             readCanvas = canvas;
             readScale = renderScale / PDF_RENDER_SCALE;
           } catch {
@@ -1793,6 +2026,7 @@ export function DrawingViewer() {
     }
   }, [
     currentPage,
+    pageRotations,
     pdfDoc,
     setIsDrawingValue,
     setIsProcessing,
@@ -2107,9 +2341,11 @@ export function DrawingViewer() {
         isScanRunning={scanProgress !== null}
         hasProgressDetails={scanProgress !== null || scanSummary !== null}
         isDrawingValue={isDrawingValue}
-        isProcessing={isProcessing}
+        isProcessing={isProcessing || isRotatingPage}
+        isRotatingPage={isRotatingPage}
         currentPage={currentPage}
         totalPages={totalPages}
+        pageRotation={currentPageRotation}
         scale={scale}
         balloonsVisible={balloonsVisible}
         okBalloonsVisible={okBalloonsVisible}
@@ -2144,6 +2380,7 @@ export function DrawingViewer() {
         onNextPage={() =>
           setCurrentPage(Math.min(totalPages, currentPage + 1))
         }
+        onRotatePage={requestCurrentPageRotation}
         onUpload={() => fileInputRef.current?.click()}
         onSaveProject={handleSaveProject}
         onLoadProject={() => loadProjectInputRef.current?.click()}

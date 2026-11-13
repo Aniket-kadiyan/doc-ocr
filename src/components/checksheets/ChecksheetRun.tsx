@@ -320,6 +320,7 @@ export function ChecksheetRun({ checksheetId, runId }: ChecksheetRunProps) {
           <ChecksheetPreviewLoader
             document={data.document}
             pdfRenderScale={data.revision.pdf_render_scale}
+            pageRotations={data.revision.page_rotations ?? {}}
             row={previewRow}
             balloonStyle={data.revision.balloon_style}
           />

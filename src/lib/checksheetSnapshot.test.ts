@@ -83,6 +83,20 @@ describe("checksheet creation snapshot", () => {
     });
   });
 
+  it("snapshots the per-page drawing rotations", () => {
+    const creation = buildChecksheetCreationSnapshot({
+      checksheetName: "Rotated bracket",
+      readingColumns: ["Part 1"],
+      annotations: [makeAnnotation()],
+      projectId: project.id,
+      projectName: "Bracket drawing",
+      project: { ...project, pageRotations: { 1: 90, 3: 270 } },
+      metadata: { partName: "", documentNumber: "", revisionNumber: "" },
+    });
+
+    expect(creation.payload.page_rotations).toEqual({ 1: 90, 3: 270 });
+  });
+
   it("allows a checksheet snapshot with blank metadata", () => {
     const creation = buildChecksheetCreationSnapshot({
       checksheetName: "Blank metadata",
