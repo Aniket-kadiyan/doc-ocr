@@ -6,16 +6,20 @@ import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 export function BalloonThumbnail({
   number,
   selected = false,
+  status = "ok",
 }: {
-  number: number;
+  number: number | string;
   selected?: boolean;
+  status?: "ok" | "review";
 }) {
-  const { style } = useBalloonStyle();
+  const { style: okStyle, reviewStyle } = useBalloonStyle();
+  const style = status === "review" ? reviewStyle : okStyle;
+  const label = String(number);
   const size = getBalloonScreenSize(style, "sidebar");
   const areaWidth = style.numberArea.width * size.width;
   const areaHeight = style.numberArea.height * size.height;
   const fontSize = fitBalloonFontSize(
-    String(number),
+    label,
     areaWidth,
     areaHeight,
     size.width,
@@ -25,7 +29,7 @@ export function BalloonThumbnail({
   return (
     <span
       role="img"
-      aria-label={`Balloon ${number}`}
+      aria-label={`Balloon ${label}`}
       className="relative block shrink-0"
       style={{
         width: size.width,
@@ -54,7 +58,7 @@ export function BalloonThumbnail({
           fontSize,
         }}
       >
-        {number}
+        {label}
       </span>
     </span>
   );

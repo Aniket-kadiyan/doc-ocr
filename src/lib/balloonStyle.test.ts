@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  BALLOON_OK_BOUNDARY_COLOR,
+  BALLOON_REVIEW_BOUNDARY_COLOR,
+  colorBalloonBoundary,
   fitBalloonFontSize,
   getAnchoredBalloonGeometry,
   normalizeBalloonStyleSelection,
@@ -13,6 +16,11 @@ import {
   BALLOON_SIZES,
   BALLOON_STYLE_SCHEMA_VERSION,
 } from "@/types/balloonStyle";
+import {
+  balloonGeometry,
+  balloonTopLeftAnchor,
+} from "@/lib/balloonGeometry";
+import type { Annotation } from "@/types/annotation";
 
 const manifestPath = fileURLToPath(
   new URL("../../public/balloon-styles/manifest.json", import.meta.url)
@@ -40,7 +48,25 @@ describe("balloon style registry", () => {
         expect(validateBalloonSvg(readFileSync(path, "utf8"))).toContain(
           "data-balloon-label"
         );
+        expect(readFileSync(path, "utf8")).toContain(
+          "data-balloon-connector"
+        );
+        expect(readFileSync(path, "utf8")).toContain(
+          "data-balloon-boundary"
+        );
       }
+      expect(definition.sizes.small.display).toEqual({
+        drawingWidth: 14,
+        sidebarWidth: 10,
+      });
+      expect(definition.sizes.medium.display).toEqual({
+        drawingWidth: 18,
+        sidebarWidth: 14,
+      });
+      expect(definition.sizes.large.display).toEqual({
+        drawingWidth: 24,
+        sidebarWidth: 18,
+      });
     }
   });
 
@@ -58,6 +84,47 @@ describe("balloon style registry", () => {
         manifest
       )
     ).toEqual(manifest.defaultSelection);
+  });
+
+  it("colours and strengthens the boundary and connector", () => {
+    const svg = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../public/balloon-styles/circle/v1/medium.svg",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    const accepted = colorBalloonBoundary(svg, BALLOON_OK_BOUNDARY_COLOR);
+    const review = colorBalloonBoundary(svg, BALLOON_REVIEW_BOUNDARY_COLOR);
+    const acceptedConnector = accepted.match(
+      /<[^>]*data-balloon-connector="true"[^>]*>/
+    )?.[0];
+    const acceptedBoundary = accepted.match(
+      /<[^>]*data-balloon-boundary="true"[^>]*>/
+    )?.[0];
+    const reviewConnector = review.match(
+      /<[^>]*data-balloon-connector="true"[^>]*>/
+    )?.[0];
+    const reviewBoundary = review.match(
+      /<[^>]*data-balloon-boundary="true"[^>]*>/
+    )?.[0];
+
+    expect(acceptedConnector).toContain(
+      `stroke="${BALLOON_OK_BOUNDARY_COLOR}"`
+    );
+    expect(acceptedConnector).toContain('stroke-width="12.5"');
+    expect(acceptedBoundary).toContain(
+      `stroke="${BALLOON_OK_BOUNDARY_COLOR}"`
+    );
+    expect(acceptedBoundary).toContain('stroke-width="17.5"');
+    expect(reviewConnector).toContain(
+      `stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`
+    );
+    expect(reviewBoundary).toContain(
+      `stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`
+    );
   });
 });
 
@@ -77,17 +144,57 @@ describe("balloon geometry", () => {
     const normal = getAnchoredBalloonGeometry(style, anchorX, anchorY, 1);
     const zoomed = getAnchoredBalloonGeometry(style, anchorX, anchorY, 2);
 
-    expect(normal.width).toBeCloseTo(32);
-    expect(zoomed.width * 2).toBeCloseTo(32);
+    expect(normal.width).toBeCloseTo(18);
+    expect(zoomed.width * 2).toBeCloseTo(18);
     expect(normal.x + style.anchor.x * normal.width).toBeCloseTo(anchorX);
     expect(normal.y + style.anchor.y * normal.height).toBeCloseTo(anchorY);
     expect(zoomed.x + style.anchor.x * zoomed.width).toBeCloseTo(anchorX);
     expect(zoomed.y + style.anchor.y * zoomed.height).toBeCloseTo(anchorY);
   });
 
+  it("anchors markers to the displayed box top-left without changing stored geometry", () => {
+    const annotation: Annotation = {
+      id: "top-left-anchor",
+      page: 1,
+      number: 7,
+      kind: "dimension",
+      label: "",
+      bbox: { x: 40, y: 60, width: 90, height: 24 },
+      orientedBox: {
+        x: 44,
+        y: 57,
+        width: 82,
+        height: 20,
+        rotation: 18,
+      },
+      value: "12.5",
+      type: "Linear",
+      confidence: 1,
+      rotation: 0,
+      createdAt: 1,
+      range: "0",
+    };
+
+    const storedBox = structuredClone(annotation.bbox);
+    const storedOrientedBox = structuredClone(annotation.orientedBox);
+    const geometry = balloonGeometry(annotation);
+    const anchor = balloonTopLeftAnchor(geometry.box);
+    const normal = getAnchoredBalloonGeometry(style, anchor.x, anchor.y, 1);
+    const zoomed = getAnchoredBalloonGeometry(style, anchor.x, anchor.y, 2);
+
+    expect(anchor).toEqual({ x: 44, y: 57 });
+    expect(normal.x + style.anchor.x * normal.width).toBeCloseTo(44);
+    expect(normal.y + style.anchor.y * normal.height).toBeCloseTo(57);
+    expect(zoomed.x + style.anchor.x * zoomed.width).toBeCloseTo(44);
+    expect(zoomed.y + style.anchor.y * zoomed.height).toBeCloseTo(57);
+    expect(annotation.bbox).toEqual(storedBox);
+    expect(annotation.orientedBox).toEqual(storedOrientedBox);
+    expect(annotation.number).toBe(7);
+  });
+
   it("shrinks longer balloon numbers without going below the configured minimum", () => {
-    const one = fitBalloonFontSize("1", 20, 27, 32, style);
-    const threeDigits = fitBalloonFontSize("128", 20, 27, 32, style);
+    const one = fitBalloonFontSize("1", 20, 27, 18, style);
+    const threeDigits = fitBalloonFontSize("128", 20, 27, 18, style);
 
     expect(threeDigits).toBeLessThan(one);
     expect(threeDigits).toBeGreaterThanOrEqual(style.text.minFontSize);

@@ -1,6 +1,8 @@
 "use client";
 
 import { Group, Rect, Text } from "react-konva";
+import { BalloonMarker } from "@/components/BalloonMarker";
+import { BALLOON_REVIEW_BOUNDARY_COLOR } from "@/lib/balloonStyle";
 import type { ScanCandidate } from "@/types/scanCandidate";
 
 interface ScanReviewOverlayProps {
@@ -12,9 +14,9 @@ interface ScanReviewOverlayProps {
 }
 
 /**
- * Persistent post-scan candidate geometry. Review candidates use amber and
- * filtered "Other" detections use a quieter slate treatment. Ignored records
- * remain in storage/sidebar but are intentionally absent from this layer.
+ * Persistent post-scan candidate geometry. Review candidates use red boxes and
+ * R-numbered balloons. Filtered "Other" detections retain their quieter slate
+ * treatment. Ignored records remain in storage/sidebar but are absent here.
  */
 export function ScanReviewOverlay({
   candidates,
@@ -36,8 +38,12 @@ export function ScanReviewOverlay({
           `candidate-${bbox.x}-${bbox.y}-${bbox.width}-${bbox.height}-${index}`;
         const selected = candidate.id === selectedCandidateId;
         const review = candidate.state === "review";
-        const idleFill = review ? "#d97706" : "#64748b";
-        const idleStroke = review ? "#b45309" : "#475569";
+        const stroke = review
+          ? BALLOON_REVIEW_BOUNDARY_COLOR
+          : selected
+            ? "#1d4ed8"
+            : "#475569";
+
         return (
           <Group key={key} opacity={hasSelection && !selected ? 0.15 : 1}>
             <Rect
@@ -46,9 +52,9 @@ export function ScanReviewOverlay({
               width={box.width}
               height={box.height}
               rotation={candidate.orientedBox?.rotation ?? 0}
-              fill={selected ? "#2563eb" : idleFill}
-              opacity={selected ? 0.28 : review ? 0.14 : 0.08}
-              stroke={selected ? "#1d4ed8" : idleStroke}
+              fill={review ? BALLOON_REVIEW_BOUNDARY_COLOR : "#64748b"}
+              opacity={selected ? 0.18 : review ? 0.1 : 0.08}
+              stroke={stroke}
               strokeWidth={(selected ? 4 : 2.5) / safeScale}
               dash={[6 / safeScale, 4 / safeScale]}
               shadowColor="#2563eb"
@@ -66,15 +72,28 @@ export function ScanReviewOverlay({
                 if (stage) stage.container().style.cursor = "default";
               }}
             />
-            <Text
-              x={bbox.x + 2 / safeScale}
-              y={bbox.y + 1 / safeScale}
-              text={review ? "?" : "·"}
-              fill={selected ? "#1d4ed8" : idleStroke}
-              fontStyle="bold"
-              fontSize={(selected ? 16 : 12) / safeScale}
-              listening={false}
-            />
+
+            {review ? (
+              <BalloonMarker
+                bbox={box}
+                label={`R-${candidate.reviewNumber ?? "?"}`}
+                scale={safeScale}
+                status="review"
+                selected={selected}
+                listening={!disabled}
+                onSelect={() => onSelect(candidate)}
+              />
+            ) : (
+              <Text
+                x={bbox.x + 2 / safeScale}
+                y={bbox.y + 1 / safeScale}
+                text="·"
+                fill={stroke}
+                fontStyle="bold"
+                fontSize={(selected ? 16 : 12) / safeScale}
+                listening={false}
+              />
+            )}
           </Group>
         );
       })}

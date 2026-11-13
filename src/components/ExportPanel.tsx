@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   exportInspectionJSON,
   exportXML,
@@ -43,8 +43,7 @@ import type { PageReferenceTable } from "@/types/referencePoint";
 import type { ScanCandidate } from "@/types/scanCandidate";
 import { useBalloonStyle } from "@/components/BalloonStyleProvider";
 import { balloonArtworkPngDataUrl } from "@/lib/balloonStyle";
-import { describeLabelGaps, findLabelGaps } from "@/lib/labelRules";
-import { getTitleKeywords } from "@/lib/titleKeywords";
+import { useNotifications } from "@/components/NotificationProvider";
 
 interface ExportPanelProps {
   disabled?: boolean;
@@ -96,6 +95,7 @@ export function ExportPanel({
   referenceTables = [],
   scanCandidates = [],
 }: ExportPanelProps) {
+  const { notifyError, notifySuccess } = useNotifications();
   const annotations = useAnnotationStore((s) => s.annotations);
   const projectName = useAnnotationStore((s) => s.projectName);
   const projectId = useAnnotationStore((s) => s.projectId);
@@ -121,15 +121,9 @@ export function ExportPanel({
   const [menuOpen, setMenuOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [excelDialogOpen, setExcelDialogOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   const base = projectName.replace(/\s+/g, "_").toLowerCase() || "drawing";
   const empty = annotations.length === 0 && referenceTables.length === 0;
-  // Labels the existing rules call for that the drawing does not carry. Every
-  // export still writes them (blank), so this says so where it matters.
-  const labelGapNote = menuOpen
-    ? describeLabelGaps(findLabelGaps(annotations, getTitleKeywords()))
-    : "";
   const busy =
     actionStatus.kind === "saving" ||
     actionStatus.kind === "exporting" ||
@@ -147,18 +141,42 @@ export function ExportPanel({
   // Close the Export dropdown when clicking elsewhere.
   useEffect(() => {
     if (!menuOpen) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) {
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
         setMenuOpen(false);
       }
     };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [menuOpen]);
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen, busy]);
 
   useEffect(() => {
     if (disabled) setMenuOpen(false);
   }, [disabled]);
+
+  useEffect(() => {
+    if (actionStatus.kind === "error") {
+      notifyError(actionStatus.message, {
+        id: "export-error",
+        title: "Export failed",
+      });
+      setActionStatus({ kind: "idle", message: "" });
+      return;
+    }
+
+    if (actionStatus.kind === "ok") {
+      notifySuccess(actionStatus.message, {
+        id: "export-success",
+        title: "Export complete",
+      });
+      setActionStatus({ kind: "idle", message: "" });
+    }
+  }, [actionStatus, notifyError, notifySuccess]);
 
   const validateToleranceExpressions = (): boolean => {
     const malformed = findMalformedToleranceAnnotations(annotations);
@@ -505,114 +523,172 @@ export function ExportPanel({
   };
 
   return (
-    <div className="relative" ref={menuRef}>
+    <div className="relative">
       <button
         type="button"
-        onClick={() => setMenuOpen((o) => !o)}
+        onClick={() => setMenuOpen(true)}
         disabled={disabled || empty || busy}
         title="Export annotations or send them for verification"
-        className={`rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${
-          menuOpen
+        className={`rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${menuOpen
             ? "bg-blue-600 text-white"
             : "border border-slate-200 text-slate-700 hover:bg-slate-50"
-        }`}
+          }`}
       >
-        {busy ? busyLabel : "Export ▾"}
+        {busy ? busyLabel : "Export"}
       </button>
 
       {menuOpen && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-          {labelGapNote && (
-            <p
-              role="status"
-              className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800"
-            >
-              {labelGapNote}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={handleWebView}
-            className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">Checksheet / Web</span>
-            <span className="block text-[11px] text-slate-400">
-              Save a durable snapshot and start an inspection
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={handleJSON}
-            className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">JSON</span>
-            <span className="block text-[11px] text-slate-400">
-              Document metadata and inspection values
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={handleExcelDialog}
-            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">Excel</span>
-            <span className="block text-[11px] text-slate-400">
-              Checksheet plus a separate References worksheet and image
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleBalloonedPdf()}
-            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">Ballooned Drawing (PDF)</span>
-            <span className="block text-[11px] text-slate-400">
-              Drawing + balloons + values in one printable file
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleBalloonedPng()}
-            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">Ballooned Drawing (PNG)</span>
-            <span className="block text-[11px] text-slate-400">
-              This page as an image with balloons burned in
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={handleXML}
-            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">XML</span>
-            <span className="block text-[11px] text-slate-400">
-              Same table as CSV/JSON, as a .xml file
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleVerify()}
-            className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-blue-700 hover:bg-blue-50"
-          >
-            <span className="font-medium">Send for Verification</span>
-            <span className="block text-[11px] text-blue-400">
-              POST values and labels to a server for checking
-            </span>
-          </button>
-        </div>
-      )}
-
-      {actionStatus.kind !== "idle" && !busy && (
-        <p
-          className={`absolute right-0 top-full mt-1 w-56 rounded-lg border bg-white px-3 py-2 text-xs shadow-lg ${
-            actionStatus.kind === "ok"
-              ? "border-emerald-200 text-emerald-700"
-              : "border-red-200 text-red-600"
-          }`}
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4"
+          role="presentation"
         >
-          {actionStatus.message}
-        </p>
+          <button
+            type="button"
+            aria-label="Close export dialog"
+            disabled={busy}
+            onClick={() => setMenuOpen(false)}
+            className="absolute inset-0 bg-slate-950/40 backdrop-blur-[1px] disabled:cursor-wait"
+          />
+
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-dialog-title"
+            className="relative flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2
+                  id="export-dialog-title"
+                  className="text-lg font-semibold text-slate-900"
+                >
+                  Export drawing
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Choose an export format or create a digital checksheet.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                disabled={busy}
+                aria-label="Close export dialog"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-xl text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="overflow-y-auto p-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleWebView}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    Checksheet / Web
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Save a durable snapshot and start a digital inspection.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExcelDialog}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    Excel
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Checksheet, ballooned drawing and reference worksheet.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleBalloonedPdf()}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    Ballooned Drawing — PDF
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Printable drawing containing accepted values and balloons.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleBalloonedPng()}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    Ballooned Drawing — PNG
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Export the current ballooned page as an image.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleJSON}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    JSON
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Structured metadata, labels, tolerances and values.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleXML}
+                  className="qtracx-export-option"
+                >
+                  <span className="qtracx-export-option-title">
+                    XML
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Export the inspection data in XML format.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleVerify()}
+                  className="qtracx-export-option sm:col-span-2"
+                >
+                  <span className="qtracx-export-option-title text-blue-700">
+                    Send for Verification
+                  </span>
+                  <span className="qtracx-export-option-description">
+                    Send values and labels to the configured verification
+                    service.
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <footer className="flex justify-end border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                disabled={busy}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+              >
+                Close
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
 
       <CreateChecksheetDialog
@@ -630,4 +706,131 @@ export function ExportPanel({
       />
     </div>
   );
+
+  // return (
+  //   <div className="relative" ref={menuRef}>
+  //     <button
+  //       type="button"
+  //       onClick={() => setMenuOpen((o) => !o)}
+  //       disabled={disabled || empty || busy}
+  //       title="Export annotations or send them for verification"
+  //       className={`rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${
+  //         menuOpen
+  //           ? "bg-blue-600 text-white"
+  //           : "border border-slate-200 text-slate-700 hover:bg-slate-50"
+  //       }`}
+  //     >
+  //       {busy ? busyLabel : "Export ▾"}
+  //     </button>
+
+  //     {menuOpen && (
+  //       <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+  //         {labelGapNote && (
+  //           <p
+  //             role="status"
+  //             className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800"
+  //           >
+  //             {labelGapNote}
+  //           </p>
+  //         )}
+  //         <button
+  //           type="button"
+  //           onClick={handleWebView}
+  //           className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">Checksheet / Web</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             Save a durable snapshot and start an inspection
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={handleJSON}
+  //           className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">JSON</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             Document metadata and inspection values
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={handleExcelDialog}
+  //           className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">Excel</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             Checksheet plus a separate References worksheet and image
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={() => void handleBalloonedPdf()}
+  //           className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">Ballooned Drawing (PDF)</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             Drawing + balloons + values in one printable file
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={() => void handleBalloonedPng()}
+  //           className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">Ballooned Drawing (PNG)</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             This page as an image with balloons burned in
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={handleXML}
+  //           className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">XML</span>
+  //           <span className="block text-[11px] text-slate-400">
+  //             Same table as CSV/JSON, as a .xml file
+  //           </span>
+  //         </button>
+  //         <button
+  //           type="button"
+  //           onClick={() => void handleVerify()}
+  //           className="block w-full border-t border-slate-100 px-3 py-2 text-left text-sm text-blue-700 hover:bg-blue-50"
+  //         >
+  //           <span className="font-medium">Send for Verification</span>
+  //           <span className="block text-[11px] text-blue-400">
+  //             POST values and labels to a server for checking
+  //           </span>
+  //         </button>
+  //       </div>
+  //     )}
+
+  //     {actionStatus.kind !== "idle" && !busy && (
+  //       <p
+  //         className={`absolute right-0 top-full mt-1 w-56 rounded-lg border bg-white px-3 py-2 text-xs shadow-lg ${
+  //           actionStatus.kind === "ok"
+  //             ? "border-emerald-200 text-emerald-700"
+  //             : "border-red-200 text-red-600"
+  //         }`}
+  //       >
+  //         {actionStatus.message}
+  //       </p>
+  //     )}
+
+  //     <CreateChecksheetDialog
+  //       open={createDialogOpen}
+  //       defaultName={`${projectName || "Drawing"} Checksheet`}
+  //       onClose={() => setCreateDialogOpen(false)}
+  //       onCreate={handleCreateChecksheet}
+  //     />
+
+  //     <ExcelExportDialog
+  //       open={excelDialogOpen}
+  //       defaultFileName={projectName || "Drawing"}
+  //       onClose={() => setExcelDialogOpen(false)}
+  //       onExport={handleExcelExport}
+  //     />
+  //   </div>
+  // );
 }

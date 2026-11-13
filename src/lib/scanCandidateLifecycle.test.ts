@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ignoreScanCandidate,
   mergeScanCandidates,
+  normalizeReviewCandidateNumbers,
   restoreScanCandidate,
 } from "@/lib/scanCandidateLifecycle";
 import { makeAnnotation } from "@/test/annotationFixture";
@@ -41,6 +42,7 @@ describe("durable scan candidate lifecycle", () => {
     expect(result.candidates[0]).toMatchObject({
       id: "first",
       state: "review",
+      reviewNumber: 1,
       duplicateCount: 1,
       duplicateSourceIds: ["first", "second"],
     });
@@ -75,5 +77,34 @@ describe("durable scan candidate lifecycle", () => {
 
     expect(result.candidates).toEqual([]);
     expect(result.skippedAccepted).toBe(2);
+  });
+
+  it("numbers review candidates independently and preserves existing numbers", () => {
+    const normalized = normalizeReviewCandidateNumbers([
+      candidate("other", 5, "other"),
+      { ...candidate("second", 20, "review"), reviewNumber: 4 },
+      candidate("first", 10, "review"),
+    ]);
+
+    expect(normalized.find((item) => item.id === "other")?.reviewNumber).toBeUndefined();
+    expect(normalized.find((item) => item.id === "first")?.reviewNumber).toBe(1);
+    expect(normalized.find((item) => item.id === "second")?.reviewNumber).toBe(4);
+  });
+
+  it("keeps a review number while ignored and after restoration", () => {
+    const [numbered] = normalizeReviewCandidateNumbers([
+      candidate("review", 10, "review"),
+    ]);
+    const ignored = ignoreScanCandidate([numbered], "review");
+
+    expect(ignored[0]).toMatchObject({
+      state: "ignored",
+      restoreState: "review",
+      reviewNumber: 1,
+    });
+    expect(restoreScanCandidate(ignored, "review")[0]).toMatchObject({
+      state: "review",
+      reviewNumber: 1,
+    });
   });
 });

@@ -35,6 +35,9 @@ interface SidebarProps {
   onMetadataClear: (field: DocumentMetadataField) => void;
 }
 
+const INSPECTOR_COLLAPSED_KEY =
+  "qtracx.workspace-inspector-collapsed";
+
 /** One sidebar record per ballooned value. Label, method, and tool are optional
  * metadata on that same record rather than separate annotations. */
 export function Sidebar({
@@ -65,6 +68,7 @@ export function Sidebar({
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
   const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const values = annotations
     .filter((annotation) => annotation.kind !== "label")
     .sort((left, right) => left.number - right.number);
@@ -86,6 +90,39 @@ export function Sidebar({
   const balloonControlsDisabled = disabled || activeMetadataField !== null;
   const balloonListRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setCollapsed(
+      window.localStorage.getItem(INSPECTOR_COLLAPSED_KEY) ===
+      "true"
+    );
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--qtracx-inspector-width",
+      collapsed ? "3.5rem" : "18rem"
+    );
+
+    return () => {
+      document.documentElement.style.removeProperty(
+        "--qtracx-inspector-width"
+      );
+    };
+  }, [collapsed]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((current) => {
+      const next = !current;
+
+      window.localStorage.setItem(
+        INSPECTOR_COLLAPSED_KEY,
+        next ? "true" : "false"
+      );
+
+      return next;
+    });
+  };
+
   // Keep the corresponding row visible when a value is selected on the
   // drawing.
   useEffect(() => {
@@ -97,11 +134,28 @@ export function Sidebar({
   }, [selectedId, activeTab]);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+    <aside
+      data-collapsed={collapsed ? "true" : "false"}
+      className={`qtracx-inspector relative flex shrink-0 flex-col border-l border-slate-200 bg-slate-50 transition-[width] duration-200 ${collapsed ? "w-14" : "w-72"
+        }`}
+    >
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        title={collapsed ? "Expand inspector" : "Collapse inspector"}
+        className="qtracx-inspector-toggle"
+      >
+        <span aria-hidden="true">{collapsed ? "‹" : "›"}</span>
+        <span className="sr-only">
+          {collapsed ? "Expand inspector" : "Collapse inspector"}
+        </span>
+      </button>
+
       <div
         role="tablist"
         aria-label="Drawing details"
-        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pt-2"
+        className="grid grid-cols-2 border-b border-slate-200 bg-white px-2 pr-11 pt-2"
       >
         <button
           type="button"
@@ -382,7 +436,7 @@ export function Sidebar({
                     : ""
                 }
               >
-                <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-red-700">
                   Review required · {reviews.length}
                 </h3>
                 <ul>
@@ -399,13 +453,15 @@ export function Sidebar({
                           className={`w-full rounded-lg border border-dashed px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                             selected
                               ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300"
-                              : "border-slate-300 bg-white hover:bg-amber-50"
+                              : "border-red-300 bg-white hover:bg-red-50"
                           }`}
                         >
                           <span className="flex items-start gap-2">
-                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-400 text-xs font-bold text-slate-600">
-                              ?
-                            </span>
+                            <BalloonThumbnail
+                              number={`R-${candidate.reviewNumber ?? "?"}`}
+                              selected={selected}
+                              status="review"
+                            />
                             <span className="min-w-0 flex-1">
                               <span className="block truncate font-mono text-xs text-slate-800">
                                 {candidate.text.trim() ||
@@ -500,6 +556,10 @@ export function Sidebar({
                             "Unread"}
                         </span>
                         <span className="mt-1 block text-[10px] text-slate-400">
+                          {candidate.restoreState === "review" &&
+                          candidate.reviewNumber
+                            ? `R-${candidate.reviewNumber} · `
+                            : ""}
                           Page {candidate.page}
                           {candidate.reason ? ` · ${candidate.reason}` : ""}
                         </span>

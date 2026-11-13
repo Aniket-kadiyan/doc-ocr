@@ -33,11 +33,13 @@ import { filterNewScanRegions } from "@/lib/scanCandidates";
 import {
   ignoreScanCandidate,
   mergeScanCandidates,
+  normalizeReviewCandidateNumbers,
   restoreScanCandidate,
 } from "@/lib/scanCandidateLifecycle";
+import { BALLOON_OK_BOUNDARY_COLOR } from "@/lib/balloonStyle";
 import {
   areAllValueBalloonsHidden,
-  areAllValueBalloonsVisible,
+  areAnyValueBalloonsVisible,
 } from "@/lib/balloonVisibility";
 import {
   runSectionScanQueue,
@@ -98,6 +100,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { AnnotationPopup } from "@/components/AnnotationPopup";
 import { ValueEditor } from "@/components/ValueEditor";
 import { ScanProgressBanner } from "@/components/ScanProgressBanner";
+import { useNotifications } from "@/components/NotificationProvider";
 import { GdtOverlay } from "@/components/GdtOverlay";
 import { GdtPanel } from "@/components/GdtPanel";
 import {
@@ -212,7 +215,8 @@ async function readTitleFieldAnnotations(
 }
 
 export function DrawingViewer() {
-  const { ready: ocrReady, error: ocrError, engineLabel } = useClientOcr();
+  const { error: ocrError } = useClientOcr();
+  const { notifyError, notifyInfo } = useNotifications();
   const {
     selection: balloonStyleSelection,
     setSelection: setBalloonStyleSelection,
@@ -259,7 +263,47 @@ export function DrawingViewer() {
   const [scanScope, setScanScope] = useState<BBox | null>(null);
   const [scanSummary, setScanSummary] =
     useState<ScanCompletionSummary | null>(null);
+
+  useEffect(() => {
+    if (!ocrError) return;
+
+    notifyError(`OCR failed to load: ${ocrError}`, {
+      id: "ocr-runtime-error",
+      title: "OCR unavailable",
+      durationMs: 0,
+    });
+  }, [notifyError, ocrError]);
+
+  useEffect(() => {
+    if (!selectionError) return;
+
+    notifyError(selectionError, {
+      id: "workspace-error",
+      title: "Action could not be completed",
+      action: scanOverlay
+        ? {
+            label: "Dismiss scan overlay",
+            onClick: () => {
+              setScanOverlay(null);
+              setScanScope(null);
+            },
+          }
+        : undefined,
+    });
+    setSelectionError(null);
+  }, [notifyError, scanOverlay, selectionError]);
+
+  useEffect(() => {
+    if (!lastDebugDump) return;
+
+    notifyInfo(`OCR debug: ${lastDebugDump}`, {
+      id: "ocr-debug-output",
+      title: "Diagnostic output",
+    });
+    setLastDebugDump(null);
+  }, [lastDebugDump, notifyInfo]);
   const [scanCandidates, setScanCandidates] = useState<ScanCandidate[]>([]);
+  const [reviewBalloonsVisible, setReviewBalloonsVisible] = useState(true);
   const scanCandidatesRef = useRef<ScanCandidate[]>([]);
   const candidateOrderRef = useRef(0);
   const [selectedScanSections, setSelectedScanSections] = useState<
@@ -334,12 +378,27 @@ export function DrawingViewer() {
   const valueAnnotations = annotations.filter(
     (annotation) => annotation.kind !== "label"
   );
-  const balloonsVisible = areAllValueBalloonsVisible(annotations);
+  const okBalloonsVisible = areAnyValueBalloonsVisible(annotations);
   const balloonsGloballyHidden = areAllValueBalloonsHidden(annotations);
   const pageScanCandidates = scanCandidates.filter(
     (candidate) =>
       candidate.page === currentPage && candidate.state !== "ignored"
   );
+  const reviewCandidates = scanCandidates.filter(
+    (candidate) => candidate.state === "review"
+  );
+  const pageReviewCandidates = pageScanCandidates.filter(
+    (candidate) => candidate.state === "review"
+  );
+  const visiblePageScanCandidates = pageScanCandidates.filter(
+    (candidate) =>
+      candidate.state !== "review" || reviewBalloonsVisible
+  );
+  const hasOkBalloons = valueAnnotations.length > 0;
+  const hasReviewBalloons = reviewCandidates.length > 0;
+  const balloonsVisible =
+    okBalloonsVisible ||
+    (hasReviewBalloons && reviewBalloonsVisible);
   const pageSelectedScanSections = selectedScanSections.filter(
     (section) => section.page === currentPage
   );
@@ -381,8 +440,9 @@ export function DrawingViewer() {
 
   const replaceScanCandidates = useCallback(
     (next: ScanCandidate[]) => {
-      scanCandidatesRef.current = next;
-      setScanCandidates(next);
+      const normalized = normalizeReviewCandidateNumbers(next);
+      scanCandidatesRef.current = normalized;
+      setScanCandidates(normalized);
     },
     []
   );
@@ -567,6 +627,11 @@ export function DrawingViewer() {
     setStoreProjectId(projectId);
     projectIdRef.current = projectId;
   }, [projectId, setStoreProjectId]);
+
+  // Visibility filters are workspace controls, not persisted project data.
+  useEffect(() => {
+    setReviewBalloonsVisible(true);
+  }, [projectId]);
 
   useEffect(() => {
     void saveProjectBalloonStyle(projectId, balloonStyleSelection).catch(() => {
@@ -918,7 +983,6 @@ export function DrawingViewer() {
         return;
       }
       setSelectionError(null);
-      setScanSummary(null);
       setSelectedScanSections([]);
       setSelectedId(null);
       setSelectedScanCandidateId(null);
@@ -948,7 +1012,6 @@ export function DrawingViewer() {
       setActiveMetadataField(null);
       setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       try {
         // Intentionally use the same single-value reader as Draw Value. This
         // fills metadata without creating an annotation or balloon.
@@ -990,7 +1053,6 @@ export function DrawingViewer() {
 
       setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       try {
         const ocrResult = await runOCR(source, bbox, 1);
         if (ocrResult.debugDumpDir) {
@@ -1081,7 +1143,6 @@ export function DrawingViewer() {
         : "";
       if (manageProcessing) setIsProcessing(true);
       setSelectionError(null);
-      setScanSummary(null);
       setScanOverlay(null);
       setScanScope(bbox);
       setScanProgress({
@@ -1398,14 +1459,40 @@ export function DrawingViewer() {
     }
   }, [scanProgress]);
 
-  const toggleBalloons = useCallback(() => {
+  const setOkBalloonVisibility = useCallback((visible: boolean) => {
     setSelectedId(null);
-    setAllBalloonVisibility(!balloonsVisible);
+    setAllBalloonVisibility(visible);
     void saveAnnotations(
       projectId,
       useAnnotationStore.getState().annotations
     );
-  }, [balloonsVisible, projectId, setAllBalloonVisibility]);
+  }, [projectId, setAllBalloonVisibility]);
+
+  const setReviewBalloonVisibility = useCallback(
+    (visible: boolean) => {
+      if (!visible) {
+        const selected = scanCandidatesRef.current.find(
+          (candidate) => candidate.id === selectedScanCandidateId
+        );
+        if (selected?.state === "review") {
+          setSelectedScanCandidateId(null);
+          setPending(null);
+        }
+      }
+      setReviewBalloonsVisible(visible);
+    },
+    [selectedScanCandidateId, setPending]
+  );
+
+  const toggleBalloons = useCallback(() => {
+    const nextVisible = !balloonsVisible;
+    setOkBalloonVisibility(nextVisible);
+    setReviewBalloonVisibility(nextVisible);
+  }, [
+    balloonsVisible,
+    setOkBalloonVisibility,
+    setReviewBalloonVisibility,
+  ]);
 
   const renderReferencePage = useCallback(
     async (
@@ -1634,7 +1721,6 @@ export function DrawingViewer() {
     if (!source) return;
 
     setSelectionError(null);
-    setScanSummary(null);
     setSelectedScanSections([]);
     setActiveMetadataField(null);
     setIsDrawingValue(false);
@@ -1938,88 +2024,12 @@ export function DrawingViewer() {
         }}
       />
 
-      {!ocrReady && !ocrError && (
-        <div className="bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-800">
-          {engineLabel}
-        </div>
-      )}
-      {ocrReady && !ocrError && (
-        <div className="bg-emerald-50 px-4 py-1.5 text-center text-xs text-emerald-800">
-          Active OCR: {engineLabel}
-        </div>
-      )}
-      {ocrError && (
-        <div className="bg-red-50 px-4 py-1.5 text-center text-xs text-red-700">
-          OCR failed to load: {ocrError}
-        </div>
-      )}
-      {selectionError && (
-        <div className="flex items-center justify-center gap-3 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
-          <span>{selectionError}</span>
-          {scanOverlay && (
-            <button
-              type="button"
-              onClick={() => {
-                setScanOverlay(null);
-                setScanScope(null);
-              }}
-              className="rounded border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100"
-            >
-              Dismiss scan overlay
-            </button>
-          )}
-        </div>
-      )}
-      {scanSummary && (
-        <div
-          className={`px-4 py-1.5 text-center text-xs ${
-            scanSummary.reviewRequired > 0
-              ? "bg-slate-100 text-slate-900"
-              : "bg-emerald-50 text-emerald-900"
-          }`}
-        >
-          {scanSummary.detected} detected
-          {" · "}
-          {scanSummary.recognized} recognized
-          {" · "}
-          {scanSummary.eligible} eligible
-          {" · "}
-          {scanSummary.excluded} other detection
-          {scanSummary.excluded === 1 ? "" : "s"}
-          {" · "}
-          {scanSummary.reviewRequired} review required
-          {" · "}
-          {scanSummary.unread} unread
-          {" · "}
-          {scanSummary.added} balloon{scanSummary.added === 1 ? "" : "s"} added
-          {" · "}
-          {scanSummary.skippedExisting} existing object
-          {scanSummary.skippedExisting === 1 ? "" : "s"} skipped
-          {scanSummary.skippedDuplicates > 0 && (
-            <>
-              {" · "}
-              {scanSummary.skippedDuplicates} duplicate candidate
-              {scanSummary.skippedDuplicates === 1 ? "" : "s"} merged
-            </>
-          )}
-        </div>
-      )}
-      {pageScanCandidates.length > 0 && scanProgress === null && (
-        <div className="bg-slate-100 px-4 py-1.5 text-center text-xs text-slate-700">
-          Amber boxes need review. Muted boxes are filtered detections retained
-          under Other. Click either to accept, edit, ignore, or leave it for later.
-        </div>
-      )}
-      {scanProgress && (
+      {(scanProgress || scanSummary) && (
         <ScanProgressBanner
           progress={scanProgress}
+          summary={scanSummary}
           onStop={() => void stopActiveScan()}
         />
-      )}
-      {lastDebugDump && (
-        <div className="bg-violet-50 px-4 py-1.5 text-center text-xs text-violet-900">
-          OCR debug: {lastDebugDump}
-        </div>
       )}
       {isDrawingValue && (
         <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
@@ -2095,16 +2105,20 @@ export function DrawingViewer() {
       <Toolbar
         isSelectingScanArea={isSegmenting}
         isScanRunning={scanProgress !== null}
+        hasProgressDetails={scanProgress !== null || scanSummary !== null}
         isDrawingValue={isDrawingValue}
         isProcessing={isProcessing}
         currentPage={currentPage}
         totalPages={totalPages}
         scale={scale}
         balloonsVisible={balloonsVisible}
-        hasBalloons={valueAnnotations.length > 0}
+        okBalloonsVisible={okBalloonsVisible}
+        reviewBalloonsVisible={reviewBalloonsVisible}
+        hasOkBalloons={hasOkBalloons}
+        hasReviewBalloons={hasReviewBalloons}
+        hasBalloons={hasOkBalloons || hasReviewBalloons}
         onSelectScanSection={() => {
           setSelectionError(null);
-          setScanSummary(null);
           setSelectedScanSections([]);
           setActiveMetadataField(null);
           setIsDrawingValue(false);
@@ -2116,13 +2130,14 @@ export function DrawingViewer() {
         findingGdtSymbols={findingGdtSymbols}
         onToggleDrawValue={() => {
           setSelectionError(null);
-          setScanSummary(null);
           setSelectedScanSections([]);
           setActiveMetadataField(null);
           setIsSegmenting(false);
           setIsDrawingValue(!isDrawingValue);
         }}
         onToggleBalloons={toggleBalloons}
+        onSetOkBalloonsVisible={setOkBalloonVisibility}
+        onSetReviewBalloonsVisible={setReviewBalloonVisibility}
         onZoomIn={() => setScale(Math.min(scale + 0.25, 4))}
         onZoomOut={() => setScale(Math.max(scale - 0.25, 0.5))}
         onPrevPage={() => setCurrentPage(Math.max(1, currentPage - 1))}
@@ -2206,6 +2221,28 @@ export function DrawingViewer() {
                         );
                       })}
 
+                    {!reviewBalloonsVisible &&
+                      pageReviewCandidates.map((candidate) => {
+                        const box =
+                          candidate.orientedBox ?? candidate.valueBox;
+                        const rotation =
+                          candidate.orientedBox?.rotation ?? 0;
+                        return (
+                          <Rect
+                            key={`whiteout-review-${candidate.id}`}
+                            x={box.x}
+                            y={box.y}
+                            width={box.width}
+                            height={box.height}
+                            rotation={rotation}
+                            fill="#ffffff"
+                            stroke="#ffffff"
+                            strokeWidth={1 / scale}
+                            listening={false}
+                          />
+                        );
+                      })}
+
                     {gdtResult && (
                       <GdtOverlay
                         frames={framesForPage(gdtResult, currentPage)}
@@ -2227,7 +2264,7 @@ export function DrawingViewer() {
 
                     {visiblePageAnnotations.map((ann) => {
                       const highlighted = selectedId === ann.id;
-                      const stroke = highlighted ? "#2563eb" : "#dc2626";
+                      const stroke = BALLOON_OK_BOUNDARY_COLOR;
                       const box = ann.orientedBox ?? ann.bbox;
                       const rotation = ann.orientedBox?.rotation ?? 0;
                       return (
@@ -2250,16 +2287,20 @@ export function DrawingViewer() {
                               ? 0.15
                               : 1
                           }
+                          shadowColor="#2563eb"
+                          shadowBlur={highlighted ? 8 / scale : 0}
+                          shadowOpacity={highlighted ? 0.9 : 0}
+                          shadowEnabled={highlighted}
                           listening={!drawingActive}
                           onClick={() => handleSelect(ann.id)}
                         />
                       );
                     })}
 
-                    {pageScanCandidates.length > 0 &&
+                    {visiblePageScanCandidates.length > 0 &&
                       scanProgress === null && (
                         <ScanReviewOverlay
-                          candidates={pageScanCandidates}
+                          candidates={visiblePageScanCandidates}
                           scale={scale}
                           disabled={drawingActive || isProcessing}
                           selectedCandidateId={selectedScanCandidateId}

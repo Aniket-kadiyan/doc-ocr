@@ -1,4 +1,4 @@
-import type { Annotation } from "@/types/annotation";
+import type { Annotation, BBox } from "@/types/annotation";
 
 /**
  * Balloon + box geometry and colors, in source-canvas coordinates at 100% zoom.
@@ -30,6 +30,19 @@ export const BALLOON_COLORS = {
   },
 } as const;
 
+/**
+ * Anchor every marker to the displayed value box's top-left origin.
+ *
+ * This is deliberately independent of marker size and viewer zoom. The SVG
+ * artwork owns its own connector geometry; its configured anchor point is
+ * placed at this source-coordinate position by every renderer.
+ */
+export function balloonTopLeftAnchor(
+  box: Pick<BBox, "x" | "y">
+): { x: number; y: number } {
+  return { x: box.x, y: box.y };
+}
+
 export interface BalloonGeometry {
   id: string;
   number: number;
@@ -54,8 +67,7 @@ export function balloonGeometry(a: Annotation): BalloonGeometry {
   const isLabel = a.kind === "label";
   const colors = isLabel ? BALLOON_COLORS.label : BALLOON_COLORS.dimension;
   const src = a.orientedBox ?? a.bbox;
-  const anchorX = a.bbox.x + a.bbox.width / 2;
-  const anchorY = a.bbox.y;
+  const { x: anchorX, y: anchorY } = balloonTopLeftAnchor(src);
   const cy = anchorY - BALLOON_OFFSET;
   return {
     id: a.id,

@@ -13,6 +13,15 @@ export function areAllValueBalloonsVisible(
   return values.length > 0 && values.every((annotation) => !annotation.hidden);
 }
 
+/** True when at least one accepted value balloon is currently shown. */
+export function areAnyValueBalloonsVisible(
+  annotations: BalloonVisibilityRecord[]
+): boolean {
+  return valueBalloons(annotations).some(
+    (annotation) => !annotation.hidden
+  );
+}
+
 /**
  * True only when every value balloon is hidden. The viewer uses this state for
  * the declutter mode that covers accepted value regions with white rectangles.
