@@ -81,7 +81,7 @@ describe("balloon style registry", () => {
     ).toEqual(manifest.defaultSelection);
   });
 
-  it("colours only the marked boundary for accepted and review balloons", () => {
+  it("colours and strengthens the boundary and connector", () => {
     const svg = readFileSync(
       fileURLToPath(
         new URL(
@@ -93,11 +93,33 @@ describe("balloon style registry", () => {
     );
     const accepted = colorBalloonBoundary(svg, BALLOON_OK_BOUNDARY_COLOR);
     const review = colorBalloonBoundary(svg, BALLOON_REVIEW_BOUNDARY_COLOR);
+    const acceptedConnector = accepted.match(
+      /<[^>]*data-balloon-connector="true"[^>]*>/
+    )?.[0];
+    const acceptedBoundary = accepted.match(
+      /<[^>]*data-balloon-boundary="true"[^>]*>/
+    )?.[0];
+    const reviewConnector = review.match(
+      /<[^>]*data-balloon-connector="true"[^>]*>/
+    )?.[0];
+    const reviewBoundary = review.match(
+      /<[^>]*data-balloon-boundary="true"[^>]*>/
+    )?.[0];
 
-    expect(accepted).toContain(`stroke="${BALLOON_OK_BOUNDARY_COLOR}"`);
-    expect(review).toContain(`stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`);
-    expect(accepted).toContain('data-balloon-connector="true"');
-    expect(accepted).toContain('data-balloon-connector="true" x1="101"');
+    expect(acceptedConnector).toContain(
+      `stroke="${BALLOON_OK_BOUNDARY_COLOR}"`
+    );
+    expect(acceptedConnector).toContain('stroke-width="12.5"');
+    expect(acceptedBoundary).toContain(
+      `stroke="${BALLOON_OK_BOUNDARY_COLOR}"`
+    );
+    expect(acceptedBoundary).toContain('stroke-width="17.5"');
+    expect(reviewConnector).toContain(
+      `stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`
+    );
+    expect(reviewBoundary).toContain(
+      `stroke="${BALLOON_REVIEW_BOUNDARY_COLOR}"`
+    );
   });
 });
 

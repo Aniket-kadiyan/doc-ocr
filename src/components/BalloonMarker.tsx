@@ -95,8 +95,8 @@ export function BalloonMarker({
               anchorX,
               anchorY,
             ]}
-            stroke="#111827"
-            strokeWidth={2 / scale}
+            stroke={boundaryColor}
+            strokeWidth={2.5 / scale}
             lineCap="round"
             listening={false}
           />
@@ -106,7 +106,7 @@ export function BalloonMarker({
             radius={geometry.width * 0.45}
             fill="#ffffff"
             stroke={boundaryColor}
-            strokeWidth={(selected ? 3 : 2) / scale}
+            strokeWidth={(selected ? 3.5 : 3) / scale}
           />
         </>
       )}

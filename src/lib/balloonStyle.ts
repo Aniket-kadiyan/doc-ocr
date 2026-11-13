@@ -272,31 +272,61 @@ export function validateBalloonSvg(svg: string): string {
   if (!/data-balloon-boundary\s*=\s*["']true["']/i.test(trimmed)) {
     throw new Error("Balloon SVG must contain the data-balloon-boundary marker.");
   }
+  if (!/data-balloon-connector\s*=\s*["']true["']/i.test(trimmed)) {
+    throw new Error("Balloon SVG must contain the data-balloon-connector marker.");
+  }
   return trimmed;
 }
 
-/** Recolour only the SVG element explicitly marked as the balloon boundary. */
+function replaceMarkedStroke(
+  element: string,
+  color: string,
+  widthMultiplier: number
+) {
+  let updated = /\sstroke\s*=\s*["'][^"']*["']/i.test(element)
+    ? element.replace(
+        /\sstroke\s*=\s*["'][^"']*["']/i,
+        ` stroke="${color}"`
+      )
+    : /\s*\/>$/.test(element)
+      ? element.replace(/\s*\/>$/, ` stroke="${color}"/>`)
+      : element.replace(/>$/, ` stroke="${color}">`);
+
+  updated = updated.replace(
+    /\sstroke-width\s*=\s*["']([0-9]*\.?[0-9]+)["']/i,
+    (_match, width: string) => {
+      const scaled = Number((Number(width) * widthMultiplier).toFixed(3));
+      return ` stroke-width="${scaled}"`;
+    }
+  );
+  return updated;
+}
+
+/**
+ * Apply the accepted/review status colour to the marked outline and connector.
+ * Their source widths are strengthened because the SVG is displayed at only
+ * 14–24 px and the unscaled strokes otherwise become sub-pixel lines.
+ */
 export function colorBalloonBoundary(svg: string, color: string): string {
   if (!/^#[0-9a-f]{6}$/i.test(color)) {
     throw new Error("Balloon boundary colour must be a six-digit hex colour.");
   }
-  let found = false;
+  let boundaryFound = false;
+  let connectorFound = false;
   const coloured = validateBalloonSvg(svg).replace(
-    /<[^>]*data-balloon-boundary\s*=\s*["']true["'][^>]*>/gi,
+    /<[^>]*data-balloon-(?:boundary|connector)\s*=\s*["']true["'][^>]*>/gi,
     (element) => {
-      found = true;
-      if (/\sstroke\s*=\s*["'][^"']*["']/i.test(element)) {
-        return element.replace(
-          /\sstroke\s*=\s*["'][^"']*["']/i,
-          ` stroke="${color}"`
-        );
+      if (/data-balloon-boundary\s*=/i.test(element)) {
+        boundaryFound = true;
+        return replaceMarkedStroke(element, color, 1.75);
       }
-      return /\s*\/>$/.test(element)
-        ? element.replace(/\s*\/>$/, ` stroke="${color}"/>`)
-        : element.replace(/>$/, ` stroke="${color}">`);
+      connectorFound = true;
+      return replaceMarkedStroke(element, color, 1.25);
     }
   );
-  if (!found) throw new Error("Balloon SVG boundary marker could not be coloured.");
+  if (!boundaryFound || !connectorFound) {
+    throw new Error("Balloon SVG status markers could not be coloured.");
+  }
   return coloured;
 }
 
