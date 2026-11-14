@@ -7299,6 +7299,19 @@ class OcrPipeline:
                 candidate_count=len(frame_regions),
                 operation_label="Feature control frames",
             )
+
+        if frame_regions:
+            from gdt_pipeline import drop_frames_inside_text
+
+            frame_regions = drop_frames_inside_text(
+                frame_regions,
+                [
+                    outcome["bbox"]
+                    for outcome in candidate_outcomes
+                    if outcome.get("bbox")
+                ],
+            )
+
         if frame_regions:
             from gdt_pipeline import absorb_frames, attach_adjacent_text
 
