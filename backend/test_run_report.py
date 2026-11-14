@@ -34,6 +34,8 @@ def _wait_for_report(
             path
             for path in directory.glob("*_scan-job_*.log")
             if path.name != run_report.INDEX_FILE_NAME
+            # The in-progress copy is deleted once the final report lands.
+            and not path.name.endswith(run_report.RUNNING_SUFFIX)
         ]
         if reports:
             return reports[0]
@@ -150,6 +152,85 @@ class RunReportTests(unittest.TestCase):
                 if path.name != run_report.INDEX_FILE_NAME
             ]
             self.assertEqual(len(reports), 2)
+
+    def test_nested_steps_record_time_runs_and_contribution(self) -> None:
+        report = run_report.RunReport("scan-job", "steps", "test scan").start()
+        with run_report.activate(report):
+            with run_report.step("Classify callouts", "Gate callouts") as outer:
+                for _ in range(3):
+                    with run_report.step("Dimension-line check") as inner:
+                        inner.count(on_line=1)
+                    run_report.record_model_call(
+                        "paddle", waited_seconds=0.0, active_seconds=0.01
+                    )
+                outer.count(values=2, excluded=1)
+        report.finish("succeeded", rule_counts={"pdf_text_in_table": 4})
+
+        outer_step = report.steps[("Classify callouts",)]
+        inner_step = report.steps[("Classify callouts", "Dimension-line check")]
+        self.assertEqual(outer_step.calls, 1)
+        self.assertEqual(outer_step.model_calls, 3)
+        self.assertEqual(outer_step.counts, {"values": 2, "excluded": 1})
+        self.assertEqual(inner_step.calls, 3)
+        self.assertEqual(inner_step.counts, {"on_line": 3})
+        text = report.render()
+        self.assertIn("STEP TREE (2 distinct steps, 4 step runs)", text)
+        self.assertIn("  Dimension-line check", text)
+        self.assertIn("result : values=2, excluded=1", text)
+        self.assertIn("pdf_text_in_table", text)
+
+    def test_a_step_repeated_per_parent_is_timed_per_parent(self) -> None:
+        report = run_report.RunReport("scan-job", "areas", "test scan").start()
+        with run_report.activate(report):
+            for index, reads in ((1, 3), (2, 1)):
+                with run_report.step(f"Neighbourhood {index:02d}") as area:
+                    for _ in range(reads):
+                        with run_report.step("Read callout", "OCR one crop"):
+                            run_report.record_model_call(
+                                "paddle", waited_seconds=0.0, active_seconds=0.01
+                            )
+                    area.count(values=1)
+        report.finish("succeeded")
+
+        first = report.steps[("Neighbourhood 01", "Read callout")]
+        second = report.steps[("Neighbourhood 02", "Read callout")]
+        self.assertEqual((first.calls, first.model_calls), (3, 3))
+        self.assertEqual((second.calls, second.model_calls), (1, 1))
+        # The purpose is printed once, not under every neighbourhood.
+        self.assertEqual(report.render().count("what   : OCR one crop"), 1)
+
+    def test_steps_without_an_active_report_are_inert(self) -> None:
+        with run_report.step("Anything") as handle:
+            handle.count(found=1)
+        self.assertEqual(handle.counts, {"found": 1})
+
+    def test_a_running_scan_keeps_a_report_until_it_finishes(self) -> None:
+        with TemporaryDirectory() as temporary:
+            directory = run_report.configure_run_reports(Path(temporary))
+            report = run_report.RunReport("scan-job", "live0001", "test scan").start()
+            report.progress(stage="detecting", message="Running detector")
+            running = list(directory.glob(f"*{run_report.RUNNING_SUFFIX}"))
+            self.assertEqual(len(running), 1)
+            self.assertIn("detecting", running[0].read_text(encoding="utf-8"))
+            report.finish("succeeded")
+            self.assertEqual(list(directory.glob(f"*{run_report.RUNNING_SUFFIX}")), [])
+
+    def test_a_scan_killed_mid_run_is_reported_as_interrupted(self) -> None:
+        with TemporaryDirectory() as temporary:
+            directory = run_report.configure_run_reports(Path(temporary))
+            report = run_report.RunReport("scan-job", "dead0001", "test scan").start()
+            report.progress(stage="slanted", message="Slanted-callout recovery")
+            # The process dies here: finish() never runs. The next backend
+            # process configures reports at startup.
+            run_report.configure_run_reports(Path(temporary))
+            self.assertEqual(list(directory.glob(f"*{run_report.RUNNING_SUFFIX}")), [])
+            interrupted = list(directory.glob("*_interrupted.log"))
+            self.assertEqual(len(interrupted), 1)
+            text = interrupted[0].read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("INTERRUPTED"))
+            self.assertIn("slanted", text)
+            index = (directory / run_report.INDEX_FILE_NAME).read_text(encoding="utf-8")
+            self.assertIn("INTERRUPTED", index)
 
 
 if __name__ == "__main__":
