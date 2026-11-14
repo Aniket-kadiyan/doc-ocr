@@ -5520,6 +5520,7 @@ class OcrPipeline:
             assign_candidate_ids,
             bbox_center_in_scope,
             bbox_intersects_scope,
+            blank_outside_section,
             deduplicate_page_candidates,
             map_tile_candidate,
             overlaps_existing_value,
@@ -5650,6 +5651,15 @@ class OcrPipeline:
             }
         scan_scope_kind = "section" if scan_scope is not None else "page"
         scan_label = "section" if scan_scope is not None else "page"
+        # Slanted-text, notes and GD&T passes do not use adaptive panels.
+        # For a section scan they therefore receive a page-sized image with
+        # everything outside the section and its context margin blanked. This
+        # preserves page coordinates without processing unrelated views.
+        context_image = (
+            image
+            if scan_scope is None
+            else blank_outside_section(image, scan_scope)
+        )
 
         processing_panels = [
             (panel_index, panel)
@@ -7098,9 +7108,9 @@ class OcrPipeline:
             # that are each under 0.2% of it.
             if read_slanted:
                 angled_regions = self._detect_angled_regions(
-                    image,
+                    context_image,
                     regions,
-                    det_boxes=self.detect_regions(image),
+                    det_boxes=self.detect_regions(context_image),
                     max_rois=PAGE_SCAN_MAX_SLANT_NEIGHBOURHOODS,
                     margin_frac=PAGE_SCAN_SLANT_MERGE_MARGIN,
                     expand_frac=PAGE_SCAN_SLANT_CONTEXT_MARGIN,
@@ -7177,7 +7187,7 @@ class OcrPipeline:
             )
 
         notes_regions = self._notes_regions(
-            image,
+            context_image,
             debug_dump=debug_dump,
             debug_dump_force=debug_dump_force,
             progress_callback=report_notes_progress,
@@ -7271,7 +7281,7 @@ class OcrPipeline:
             frame_regions = [
                 region
                 for region in self._frame_regions(
-                    image,
+                    context_image,
                     progress_callback=report_gdt_progress,
                 )
                 if _inside_border(region["bbox"], layout.border)

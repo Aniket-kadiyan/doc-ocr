@@ -15,6 +15,8 @@ from dataclasses import dataclass, replace
 from math import inf
 from typing import Mapping, Sequence
 
+from PIL import Image
+
 from detection_passes import DetectionTile
 
 
@@ -68,6 +70,54 @@ PAGE_SCAN_SLANT_CONTEXT_MARGIN = 0.5
 # entire image by one angle adds multiple full-page OCR calls but finds no
 # extra values; the neighbourhood pass below remains enabled.
 PAGE_SCAN_SLANT_WHOLE_IMAGE_MAX_EDGE = 3000
+# A section scan's slanted, notes and GD&T passes read a copy of the page that
+# is blank beyond the section and this margin. Previously those passes read the
+# whole page and discarded out-of-scope results afterwards.
+SECTION_CONTEXT_MARGIN_FRAC = 0.25
+SECTION_CONTEXT_MARGIN_MIN_PX = 300
+
+
+def section_context_box(
+    scope: Mapping[str, float],
+    size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Return the selected section plus its context margin, clamped to page."""
+
+    width, height = size
+    margin = max(
+        SECTION_CONTEXT_MARGIN_MIN_PX,
+        SECTION_CONTEXT_MARGIN_FRAC
+        * max(float(scope["width"]), float(scope["height"])),
+    )
+    return (
+        max(0, int(float(scope["x"]) - margin)),
+        max(0, int(float(scope["y"]) - margin)),
+        min(
+            width,
+            int(float(scope["x"]) + float(scope["width"]) + margin + 0.5),
+        ),
+        min(
+            height,
+            int(float(scope["y"]) + float(scope["height"]) + margin + 0.5),
+        ),
+    )
+
+
+def blank_outside_section(
+    image: Image.Image,
+    scope: Mapping[str, float],
+) -> Image.Image:
+    """Return a page-sized image blank beyond the section's context.
+
+    The canvas size and coordinates remain unchanged, so every downstream
+    pass continues to publish boxes in page coordinates while processing only
+    the selected area and nearby context.
+    """
+
+    box = section_context_box(scope, image.size)
+    blank = Image.new(image.mode, image.size, "white")
+    blank.paste(image.crop(box), box[:2])
+    return blank
 
 
 def bbox_overlap_fraction(
