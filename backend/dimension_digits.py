@@ -157,10 +157,12 @@ def _split_glued_limits(s: str) -> str | None:
     A limit dimension is two values of the same form, one above the other,
     and a flat read glues them: "0.620" over "0.612" arrives as "0.62000.612".
     The join point is the only one where both halves have the same number of
-    decimals, the same integer part (allowing the leading zero OCR adds when
-    it reads the lower value's gap as a digit), and values within ten percent
-    of each other -- which is what limits of one feature look like and what
-    a tolerance glued to its nominal ("215.370.05") does not.
+    decimals, the same integer part or the lower one one below it (allowing
+    the leading zero OCR adds when it reads the lower value's gap as a digit),
+    and values within ten percent of each other -- which is what limits of one
+    feature look like and what a tolerance glued to its nominal ("215.370.05")
+    does not. Limits may straddle a whole number: "8.30" over "7.93" arrives as
+    "8.307.93", which the glued-tolerance rule would read as 8.307±0.93.
     """
     m = _GLUED_LIMITS_RE.match(s)
     if not m:
@@ -174,7 +176,7 @@ def _split_glued_limits(s: str) -> str | None:
     upper_dec = middle[:n]
     lower_int = middle[n:].lstrip("0") or "0"
     upper_int = head.lstrip("0") or "0"
-    if lower_int != upper_int:
+    if int(upper_int) - int(lower_int) not in (0, 1):
         return None
     upper = f"{upper_int}.{upper_dec}"
     lower = f"{lower_int}.{lower_dec}"

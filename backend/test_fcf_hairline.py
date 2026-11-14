@@ -178,6 +178,42 @@ def test_frame_text_shows_an_unreadable_modifier_instead_of_dropping_it():
     assert gdt_pipeline.frame_text(frame) == "0.3 ?"
 
 
+def test_a_frame_inside_a_word_is_a_letter_not_a_frame():
+    word = {"x": 900, "y": 20, "width": 200, "height": 41}
+    value = {"x": 1130, "y": 145, "width": 90, "height": 30}
+    glyph = {
+        "bbox": {"x": 948, "y": 27, "width": 50, "height": 19},
+        "text": "⌖ 1",
+    }
+    real = {
+        "bbox": {"x": 1117, "y": 139, "width": 133, "height": 43},
+        "text": "⟂ 0.076",
+    }
+
+    kept = gdt_pipeline.drop_frames_inside_text(
+        [glyph, real],
+        [word, value],
+    )
+
+    assert kept == [real]
+
+
+def test_frame_text_keeps_the_tolerance_decimals_as_printed():
+    frame = fcf_parse.FeatureControlFrame(id="f", bbox=(0, 0, 1, 1), page=1)
+
+    frame.tolerance = fcf_parse.Field.present(0.2, 0.9, raw="0.20 TIR")
+    assert gdt_pipeline.frame_text(frame) == "0.20"
+
+    frame.tolerance = fcf_parse.Field.present(0.3, 0.9, raw="03")
+    assert gdt_pipeline.frame_text(frame) == "0.3"
+
+    # A following circled modifier can contribute a false trailing zero to
+    # the raw OCR text, so the normalized numeric value is kept in that case.
+    frame.tolerance = fcf_parse.Field.present(0.2, 0.9, raw="0.20")
+    frame.modifiers = ["unequally_disposed"]
+    assert gdt_pipeline.frame_text(frame).startswith("0.2 ")
+
+
 def test_the_same_frame_drawn_larger_is_found_too():
     # Twice the size, the same hairline strokes: a higher-resolution render,
     # placed on a sheet so the frame is small beside it, as on a page.

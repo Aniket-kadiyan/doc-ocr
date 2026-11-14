@@ -255,3 +255,131 @@ def test_shape_and_size_are_checked_before_clearance() -> None:
     strip = _candidate(100, 500, 39, 622)
 
     assert uncovered_gap_candidates([strip], []) == []
+
+
+def _value(text, x, y, w, h, orientation="horizontal"):
+    return {
+        "text": text,
+        "bbox": {"x": x, "y": y, "width": w, "height": h},
+        "orientation": orientation,
+    }
+
+
+def test_stacked_limits_become_one_value():
+    from page_scan import group_stacked_values
+
+    regions, absorbed = group_stacked_values(
+        [
+            _value("4.15", 785, 197, 55, 30),
+            _value("3.97", 785, 230, 55, 30),
+        ]
+    )
+
+    assert absorbed == 1
+    assert [region["text"] for region in regions] == ["4.15/3.97"]
+    assert regions[0]["bbox"] == {
+        "x": 785,
+        "y": 197,
+        "width": 55,
+        "height": 63,
+    }
+
+
+def test_values_that_are_not_one_stack_stay_apart():
+    from page_scan import group_stacked_values
+
+    cases = [
+        # Different numbers of decimal places.
+        [_value("4.15", 0, 0, 55, 30), _value("3.9", 0, 33, 55, 30)],
+        # Lower value is larger.
+        [_value("3.97", 0, 0, 55, 30), _value("4.15", 0, 33, 55, 30)],
+        # Too far apart.
+        [_value("4.15", 0, 0, 55, 30), _value("3.97", 0, 120, 55, 30)],
+        # Side by side rather than stacked.
+        [_value("4.15", 0, 0, 55, 30), _value("3.97", 200, 33, 55, 30)],
+        # A richer callout is its own requirement.
+        [_value("3×2.03", 0, 0, 80, 30), _value("1.78", 0, 33, 55, 30)],
+    ]
+
+    for case in cases:
+        regions, absorbed = group_stacked_values(case)
+        assert absorbed == 0
+        assert [region["text"] for region in regions] == [
+            region["text"] for region in case
+        ]
+
+
+def test_vertical_stack_reads_left_line_first():
+    from page_scan import group_stacked_values
+
+    regions, absorbed = group_stacked_values(
+        [
+            _value("15.825", 1120, 440, 30, 110, "vertical"),
+            _value("Ø15.849", 1085, 440, 30, 110, "vertical"),
+        ]
+    )
+
+    assert absorbed == 1
+    assert regions[0]["text"] == "Ø15.849/15.825"
+
+
+def test_qualifier_under_a_value_joins_it():
+    from page_scan import group_stacked_values
+
+    regions, absorbed = group_stacked_values(
+        [_value("5.20", 1260, 185, 50, 26)],
+        [
+            ("MAX", {"x": 1262, "y": 212, "width": 46, "height": 24}),
+            ("MAX", {"x": 1600, "y": 212, "width": 46, "height": 24}),
+        ],
+    )
+
+    assert absorbed == 0
+    assert regions[0]["text"] == "5.20 MAX"
+
+
+def test_a_reading_across_another_values_lines_is_dropped():
+    from page_scan import drop_cross_direction_fragments
+
+    stack = _value("4.15/3.97", 785, 197, 55, 63)
+    across = _value("43", 790, 200, 30, 50, "vertical")
+    upright = _value("22.81", 380, 860, 30, 110, "vertical")
+    note = {
+        **_value("NOTES 1 2 3", 300, 800, 400, 300),
+        "type": "General Note",
+    }
+
+    regions, review, dropped = drop_cross_direction_fragments(
+        [stack, across, upright, note],
+        [_value("0", 800, 230, 10, 20, "vertical")],
+    )
+
+    assert dropped == 2
+    assert [region["text"] for region in regions] == [
+        "4.15/3.97",
+        "22.81",
+        "NOTES 1 2 3",
+    ]
+    assert review == []
+
+
+def test_a_read_limit_pair_is_not_split_again():
+    from page_scan import is_limit_pair
+
+    for text in (
+        "8.30/7.93",
+        "Ø8.30/7.93",
+        "(0.6240/0.6230)",
+        "(1.698/1.678)",
+    ):
+        assert is_limit_pair(text), text
+
+    # Two fused callouts, a fraction, or a lower-over-upper pair are not one
+    # valid limit dimension.
+    for text in (
+        "8.00[203.20]9.00[228.60]",
+        "5/8",
+        "3.97/4.15",
+        "0.5/0.25",
+    ):
+        assert not is_limit_pair(text), text

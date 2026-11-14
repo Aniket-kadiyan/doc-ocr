@@ -31,6 +31,15 @@ except ImportError:  # pragma: no cover - bare developer interpreters only
 
 RUNS_DIR_NAME = "runs"
 INDEX_FILE_NAME = "index.log"
+#: Rewritten at every stage change while a scan runs, so a backend that is
+#: killed (a dev reload, a crash, the machine running out of memory) still
+#: leaves the scan's timings up to its last stage.
+RUNNING_SUFFIX = ".running.log"
+INTERRUPTED_NOTICE = (
+    "INTERRUPTED: the backend stopped before this scan finished (a dev reload, "
+    "a crash or the machine running out of memory). Timings are as of its "
+    "last stage change; the last stage shown is where it stopped."
+)
 DEFAULT_KEEP_REPORTS = 300
 
 logger = get_logger("run_report")
@@ -85,7 +94,29 @@ def configure_run_reports(
     directory.mkdir(parents=True, exist_ok=True)
     _SETTINGS["directory"] = directory
     _SETTINGS["keep"] = max(1, int(keep))
+    _recover_interrupted(directory)
     return directory
+
+
+def _recover_interrupted(directory: Path) -> None:
+    """Keep the reports of scans an earlier backend process never finished."""
+
+    for running in sorted(directory.glob(f"*{RUNNING_SUFFIX}")):
+        stem = running.name[: -len(RUNNING_SUFFIX)]
+        target = directory / f"{stem}_interrupted.log"
+        try:
+            stopped = datetime.fromtimestamp(running.stat().st_mtime)
+            body = running.read_text(encoding="utf-8")
+            target.write_text(f"{INTERRUPTED_NOTICE}\n\n{body}", encoding="utf-8")
+            running.unlink()
+            with (directory / INDEX_FILE_NAME).open("a", encoding="utf-8") as index:
+                index.write(
+                    f"{stopped:%Y-%m-%d %H:%M:%S}  {'INTERRUPTED':<10} "
+                    f"{'-':>10}  backend stopped mid-scan (last stage change "
+                    f"shown)  -> {target.name}\n"
+                )
+        except OSError:
+            continue
 
 
 def disable_run_reports() -> None:
@@ -116,6 +147,52 @@ def activate(report: "RunReport | None") -> Iterator[None]:
         _CURRENT.reset(token)
 
 
+_STEP_PATH: ContextVar[tuple[str, ...]] = ContextVar(
+    "qtracx_run_report_step",
+    default=(),
+)
+
+
+class StepHandle:
+    """Counts one timed step contributes; ignored when no report is active."""
+
+    __slots__ = ("counts",)
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+
+    def count(self, **counts: int) -> None:
+        """Record what this step did, e.g. ``count(added=3, removed=1)``."""
+
+        for key, value in counts.items():
+            self.counts[key] = self.counts.get(key, 0) + int(value)
+
+
+@contextmanager
+def step(name: str, purpose: str = "") -> Iterator[StepHandle]:
+    """Time one pipeline sub-step inside the active scan report.
+
+    Steps nest: a step opened inside another is charged as its child, and
+    repeated calls of the same step (one per callout, tile or frame) are
+    aggregated into one row with a call count. Without an active report this
+    only allocates the handle, so it is safe inside per-item loops.
+    """
+
+    handle = StepHandle()
+    report = _CURRENT.get()
+    if report is None:
+        yield handle
+        return
+    path = (*_STEP_PATH.get(), _safe_text(name, limit=60))
+    token = _STEP_PATH.set(path)
+    started = perf_counter()
+    try:
+        yield handle
+    finally:
+        _STEP_PATH.reset(token)
+        report.step_done(path, purpose, perf_counter() - started, handle.counts)
+
+
 def record_model_call(
     operation: str,
     *,
@@ -131,6 +208,9 @@ def record_model_call(
             max(0.0, waited_seconds),
             max(0.0, active_seconds),
         )
+        path = _STEP_PATH.get()
+        if path:
+            report.step_model_call(path, max(0.0, active_seconds))
 
 
 @dataclass(frozen=True)
@@ -171,6 +251,19 @@ class _Operation:
 
 
 @dataclass
+class _Step:
+    path: tuple[str, ...]
+    order: int
+    purpose: str = ""
+    calls: int = 0
+    seconds: float = 0.0
+    slowest: float = 0.0
+    model_calls: int = 0
+    model_seconds: float = 0.0
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class _Stage:
     index: int
     name: str
@@ -184,6 +277,8 @@ class _Stage:
     completed: int = 0
     total: int = 0
     candidates: int = 0
+    first_candidates: int | None = None
+    last_candidates: int = 0
     model_calls: int = 0
     model_seconds: float = 0.0
     model_wait_seconds: float = 0.0
@@ -260,6 +355,8 @@ class RunReport:
         self.model_seconds = 0.0
         self.model_wait_seconds = 0.0
         self.path: Path | None = None
+        self.rule_counts: dict[str, int] = {}
+        self.steps: dict[tuple[str, ...], _Step] = {}
         self._lock = threading.Lock()
         self._stage: _Stage | None = None
         self._operation_label = ""
@@ -274,6 +371,7 @@ class RunReport:
             self._end_resources = sample
         with _REGISTRY_LOCK:
             _ACTIVE[self.run_id] = self
+        self._write_running()
         return self
 
     def progress(
@@ -289,10 +387,12 @@ class RunReport:
         stage = _safe_text(stage, limit=40) or "working"
         now = perf_counter()
         sample = _resources()
+        changed = False
         with self._lock:
             if self.ended is not None:
                 return
             if self._stage is None or self._stage.name != stage:
+                changed = True
                 self._close_stage(now, sample)
                 self._stage = _Stage(
                     index=len(self.stages) + 1,
@@ -315,11 +415,15 @@ class RunReport:
                 current.last_message = safe_message
             current.completed = max(0, int(completed))
             current.total = max(0, int(total))
-            current.candidates = max(
-                current.candidates,
-                max(0, int(candidate_count)),
-            )
+            count = max(0, int(candidate_count))
+            current.candidates = max(current.candidates, count)
+            if count:
+                if current.first_candidates is None:
+                    current.first_candidates = count
+                current.last_candidates = count
             self._end_resources = sample
+        if changed:
+            self._write_running()
 
     def model_call(self, operation: str, waited: float, active: float) -> None:
         sample = _resources()
@@ -341,12 +445,46 @@ class RunReport:
                 item.slowest = max(item.slowest, active)
             self._end_resources = sample
 
+    def _step(self, path: tuple[str, ...]) -> _Step:
+        item = self.steps.get(path)
+        if item is None:
+            item = self.steps[path] = _Step(path=path, order=len(self.steps))
+        return item
+
+    def step_done(
+        self,
+        path: tuple[str, ...],
+        purpose: str,
+        seconds: float,
+        counts: dict[str, int],
+    ) -> None:
+        with self._lock:
+            if self.ended is not None:
+                return
+            item = self._step(path)
+            item.purpose = item.purpose or _safe_text(purpose, limit=160)
+            item.calls += 1
+            item.seconds += max(0.0, seconds)
+            item.slowest = max(item.slowest, seconds)
+            for key, value in counts.items():
+                key = _safe_text(key, limit=40)
+                item.counts[key] = item.counts.get(key, 0) + int(value)
+
+    def step_model_call(self, path: tuple[str, ...], active: float) -> None:
+        with self._lock:
+            if self.ended is not None:
+                return
+            item = self._step(path)
+            item.model_calls += 1
+            item.model_seconds += active
+
     def finish(
         self,
         status: str,
         *,
         error: str = "",
         outcome: dict[str, Any] | None = None,
+        rule_counts: dict[str, Any] | None = None,
     ) -> Path | None:
         now = perf_counter()
         sample = _resources()
@@ -362,6 +500,11 @@ class RunReport:
                 _safe_text(key, limit=50): _safe_text(value, limit=80)
                 for key, value in (outcome or {}).items()
             }
+            for key, value in (rule_counts or {}).items():
+                try:
+                    self.rule_counts[_safe_text(key, limit=60)] = int(value)
+                except (TypeError, ValueError):
+                    continue
         with _REGISTRY_LOCK:
             _ACTIVE.pop(self.run_id, None)
             related = [
@@ -414,18 +557,38 @@ class RunReport:
         self._operation_label = ""
         self._operation_started = now
 
-    def _write(self, related: list["RunReport"]) -> Path | None:
-        directory = _SETTINGS["directory"]
-        if directory is None:
-            return None
+    def _stem(self) -> str:
         timestamp = datetime.fromtimestamp(self.wall_started).strftime(
             "%Y%m%d-%H%M%S"
         )
         safe_id = re.sub(r"[^A-Za-z0-9-]", "", self.run_id)[:8] or "run"
         safe_kind = re.sub(r"[^A-Za-z0-9-]", "-", self.kind)[:40]
-        path = directory / f"{timestamp}_{safe_kind}_{safe_id}.log"
+        return f"{timestamp}_{safe_kind}_{safe_id}"
+
+    def _write_running(self) -> None:
+        directory = _SETTINGS["directory"]
+        if directory is None:
+            return
+        try:
+            text = self.render()
+            with _WRITE_LOCK:
+                (directory / f"{self._stem()}{RUNNING_SUFFIX}").write_text(
+                    text, encoding="utf-8"
+                )
+        except Exception:  # noqa: BLE001 - diagnostics must never break OCR
+            logger.exception(
+                "Could not write running scan report",
+                extra={"event": "run_report_failed"},
+            )
+
+    def _write(self, related: list["RunReport"]) -> Path | None:
+        directory = _SETTINGS["directory"]
+        if directory is None:
+            return None
+        path = directory / f"{self._stem()}.log"
         with _WRITE_LOCK:
             path.write_text(self.render(related), encoding="utf-8")
+            (directory / f"{self._stem()}{RUNNING_SUFFIX}").unlink(missing_ok=True)
             with (directory / INDEX_FILE_NAME).open("a", encoding="utf-8") as index:
                 index.write(self._index_line(path) + "\n")
             _prune(directory, int(_SETTINGS["keep"]))
@@ -559,6 +722,19 @@ class RunReport:
                     and stage.last_message != stage.first_message
                 ):
                     lines.append(f"    Ended with   : {stage.last_message}")
+                if stage.first_candidates is not None:
+                    change = stage.last_candidates - stage.first_candidates
+                    lines.append(
+                        "    Contribution : candidates "
+                        f"{stage.first_candidates} → {stage.last_candidates} "
+                        f"({change:+d})"
+                    )
+                if stage.model_calls:
+                    lines.append(
+                        f"    OCR models   : {stage.model_calls} calls, "
+                        f"{_duration(stage.model_seconds)} inside models, "
+                        f"{_duration(stage.model_wait_seconds)} waiting"
+                    )
                 lines.append(
                     "    Resources    : "
                     f"backend CPU {_duration(stage.cpu_seconds)}, "
@@ -581,6 +757,16 @@ class RunReport:
                         )
                 lines.append("")
 
+        if self.steps:
+            lines.extend(self._render_steps())
+        if self.rule_counts:
+            lines.extend(["", "WHERE CANDIDATES ENDED UP (rule → count)", "-" * 96])
+            for name, count in sorted(
+                self.rule_counts.items(), key=lambda item: (-item[1], item[0])
+            ):
+                lines.append(f"  {name[:70]:<70} {count:>6}")
+            lines.append("")
+
         lines.extend(
             [
                 "PRIVACY",
@@ -593,6 +779,63 @@ class RunReport:
             ]
         )
         return "\n".join(lines)
+
+    def _render_steps(self) -> list[str]:
+        """The nested sub-step tree, in the order steps first ran."""
+
+        total = max(self.total_seconds, 1e-9)
+        lines = [
+            "",
+            f"STEP TREE ({len(self.steps)} distinct steps, "
+            f"{sum(item.calls for item in self.steps.values())} step runs)",
+            "-" * 96,
+            "  share = of total processing; self = time not spent in child steps",
+            "",
+            f"  {'step':<46} {'runs':>5} {'total':>10} {'share':>7} "
+            f"{'self':>10} {'max':>9} {'model':>9}",
+        ]
+        children: dict[tuple[str, ...], list[_Step]] = {}
+        for item in self.steps.values():
+            children.setdefault(item.path[:-1], []).append(item)
+        # A step repeated under every neighbourhood or tile says what it does
+        # once, not once per parent.
+        described: set[str] = set()
+
+        def walk(parent: tuple[str, ...]) -> None:
+            for item in sorted(children.get(parent, []), key=lambda i: i.order):
+                depth = len(item.path) - 1
+                kids = children.get(item.path, [])
+                own = max(0.0, item.seconds - sum(k.seconds for k in kids))
+                label = ("  " * depth + item.path[-1])[:46]
+                lines.append(
+                    f"  {label:<46} {item.calls:>5} "
+                    f"{_duration(item.seconds):>10} "
+                    f"{item.seconds / total * 100:6.1f}% "
+                    f"{_duration(own):>10} "
+                    f"{_duration(item.slowest):>9} "
+                    f"{_duration(item.model_seconds) if item.model_calls else '-':>9}"
+                )
+                indent = "  " + "  " * depth + "  "
+                if item.purpose and item.path[-1] not in described:
+                    described.add(item.path[-1])
+                    lines.append(f"{indent}what   : {item.purpose}")
+                if item.counts:
+                    lines.append(
+                        f"{indent}result : "
+                        + ", ".join(
+                            f"{key.replace('_', ' ')}={value}"
+                            for key, value in item.counts.items()
+                        )
+                    )
+                if item.model_calls:
+                    lines.append(
+                        f"{indent}models : {item.model_calls} OCR calls"
+                    )
+                walk(item.path)
+
+        walk(())
+        lines.append("")
+        return lines
 
     def _overlaps(
         self,
@@ -636,6 +879,7 @@ def _prune(directory: Path, keep: int) -> None:
             path
             for path in directory.glob("*.log")
             if path.name != INDEX_FILE_NAME
+            and not path.name.endswith(RUNNING_SUFFIX)
         ),
         key=lambda path: (path.stat().st_mtime, path.name),
     )

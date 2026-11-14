@@ -18,6 +18,7 @@ import pytest
 
 from pdf_text_layer import (
     TextRun,
+    aligned_text_tables,
     rescue_geometry_marks,
     _decode_symbols,
     _join_runs,
@@ -287,9 +288,11 @@ def test_only_a_read_that_says_the_same_number_may_replace_exact_text():
     assert rescue_geometry_marks("45", "45") is None
     # A value that already carries a mark keeps its own reading.
     assert rescue_geometry_marks("Ø45", "Ø45°") is None
-    # So does one with a structure the recogniser would flatten: the text
-    # layer got the deviation pair right and OCR returns "21°+1°0".
-    assert rescue_geometry_marks("21+1/0", "21°+1°0") is None
+    # A deviation pair keeps the exact text-layer structure while accepting
+    # the degree marks that OCR sees in the drawing geometry.
+    assert rescue_geometry_marks("21+1/0", "21°+1°0") == "21°+1°/0°"
+    assert rescue_geometry_marks("21+1/0", "21+1/0") is None
+    assert rescue_geometry_marks("21+1/0", "24°+1°0") is None
 
 
 @pytest.mark.skipif(
@@ -802,3 +805,121 @@ def test_p0012_balloons_its_single_digit_and_nothing_in_the_title_block():
     in_table = {item["text"] for item in result["excluded"] if item["rule"] == "pdf_text_in_table"}
     assert {"2.021kg", "P0012"} <= in_table
     assert "2.021kg" not in texts and "P0012" not in texts
+
+
+def _row(y, cells, size=31.0):
+    return [
+        run(text, x, y, 12.0 * len(text), 23.0, size=size)
+        for x, text in cells
+    ]
+
+
+def test_a_table_without_vertical_rules_is_found_from_its_columns():
+    runs = _row(
+        100,
+        [
+            (98, "S.no"),
+            (204, "Label"),
+            (1065, "Value"),
+            (2039, "Tolerance"),
+        ],
+    )
+    runs += _row(
+        165,
+        [
+            (101, "110"),
+            (204, "Diameter"),
+            (1066, "Ø18-0.05"),
+            (2040, "+0, -0.05"),
+        ],
+    )
+    runs += _row(
+        229,
+        [
+            (101, "111"),
+            (204, "Linear Dimension"),
+            (1068, "5"),
+            (2039, "0"),
+        ],
+    )
+    # A wrapped note cell between two rows must not split the table.
+    runs += _row(
+        292,
+        [
+            (101, "119"),
+            (204, "General Notes"),
+            (1066, "NO ALLOWED CONVEX SHAPE"),
+        ],
+    )
+    runs += _row(330, [(1066, "MARK 11 AT O.5 HEIGHT")])
+    runs += _row(
+        400,
+        [
+            (101, "120"),
+            (204, "Linear Dimension"),
+            (1067, "21"),
+            (2039, "0"),
+        ],
+    )
+
+    tables = aligned_text_tables(runs)
+
+    assert len(tables) == 1
+    table = tables[0]
+    assert table["x"] <= 98
+    assert table["y"] <= 100
+    assert table["y"] + table["height"] >= 423
+
+
+def test_numbered_notes_stored_word_by_word_are_not_a_table():
+    runs = _row(
+        1591,
+        [(2342, "1."), (2390, "PLAIN"), (2528, "FINISH"), (2683, "P/N;")],
+    )
+    runs += _row(
+        1640,
+        [(2339, "2."), (2390, "USED"), (2522, "ON"), (2601, "NEW")],
+    )
+    runs += _row(
+        1690,
+        [
+            (2339, "3."),
+            (2390, "EM-213011"),
+            (2627, "FINISH;"),
+            (2795, "E/M"),
+        ],
+    )
+    runs += _row(
+        1739,
+        [(2338, "4."), (2386, "APPROX."), (2593, "WEIGHT:"), (2793, "0.289")],
+    )
+    runs += _row(
+        1788,
+        [(2339, "5."), (2390, "MATERIAL:"), (2650, "C1008/1010")],
+    )
+
+    assert aligned_text_tables(runs) == []
+
+
+def test_a_text_table_starts_at_its_first_column_not_at_a_view_beside_it():
+    runs = _row(
+        2164,
+        [(986, "+0.05"), (2157, "BASE"), (2258, "DIA"), (2910, "29.445")],
+    )
+    runs += _row(
+        2213,
+        [(2157, "ROOT"), (2266, "DIA"), (2911, "33.220"), (3157, "-0.057")],
+    )
+    runs += _row(
+        2263,
+        [(2155, "TIP"), (2260, "DIA"), (2921, "35.80"), (3157, "0.000")],
+    )
+    runs += _row(
+        2312,
+        [(2157, "BALL"), (2251, "DIA"), (2911, "2"), (3157, "37.968")],
+    )
+
+    tables = aligned_text_tables(runs)
+
+    assert len(tables) == 1
+    assert tables[0]["x"] >= 2150

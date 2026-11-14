@@ -407,6 +407,11 @@ class ScanJobManager:
             ):
                 if key in result:
                     outcome[key] = result[key]
+        rule_counts = (
+            result.get("filter_rule_counts")
+            if isinstance(result, dict)
+            else None
+        )
         report.finish(
             status,
             error=(
@@ -415,6 +420,7 @@ class ScanJobManager:
                 else ""
             ),
             outcome=outcome,
+            rule_counts=rule_counts if isinstance(rule_counts, dict) else None,
         )
 
     def _run_with_context(self, job_id: str, work: ScanWork) -> None:

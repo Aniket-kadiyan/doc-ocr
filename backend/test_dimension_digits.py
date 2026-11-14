@@ -79,6 +79,8 @@ def test_empty_input() -> None:
         ("0.62000.612", "0.620/0.612"),
         ("Ø0.62000.612", "Ø0.620/0.612"),
         ("12.5012.48", "12.50/12.48"),
+        ("8.307.93", "8.30/7.93"),       # straddles a whole number (2H-G772)
+        ("4.153.97", "4.15/3.97"),
     ],
 )
 def test_stacked_limit_pair_read_on_one_line_is_separated(glued: str, limits: str) -> None:

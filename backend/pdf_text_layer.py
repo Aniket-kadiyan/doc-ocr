@@ -32,6 +32,8 @@ from typing import Any, Iterable
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
 
+from run_report import step
+
 # CAD symbol fonts: their glyph codes are letters, so they are only remapped
 # for text actually drawn in one of them.
 SYMBOL_FONTS = frozenset({"AIGDT", "GDT", "AMGDT", "ISOGDT"})
@@ -975,6 +977,125 @@ def native_table_masks(page_image: Any, runs: list[TextRun]) -> list[dict[str, f
     return masks
 
 
+#: A table without vertical rules (an exported inspection report, a parts list
+#: ruled only between rows) is invisible to the grid detector. Its text still
+#: says it is a table: rows whose runs start at the same columns.
+#: Four rows sharing three column starts never occurred in a drawing view.
+TEXT_TABLE_MIN_ROWS = 4
+TEXT_TABLE_MIN_COLUMNS = 3
+#: Column starts agree within this share of the font size; a table's cells
+#: measured within 0.15 of it, while text in a view starts wherever it fits.
+TEXT_TABLE_COLUMN_TOLERANCE = 0.3
+#: A column must start a cell in this share of a table's rows. Two
+#: neighbouring rows of prose stored word by word (EM-213011's numbered notes)
+#: share three starts by chance; a table's columns run its whole length.
+TEXT_TABLE_COLUMN_PERSISTENCE = 0.75
+#: Text further below the line above it than this many font sizes starts a
+#: new block. Within a block, a wrapped or garbled cell may sit between two
+#: rows of a table without splitting it.
+TEXT_TABLE_MAX_ROW_GAP = 3.0
+
+
+def _shared_columns(row: list[TextRun], other: list[TextRun]) -> int:
+    tolerance = TEXT_TABLE_COLUMN_TOLERANCE * min(
+        min(run.size for run in row), min(run.size for run in other)
+    )
+    return sum(
+        1 for run in row if any(abs(run.x - cell.x) <= tolerance for cell in other)
+    )
+
+
+def _persistent_columns(rows: list[list[TextRun]]) -> list[float]:
+    """The column starts that recur through a table's rows."""
+    tolerance = TEXT_TABLE_COLUMN_TOLERANCE * min(run.size for row in rows for run in row)
+    columns: list[float] = []
+    for start in sorted(run.x for row in rows for run in row):
+        if columns and start - columns[-1] <= tolerance:
+            continue
+        rows_with = sum(
+            1 for row in rows if any(abs(run.x - start) <= tolerance for run in row)
+        )
+        if rows_with >= TEXT_TABLE_COLUMN_PERSISTENCE * len(rows):
+            columns.append(start)
+    return columns
+
+
+def aligned_text_tables(runs: list[TextRun]) -> list[dict[str, float]]:
+    """
+    Tables found from the alignment of their text, ruled or not.
+
+    Upright runs are grouped into rows by their centre line and rows into
+    blocks of continuous text. Inside a block each row of at least
+    ``TEXT_TABLE_MIN_COLUMNS`` runs joins the candidate table whose last row
+    it shares that many column starts with, so a tall wrapped cell between
+    two rows neither splits a table nor merges it with its neighbour. A
+    candidate with ``TEXT_TABLE_MIN_ROWS`` rows, that many columns running
+    through them, and a word among them, is a table.
+    """
+    level = sorted(
+        (
+            run
+            for run in runs
+            if run.text.strip()
+            and (abs(run.angle) < 1.0 or abs(abs(run.angle) - 180.0) < 1.0)
+        ),
+        key=lambda run: run.y + run.height / 2,
+    )
+    rows: list[list[TextRun]] = []
+    for run in level:
+        centre = run.y + run.height / 2
+        if rows:
+            last = rows[-1]
+            last_centre = sum(cell.y + cell.height / 2 for cell in last) / len(last)
+            if abs(centre - last_centre) <= 0.5 * run.size:
+                last.append(run)
+                continue
+        rows.append([run])
+
+    blocks: list[list[list[TextRun]]] = []
+    for row in rows:
+        if blocks:
+            previous = blocks[-1][-1]
+            gap = min(run.y for run in row) - max(run.y + run.height for run in previous)
+            if gap <= TEXT_TABLE_MAX_ROW_GAP * max(run.size for run in row):
+                blocks[-1].append(row)
+                continue
+        blocks.append([row])
+
+    tables: list[dict[str, float]] = []
+    for block in blocks:
+        candidates: list[list[list[TextRun]]] = []
+        for row in block:
+            if len(row) < TEXT_TABLE_MIN_COLUMNS:
+                continue
+            for candidate in reversed(candidates):
+                if _shared_columns(row, candidate[-1]) >= TEXT_TABLE_MIN_COLUMNS:
+                    candidate.append(row)
+                    break
+            else:
+                candidates.append([row])
+        for candidate in candidates:
+            if len(candidate) < TEXT_TABLE_MIN_ROWS:
+                continue
+            cells = [run for row in candidate for run in row]
+            if not any(_WORD_RE.search(run.text) for run in cells):
+                continue
+            columns = _persistent_columns(candidate)
+            if len(columns) < TEXT_TABLE_MIN_COLUMNS:
+                continue
+            # The table starts at its first column. A view beside it shares
+            # its lines (BS1801025's spline data sits level with a section),
+            # and a callout of that view on a table row is not a cell.
+            left = columns[0] - TEXT_TABLE_COLUMN_TOLERANCE * min(run.size for run in cells)
+            cells = [run for run in cells if run.x >= left]
+            x0 = min(run.x for run in cells)
+            y0 = min(run.y for run in cells)
+            x1 = max(run.x + run.width for run in cells)
+            y1 = max(run.y + run.height for run in cells)
+            tables.append({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0})
+    return tables
+
+
 def text_layer_regions(
     pdf: Any,
     page_index: int = 0,
@@ -997,9 +1118,14 @@ def text_layer_regions(
     from page_value_filters import candidate_is_in_table, is_sheet_frame_label
     from symbol_vision import DetectedSymbols
 
-    runs, size, fonts = page_text_runs(pdf, page_index, dpi=dpi)
-    coverage = page_raster_coverage(pdf, page_index)
-    if not has_usable_text_layer(runs, fonts, coverage):
+    with step("Read PDF text runs", "Extract every glyph run and font from the PDF text layer") as done:
+        runs, size, fonts = page_text_runs(pdf, page_index, dpi=dpi)
+        done.count(runs=len(runs), fonts=len(fonts))
+    with step("Check text layer is usable", "Measure raster coverage and decide text layer vs OCR") as done:
+        coverage = page_raster_coverage(pdf, page_index)
+        usable = has_usable_text_layer(runs, fonts, coverage)
+        done.count(usable=int(usable))
+    if not usable:
         return {
             "usable": False,
             "page_size": size,
@@ -1019,19 +1145,42 @@ def text_layer_regions(
     # carried a value ("BREAK ALL EDGES 0.2 MAX"), ballooned as a fragment.
     # The runs a note owns are taken out of the callout pool, so nothing
     # inside a paragraph is published twice.
-    note_regions, text_blocks, consumed, page_image = _native_note_regions(
-        pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
-    )
+    with step("Notes", "Rebuild note paragraphs from runs and take their runs out of the callout pool") as done:
+        note_regions, text_blocks, consumed, page_image = _native_note_regions(
+            pdf, page_index, runs, size, dpi, page_image, recover_with_ocr=recover_symbols
+        )
+        done.count(
+            notes=len(note_regions),
+            other_text_blocks=len(text_blocks),
+            runs_consumed=len(consumed),
+        )
     callout_runs = [run for index, run in enumerate(runs) if index not in consumed]
 
     if page_image is None:
-        page_image = _render_page(pdf, page_index, dpi)
-    table_masks = native_table_masks(page_image, runs)
+        with step("Render page", "Rasterise the page for geometry checks"):
+            page_image = _render_page(pdf, page_index, dpi)
+    with step("Table masks", "Find tables and title blocks whose numbers are bookkeeping") as done:
+        text_tables = aligned_text_tables(runs)
+        table_masks = native_table_masks(page_image, runs) + text_tables
+        done.count(ruled_tables=len(table_masks) - len(text_tables), text_tables=len(text_tables))
     # Boilerplate printed outside the drawing border is not a note on the
     # part, however much it reads like one.
-    border = detect_drawing_border(page_image)
+    with step("Drawing border", "Find the drawing border so notes outside it are dropped") as done:
+        border = detect_drawing_border(page_image)
+        done.count(found=int(border is not None))
     for note in note_regions:
-        if border is None or candidate_is_in_table(note["bbox"], [border.to_dict()]):
+        # Only tables found from aligned text veto a note: a ruled grid is
+        # also what a boxed notes block looks like.
+        if candidate_is_in_table(note["bbox"], text_tables):
+            excluded.append(
+                {
+                    "text": note.get("text", ""),
+                    "bbox": note["bbox"],
+                    "rule": "pdf_text_in_table",
+                    "reason": "Native PDF text sits inside a table or title block",
+                }
+            )
+        elif border is None or candidate_is_in_table(note["bbox"], [border.to_dict()]):
             regions.append(note)
         else:
             excluded.append(
@@ -1044,169 +1193,192 @@ def text_layer_regions(
             )
     writes_marks = any(mark in run.text for run in runs for mark in "Ø⌀")
 
-    for group in group_runs(callout_runs, size):
-        raw = group["text"]
-        composed = compose_engineering_dimension(raw, None, DetectedSymbols())
-        text = (composed.text or "").strip() or raw.strip()
-        bbox, oriented = _boxes_from_corners(group["corners"])
-        # Title blocks, revision lists and spec tables sit along any edge of
-        # the sheet. Their numbers are bookkeeping, not inspection values.
-        if candidate_is_in_table(bbox, table_masks):
-            excluded.append(
-                {
-                    "text": text,
-                    "bbox": bbox,
-                    "rule": "pdf_text_in_table",
-                    "reason": "Native PDF text sits inside a table or title block",
-                }
-            )
-            continue
-        if not any(character.isdigit() for character in text):
-            excluded.append(
-                {
-                    "text": text,
-                    "bbox": bbox,
-                    "rule": "pdf_text_no_numeric_value",
-                    "reason": "Native PDF text contains no numeric inspection value",
-                }
-            )
-            continue
-        # Recovery runs BEFORE the gate: a position tolerance reads "2 A B C"
-        # until its Ø is found, and a lone digit does not earn a balloon.
-        if recover_symbols and not any(mark in text for mark in "Ø⌀φ"):
-            if page_image is None:
-                page_image = _render_page(pdf, page_index, dpi)
-            zone = _prefix_zone(page_image, group["runs"], group["angle"])
-            if zone is not None:
-                # The topology detector, which wants a slashed ring with its
-                # two holes, not merely round ink. The lighter prefix scorer
-                # was tried here and fires on arrowheads and on any "O" in
-                # the title block: it put a Ø on "Form.: A4" and on "2x R29.9".
-                from phi_detector import detect_phi_topology
-
-                score, _details = detect_phi_topology(zone)
-                if score >= PHI_TOPOLOGY_MIN:
-                    text = "Ø" + text
-                    composed = compose_engineering_dimension(
-                        text, None, DetectedSymbols(diameter=True)
-                    )
-                    text = (composed.text or "").strip() or text
-                    # The balloon covers the symbol it just read, not only
-                    # the digits that were in the text layer.
-                    bx0, by0, bx1, by1 = group["bounds"]
-                    lead_size = max(run.size for run in group["runs"])
-                    theta = math.radians(group["angle"])
-                    bbox, oriented = _boxes_from_corners(
-                        [
-                            _unlevel(x, y, theta)
-                            for x, y in (
-                                (bx0 - 1.6 * lead_size, by0),
-                                (bx1, by0),
-                                (bx1, by1),
-                                (bx0 - 1.6 * lead_size, by1),
-                            )
-                        ]
-                    )
-        held_back = False
-        if not is_callout(text) and not (
-            _LONE_DIGIT_RE.fullmatch(text)
-            and not is_sheet_frame_label(bbox, size, text)
-            and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
-        ):
-            if not _still_a_measurement(group["runs"], text):
+    with step("Classify callouts", "Gate each callout group: table, non-numeric, non-callout, review or value") as callouts:
+        regions_before = len(regions)
+        excluded_before = len(excluded)
+        with step("Group runs into callouts", "Join neighbouring runs into whole engineering callouts") as done:
+            groups = group_runs(callout_runs, size)
+            done.count(callout_groups=len(groups))
+        for group in groups:
+            raw = group["text"]
+            composed = compose_engineering_dimension(raw, None, DetectedSymbols())
+            text = (composed.text or "").strip() or raw.strip()
+            bbox, oriented = _boxes_from_corners(group["corners"])
+            # Title blocks, revision lists and spec tables sit along any edge of
+            # the sheet. Their numbers are bookkeeping, not inspection values.
+            if candidate_is_in_table(bbox, table_masks):
                 excluded.append(
                     {
                         "text": text,
                         "bbox": bbox,
-                        "rule": "pdf_text_non_callout",
-                        "reason": "Native PDF text does not match an engineering callout",
+                        "rule": "pdf_text_in_table",
+                        "reason": "Native PDF text sits inside a table or title block",
                     }
                 )
                 continue
-            # Exact native text with an unfamiliar shape is safer in review
-            # than silently discarded. It cannot be an OCR hallucination.
-            held_back = True
-        review = held_back or is_bare_number(text)
-        if (
-            review
-            and not held_back
-            and writes_marks
-            and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
-        ):
-            # A bare number is suspect because the sheet may have drawn its
-            # Ø as geometry. A sheet that writes Ø as text has not, so a
-            # number on an arrowed dimension line is a plain linear value.
-            review = False
-        if review and not held_back and recover_symbols:
-            # A number with no mark has probably lost one the drawing drew
-            # instead of writing: "1 × 45°" reaches the text layer as "1" and
-            # "45" with nothing between them. Reading that ink recovers the
-            # mark, and the exact digits still decide whether to believe it.
-            if page_image is None:
-                page_image = _render_page(pdf, page_index, dpi)
-            lead_size = max(run.size for run in group["runs"])
-            crop = _levelled_crop(
-                page_image,
-                group["bounds"],
-                group["angle"],
-                pad_left=4.0 * lead_size,
-                pad_right=2.0 * lead_size,
-                pad_cross=0.4 * lead_size,
-            )
-            if crop is not None:
-                from ocr_pipeline import get_pipeline
+            if not any(character.isdigit() for character in text):
+                excluded.append(
+                    {
+                        "text": text,
+                        "bbox": bbox,
+                        "rule": "pdf_text_no_numeric_value",
+                        "reason": "Native PDF text contains no numeric inspection value",
+                    }
+                )
+                continue
+            # Recovery runs BEFORE the gate: a position tolerance reads "2 A B C"
+            # until its Ø is found, and a lone digit does not earn a balloon.
+            if recover_symbols and not any(mark in text for mark in "Ø⌀φ"):
+                if page_image is None:
+                    page_image = _render_page(pdf, page_index, dpi)
+                zone = _prefix_zone(page_image, group["runs"], group["angle"])
+                if zone is not None:
+                    # The topology detector, which wants a slashed ring with its
+                    # two holes, not merely round ink. The lighter prefix scorer
+                    # was tried here and fires on arrowheads and on any "O" in
+                    # the title block: it put a Ø on "Form.: A4" and on "2x R29.9".
+                    from phi_detector import detect_phi_topology
 
-                result = get_pipeline().recognize(
-                    crop,
-                    compute_text_bbox=False,
-                    max_paddle_predictions=1,
-                    allow_prefix_ocr=False,
-                )
-                rescued = rescue_geometry_marks(
-                    text, str(result.get("text") or "").strip()
-                )
-                if rescued and float(result.get("confidence") or 0.0) >= 0.9:
-                    text = rescued
-                    review = False
-                    bbox, oriented = _boxes_from_corners(
-                        [
-                            _unlevel(x, y, math.radians(group["angle"]))
-                            # The recovered marks sit on both sides: the "×"
-                            # before the value, the "°" after it.
-                            for x, y in (
-                                (group["bounds"][0] - 4.0 * lead_size, group["bounds"][1]),
-                                (group["bounds"][2] + 0.9 * lead_size, group["bounds"][1]),
-                                (group["bounds"][2] + 0.9 * lead_size, group["bounds"][3]),
-                                (group["bounds"][0] - 4.0 * lead_size, group["bounds"][3]),
-                            )
-                        ]
+                    with step("Ø recovery", "Look for a drawn Ø before a value whose text lacks one") as phi:
+                        score, _details = detect_phi_topology(zone)
+                        phi.count(found=int(score >= PHI_TOPOLOGY_MIN))
+                    if score >= PHI_TOPOLOGY_MIN:
+                        text = "Ø" + text
+                        composed = compose_engineering_dimension(
+                            text, None, DetectedSymbols(diameter=True)
+                        )
+                        text = (composed.text or "").strip() or text
+                        # The balloon covers the symbol it just read, not only
+                        # the digits that were in the text layer.
+                        bx0, by0, bx1, by1 = group["bounds"]
+                        lead_size = max(run.size for run in group["runs"])
+                        theta = math.radians(group["angle"])
+                        bbox, oriented = _boxes_from_corners(
+                            [
+                                _unlevel(x, y, theta)
+                                for x, y in (
+                                    (bx0 - 1.6 * lead_size, by0),
+                                    (bx1, by0),
+                                    (bx1, by1),
+                                    (bx0 - 1.6 * lead_size, by1),
+                                )
+                            ]
+                        )
+            held_back = False
+            if not is_callout(text) and not (
+                _LONE_DIGIT_RE.fullmatch(text)
+                and not is_sheet_frame_label(bbox, size, text)
+                and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
+            ):
+                if not _still_a_measurement(group["runs"], text):
+                    excluded.append(
+                        {
+                            "text": text,
+                            "bbox": bbox,
+                            "rule": "pdf_text_non_callout",
+                            "reason": "Native PDF text does not match an engineering callout",
+                        }
                     )
-        feature = classify_feature(text)
-        kind = composed.kind
-        if without_marks(text) != text:
-            kind = compose_engineering_dimension(
-                without_marks(text), None, DetectedSymbols()
-            ).kind
-        upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
-        region = {
-            "bbox": bbox,
-            "text": text,
-            "confidence": 1.0,
-            "type": kind,
-            "category": feature.category,
-            "subtype": feature.subtype,
-            "label": feature.label,
-            "orientation": "horizontal" if upright else "vertical",
-            "rotation": 0 if upright else oriented["rotation"],
-            "needs_review": review,
-            "agreement": 1.0,
-            "engine": "pdf-text-layer",
-            "symbols_detected": None,
-            "recognized": True,
-        }
-        if not upright:
-            region["oriented_box"] = oriented
-        regions.append(region)
+                    continue
+                # Exact native text with an unfamiliar shape is safer in review
+                # than silently discarded. It cannot be an OCR hallucination.
+                held_back = True
+            review = held_back or is_bare_number(text)
+            if (
+                review
+                and not held_back
+                and writes_marks
+                and _sits_on_dimension_line(page_image, group["bounds"], group["angle"])
+            ):
+                # A bare number is suspect because the sheet may have drawn its
+                # Ø as geometry. A sheet that writes Ø as text has not, so a
+                # number on an arrowed dimension line is a plain linear value.
+                review = False
+            if review and not held_back and recover_symbols:
+                # A number with no mark has probably lost one the drawing drew
+                # instead of writing: "1 × 45°" reaches the text layer as "1" and
+                # "45" with nothing between them. Reading that ink recovers the
+                # mark, and the exact digits still decide whether to believe it.
+                if page_image is None:
+                    page_image = _render_page(pdf, page_index, dpi)
+                lead_size = max(run.size for run in group["runs"])
+                crop = _levelled_crop(
+                    page_image,
+                    group["bounds"],
+                    group["angle"],
+                    pad_left=4.0 * lead_size,
+                    pad_right=2.0 * lead_size,
+                    pad_cross=0.4 * lead_size,
+                )
+                if crop is not None:
+                    from ocr_pipeline import get_pipeline
+
+                    with step("Drawn-mark OCR", "OCR a bare number's surroundings for drawn ×, ° or Ø") as mark:
+                        result = get_pipeline().recognize(
+                            crop,
+                            compute_text_bbox=False,
+                            max_paddle_predictions=1,
+                            allow_prefix_ocr=False,
+                        )
+                        rescued = rescue_geometry_marks(
+                            text, str(result.get("text") or "").strip()
+                        )
+                        mark.count(
+                            rescued=int(
+                                bool(rescued)
+                                and float(result.get("confidence") or 0.0) >= 0.9
+                            )
+                        )
+                    if rescued and float(result.get("confidence") or 0.0) >= 0.9:
+                        # Room on the left only for a mark read before the
+                        # value: "1×45°", not "21°+1°/0°".
+                        lead_pad = 4.0 * lead_size if rescued[:1] != text[:1] else 0.0
+                        text = rescued
+                        review = False
+                        bbox, oriented = _boxes_from_corners(
+                            [
+                                _unlevel(x, y, math.radians(group["angle"]))
+                                # The recovered marks sit on both sides: the "×"
+                                # before the value, the "°" after it.
+                                for x, y in (
+                                    (group["bounds"][0] - lead_pad, group["bounds"][1]),
+                                    (group["bounds"][2] + 0.9 * lead_size, group["bounds"][1]),
+                                    (group["bounds"][2] + 0.9 * lead_size, group["bounds"][3]),
+                                    (group["bounds"][0] - lead_pad, group["bounds"][3]),
+                                )
+                            ]
+                        )
+            feature = classify_feature(text)
+            kind = composed.kind
+            if without_marks(text) != text:
+                kind = compose_engineering_dimension(
+                    without_marks(text), None, DetectedSymbols()
+                ).kind
+            upright = abs(group["angle"]) < 1.0 or abs(abs(group["angle"]) - 180.0) < 1.0
+            region = {
+                "bbox": bbox,
+                "text": text,
+                "confidence": 1.0,
+                "type": kind,
+                "category": feature.category,
+                "subtype": feature.subtype,
+                "label": feature.label,
+                "orientation": "horizontal" if upright else "vertical",
+                "rotation": 0 if upright else oriented["rotation"],
+                "needs_review": review,
+                "agreement": 1.0,
+                "engine": "pdf-text-layer",
+                "symbols_detected": None,
+                "recognized": True,
+            }
+            if not upright:
+                region["oriented_box"] = oriented
+            regions.append(region)
+        callouts.count(
+            values=len(regions) - regions_before,
+            excluded=len(excluded) - excluded_before,
+            review=sum(1 for region in regions[regions_before:] if region["needs_review"]),
+        )
 
     # Feature control frames. A frame's symbols and modifiers are drawn, not
     # written: the text layer of a profile frame "⌓ | 0.2 Ⓤ" holds only
@@ -1214,13 +1386,18 @@ def text_layer_regions(
     # on the rendered page and read the way a scan reads them, and absorb the
     # bare values inside them.
     if recover_symbols and read_frames:
-        regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
+        with step("GD&T frames", "Find feature control frames on a fine render and absorb values inside them") as done:
+            before = len(regions)
+            regions = _native_frames(pdf, page_index, runs, dpi, regions, text_blocks)
+            done.count(regions_before=before, regions_after=len(regions))
 
     # A mixed page: vector text over an embedded picture that carries text of
     # its own (a pasted scan of a notes block, a raster title block). The
     # text layer cannot see inside the picture, so only those areas are read.
     if recover_symbols:
-        image_notes = _image_area_notes(pdf, page_index, runs, dpi)
+        with step("Embedded-picture notes", "OCR notes inside pictures that carry no native text") as done:
+            image_notes = _image_area_notes(pdf, page_index, runs, dpi)
+            done.count(notes=len(image_notes))
         regions.extend(image_notes)
 
     return {
@@ -1269,7 +1446,8 @@ def _native_frames(
     if not get_config().enabled:
         return regions
     frame_dpi = max(dpi, FRAME_DPI)
-    image = _render_page(pdf, page_index, frame_dpi)
+    with step("Render for frames", "Rasterise the page at frame resolution"):
+        image = _render_page(pdf, page_index, frame_dpi)
     from ocr_pipeline import get_pipeline
 
     pipeline = get_pipeline()
@@ -1301,7 +1479,9 @@ def _native_frames(
     gdt_pipeline.attach_adjacent_text(
         frames, [(block["text"], block["bbox"]) for block in text_blocks]
     )
-    regions, _, _ = gdt_pipeline.absorb_frames(regions, [], frames)
+    with step("Absorb frame values", "Replace bare values that sit inside a frame with the frame") as done:
+        regions, _, _ = gdt_pipeline.absorb_frames(regions, [], frames)
+        done.count(frames=len(frames))
     return regions
 
 
@@ -1577,6 +1757,10 @@ def _image_area_notes(
 # What a rescued read must gain over the text layer's own: a mark the drawing
 # wrote as geometry rather than as text.
 _GEOMETRY_MARKS = "×x°Ø⌀±R"
+# A nominal and its deviations, nothing else: "21+1/0", "22.9±1".
+_DEVIATION_ANGLE_RE = re.compile(
+    r"\d+(?:\.\d+)?(?:±\d+(?:\.\d+)?|[+-]\d+(?:\.\d+)?/[+-]?\d+(?:\.\d+)?)"
+)
 
 
 def _levelled_crop(
@@ -1691,6 +1875,15 @@ def _sits_on_dimension_line(
     it, just above, below or running into it from both sides, ends in an
     arrowhead. Zone borders, table rules and flag outlines never do.
     """
+    with step("Dimension-line check", "Look for an arrowed dimension line beside a number") as done:
+        found = _sits_on_dimension_line_uncounted(page_image, bounds, angle)
+        done.count(on_line=int(found))
+    return found
+
+
+def _sits_on_dimension_line_uncounted(
+    page_image: Any, bounds: tuple[float, float, float, float], angle: float
+) -> bool:
     import cv2
     import numpy as np
     from PIL import Image
@@ -1830,6 +2023,14 @@ def rescue_geometry_marks(text: str, read: str) -> str | None:
     # Only a plain number may be replaced wholesale. A value that already
     # carries a sign or a deviation pair has structure the text layer got
     # right and the recogniser would flatten: "21+1/0" came back "21°+1°0".
+    # The read still says the angle was drawn, so the exact text keeps its
+    # structure and each of its numbers takes the drawn degree.
     if not re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):
+        if (
+            "°" in read
+            and exact_digits == read_digits
+            and _DEVIATION_ANGLE_RE.fullmatch(text.strip())
+        ):
+            return re.sub(r"\d+(?:\.\d+)?", lambda m: m.group() + "°", text.strip())
         return None
     return read
