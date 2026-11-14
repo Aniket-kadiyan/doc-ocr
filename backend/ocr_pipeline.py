@@ -66,10 +66,58 @@ logger = logging.getLogger(__name__)
 # changes nothing until `npm run ocr-api` is restarted -- and a scan from a
 # stale process is indistinguishable from a scan that found nothing, which has
 # cost real debugging time. Bump this whenever scan behaviour changes.
-OCR_CHANGESET_ID = "mvp2-scan-parity-closeout"
+OCR_CHANGESET_ID = "mvp2-final-scan-accounting"
 #: A section-scan value read below this confidence is excluded rather than
 #: ballooned. See the gate in ``segment`` for the measurement behind it.
 SECTION_MIN_CONFIDENCE = 0.6
+
+
+def _final_scan_counts(
+    regions: Sequence[Mapping[str, Any]],
+    review_candidates: Sequence[Mapping[str, Any]],
+    candidate_outcomes: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Count one scan only after every replacement and merge has finished.
+
+    ``candidate_outcomes`` is the audit trail for the detector's original
+    objects. Its eligible and review entries may have since been deduplicated,
+    grouped, removed as cross-direction fragments, or replaced by notes/GD&T.
+    Only excluded outcomes remain final objects from that list; the final
+    eligible and review objects are the two explicit collections.
+    """
+
+    excluded = [
+        outcome
+        for outcome in candidate_outcomes
+        if outcome.get("state") == "excluded"
+    ]
+    final_objects = [*regions, *review_candidates, *excluded]
+
+    def was_recognized(item: Mapping[str, Any]) -> bool:
+        if "recognized" in item:
+            return bool(item.get("recognized"))
+        return bool(str(item.get("text") or "").strip())
+
+    eligible_count = len(regions)
+    review_count = len(review_candidates)
+    excluded_count = len(excluded)
+    detected_count = len(final_objects)
+    recognized_count = sum(was_recognized(item) for item in final_objects)
+    unread_count = detected_count - recognized_count
+
+    if detected_count != eligible_count + excluded_count + review_count:
+        raise AssertionError("Every detected scan object must have one final state")
+    if detected_count != recognized_count + unread_count:
+        raise AssertionError("Every detected scan object must be recognized or unread")
+
+    return {
+        "detected_count": detected_count,
+        "recognized_count": recognized_count,
+        "eligible_count": eligible_count,
+        "excluded_count": excluded_count,
+        "review_count": review_count,
+        "unread_count": unread_count,
+    }
 
 LINE_THRESHOLD = 15
 # A single callout is wider than it is tall; a stacked pair is not. Used to
@@ -7495,21 +7543,17 @@ class OcrPipeline:
             candidate_count=len(regions),
         )
 
-        recognized_count = sum(
-            1 for record in ocr_records if record["recognized"]
+        final_counts = _final_scan_counts(
+            regions,
+            review_candidates,
+            candidate_outcomes,
         )
-        unread_count = detected_count - recognized_count
-        eligible_count = len(regions)
-        excluded_count = sum(
-            1
-            for outcome in candidate_outcomes
-            if outcome["state"] == "excluded"
-        )
-        review_count = len(review_candidates)
-        if detected_count != eligible_count + excluded_count + review_count:
-            raise AssertionError(
-                f"Every detected {scan_label} object must have one final state"
-            )
+        detected_count = final_counts["detected_count"]
+        recognized_count = final_counts["recognized_count"]
+        eligible_count = final_counts["eligible_count"]
+        excluded_count = final_counts["excluded_count"]
+        review_count = final_counts["review_count"]
+        unread_count = final_counts["unread_count"]
 
         report(
             stage="finalizing",

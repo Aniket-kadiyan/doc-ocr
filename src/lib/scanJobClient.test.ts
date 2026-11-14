@@ -191,4 +191,41 @@ describe("scan overlay coordinates", () => {
     expect(submitted.get("gdt")).toBe("true");
     expect(submitted.get("slanted")).toBe("true");
   });
+
+  it("normalizes impossible counts from a completed legacy scan job", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...snapshot({ enabled: false }),
+          result: {
+            coordinate_space: "page",
+            regions: [],
+            review_candidates: [],
+            candidate_outcomes: [],
+            detected_count: 2,
+            recognized_count: 5,
+            unread_count: -3,
+            eligible_count: 0,
+            excluded_count: 2,
+            review_count: 0,
+          },
+        }),
+      }))
+    );
+
+    const result = await runScanJob({
+      sourceCanvas: canvas,
+      bbox: { x: 0, y: 0, width: 1263, height: 893 },
+      page: 1,
+      scopeKind: "page",
+      displayScale,
+    });
+
+    expect(result.detected).toBe(2);
+    expect(result.recognized).toBe(2);
+    expect(result.unread).toBe(0);
+  });
 });

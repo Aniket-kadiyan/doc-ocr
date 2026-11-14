@@ -681,25 +681,41 @@ def _serialize_segment_result(seg: dict[str, Any]) -> dict[str, Any]:
         stage=str(seg.get("coordinate_space", "scope")),
     )
 
-    recognized_count = int(
-        seg.get(
-            "recognized_count",
-            sum(
-                1
-                for region in regions
-                if region.get("recognized", bool(region["text"].strip()))
+    detected_count = max(0, int(seg.get("detected_count", len(regions))))
+    recognized_count = max(
+        0,
+        min(
+            detected_count,
+            int(
+                seg.get(
+                    "recognized_count",
+                    sum(
+                        1
+                        for region in regions
+                        if region.get(
+                            "recognized", bool(region["text"].strip())
+                        )
+                    ),
+                )
             ),
-        )
+        ),
     )
-    detected_count = int(seg.get("detected_count", len(regions)))
-    unread_count = int(
-        seg.get("unread_count", max(0, detected_count - recognized_count))
+    # Older results could reduce detected_count during final deduplication while
+    # retaining a pre-deduplication recognized_count. Derive this invariant
+    # instead of trusting a separately accumulated, possibly negative value.
+    unread_count = detected_count - recognized_count
+    eligible_count = max(0, int(seg.get("eligible_count", len(regions))))
+    excluded_count = max(
+        0,
+        int(
+            seg.get(
+                "excluded_count", max(0, recognized_count - eligible_count)
+            )
+        ),
     )
-    eligible_count = int(seg.get("eligible_count", len(regions)))
-    excluded_count = int(
-        seg.get("excluded_count", max(0, recognized_count - eligible_count))
+    review_count = max(
+        0, int(seg.get("review_count", len(review_candidates)))
     )
-    review_count = int(seg.get("review_count", len(review_candidates)))
     filter_rule_counts = {
         str(name): int(count)
         for name, count in dict(seg.get("filter_rule_counts", {})).items()

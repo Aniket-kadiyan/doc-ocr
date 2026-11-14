@@ -478,12 +478,21 @@ export async function runScanJob({
   const otherCandidates = mappedOutcomes.filter(
     (candidate) => candidate.outcomeState === "excluded"
   );
-  const detected = snapshot.result.detected_count ?? regions.length;
-  const recognized =
-    snapshot.result.recognized_count ??
-    regions.filter((region) => region.recognized).length;
-  const unread =
-    snapshot.result.unread_count ?? Math.max(0, detected - recognized);
+  const detected = Math.max(
+    0,
+    snapshot.result.detected_count ?? regions.length
+  );
+  const recognized = Math.max(
+    0,
+    Math.min(
+      detected,
+      snapshot.result.recognized_count ??
+        regions.filter((region) => region.recognized).length
+    )
+  );
+  // Compatibility guard for completed jobs produced by an older backend that
+  // reported a negative unread_count after final duplicate consolidation.
+  const unread = detected - recognized;
   const eligible = snapshot.result.eligible_count ?? regions.length;
   const excluded =
     snapshot.result.excluded_count ?? Math.max(0, recognized - eligible);
