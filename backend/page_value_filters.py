@@ -80,11 +80,13 @@ DOCUMENT_METADATA_LABEL = _compile(
     r"(?:NO\.?|NUMBER|#)\b"
     r"|\bSHEET(?:\s*(?:NO\.?|NUMBER|#))?\b"
 )
+# A date repeats its separator. Mixed separators are a limit pair or a thread
+# callout: "4.15/3.97" holds "15/3.97" and "5/8-18UNJF" holds "5/8-18".
 DATE_VALUE = _compile(
-    r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[./-]"
-    r"(?:0?[1-9]|1[0-2])[./-](?:\d{2}|\d{4})(?!\d)"
-    r"|(?<!\d)(?:19|20)\d{2}[./-](?:0?[1-9]|1[0-2])"
-    r"[./-](?:0?[1-9]|[12]\d|3[01])(?!\d)"
+    r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])(?P<dmy>[./-])"
+    r"(?:0?[1-9]|1[0-2])(?P=dmy)(?:\d{2}|\d{4})(?!\d)"
+    r"|(?<!\d)(?:19|20)\d{2}(?P<ymd>[./-])(?:0?[1-9]|1[0-2])"
+    r"(?P=ymd)(?:0?[1-9]|[12]\d|3[01])(?!\d)"
 )
 NUMERIC_COMPONENT = re.compile(r"\d")
 SCALE_RATIO_VALUE = _compile(r"^\s*\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\s*$")

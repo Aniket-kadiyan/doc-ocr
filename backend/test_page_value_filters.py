@@ -114,6 +114,15 @@ def test_direct_never_balloon_values_are_rejected_before_numeric_acceptance() ->
         assert decision.rule_name == rule_name
 
 
+def test_mixed_separators_are_not_dates() -> None:
+    # 2H-G772: "4.15/3.97" holds "15/3.97" and the thread holds "5/8-18".
+    for text in ("4.15/3.97", "5/8-18UNJF-3A"):
+        decision = evaluate_page_value(candidate(text))
+        assert decision.rule_name != "date", text
+    for text in ("12/03/2024", "12-03-24", "2024.03.12"):
+        assert evaluate_page_value(candidate(text)).rule_name == "date", text
+
+
 def test_split_metadata_value_is_rejected_only_when_its_label_is_nearby() -> None:
     label = candidate("PART NUMBER", x=10, y=10, width=90)
     value = candidate("TS232224", x=110, y=10, width=85)
