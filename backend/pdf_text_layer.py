@@ -975,6 +975,139 @@ def native_table_masks(page_image: Any, runs: list[TextRun]) -> list[dict[str, f
     return masks
 
 
+# A table without vertical rules is invisible to the grid detector. Its text
+# still exposes a table structure through column starts repeated across rows.
+TEXT_TABLE_MIN_ROWS = 4
+TEXT_TABLE_MIN_COLUMNS = 3
+TEXT_TABLE_COLUMN_TOLERANCE = 0.3
+TEXT_TABLE_COLUMN_PERSISTENCE = 0.75
+TEXT_TABLE_MAX_ROW_GAP = 3.0
+
+
+def _shared_columns(row: list[TextRun], other: list[TextRun]) -> int:
+    tolerance = TEXT_TABLE_COLUMN_TOLERANCE * min(
+        min(run.size for run in row),
+        min(run.size for run in other),
+    )
+    return sum(
+        1
+        for run in row
+        if any(abs(run.x - cell.x) <= tolerance for cell in other)
+    )
+
+
+def _persistent_columns(rows: list[list[TextRun]]) -> list[float]:
+    """Return column starts recurring through most candidate rows."""
+
+    tolerance = TEXT_TABLE_COLUMN_TOLERANCE * min(
+        run.size for row in rows for run in row
+    )
+    columns: list[float] = []
+    for start in sorted(run.x for row in rows for run in row):
+        if columns and start - columns[-1] <= tolerance:
+            continue
+        rows_with = sum(
+            1
+            for row in rows
+            if any(abs(run.x - start) <= tolerance for run in row)
+        )
+        if rows_with >= TEXT_TABLE_COLUMN_PERSISTENCE * len(rows):
+            columns.append(start)
+    return columns
+
+
+def aligned_text_tables(runs: list[TextRun]) -> list[dict[str, float]]:
+    """Find tables from persistent aligned text columns, ruled or not.
+
+    Upright text runs are grouped into rows and continuous text blocks. Rows
+    sharing at least three column starts form a candidate. A candidate needs
+    at least four rows, three persistent columns and at least one word before
+    it is allowed to mask values.
+    """
+
+    level = sorted(
+        (
+            run
+            for run in runs
+            if run.text.strip()
+            and (abs(run.angle) < 1.0 or abs(abs(run.angle) - 180.0) < 1.0)
+        ),
+        key=lambda run: run.y + run.height / 2,
+    )
+
+    rows: list[list[TextRun]] = []
+    for run in level:
+        centre = run.y + run.height / 2
+        if rows:
+            last = rows[-1]
+            last_centre = sum(
+                cell.y + cell.height / 2 for cell in last
+            ) / len(last)
+            if abs(centre - last_centre) <= 0.5 * run.size:
+                last.append(run)
+                continue
+        rows.append([run])
+
+    blocks: list[list[list[TextRun]]] = []
+    for row in rows:
+        if blocks:
+            previous = blocks[-1][-1]
+            gap = min(run.y for run in row) - max(
+                run.y + run.height for run in previous
+            )
+            if gap <= TEXT_TABLE_MAX_ROW_GAP * max(run.size for run in row):
+                blocks[-1].append(row)
+                continue
+        blocks.append([row])
+
+    tables: list[dict[str, float]] = []
+    for block in blocks:
+        candidates: list[list[list[TextRun]]] = []
+        for row in block:
+            if len(row) < TEXT_TABLE_MIN_COLUMNS:
+                continue
+            for candidate in reversed(candidates):
+                if (
+                    _shared_columns(row, candidate[-1])
+                    >= TEXT_TABLE_MIN_COLUMNS
+                ):
+                    candidate.append(row)
+                    break
+            else:
+                candidates.append([row])
+
+        for candidate in candidates:
+            if len(candidate) < TEXT_TABLE_MIN_ROWS:
+                continue
+            cells = [run for row in candidate for run in row]
+            if not any(_WORD_RE.search(run.text) for run in cells):
+                continue
+            columns = _persistent_columns(candidate)
+            if len(columns) < TEXT_TABLE_MIN_COLUMNS:
+                continue
+
+            # Start at the first persistent table column. A drawing view beside
+            # a table may have a callout aligned with one row but is not a cell.
+            left = columns[0] - TEXT_TABLE_COLUMN_TOLERANCE * min(
+                run.size for run in cells
+            )
+            cells = [run for run in cells if run.x >= left]
+            x0 = min(run.x for run in cells)
+            y0 = min(run.y for run in cells)
+            x1 = max(run.x + run.width for run in cells)
+            y1 = max(run.y + run.height for run in cells)
+            tables.append(
+                {
+                    "x": x0,
+                    "y": y0,
+                    "width": x1 - x0,
+                    "height": y1 - y0,
+                }
+            )
+
+    return tables
+
+
 def text_layer_regions(
     pdf: Any,
     page_index: int = 0,
@@ -1026,12 +1159,30 @@ def text_layer_regions(
 
     if page_image is None:
         page_image = _render_page(pdf, page_index, dpi)
-    table_masks = native_table_masks(page_image, runs)
+    text_tables = aligned_text_tables(runs)
+    table_masks = native_table_masks(page_image, runs) + text_tables
     # Boilerplate printed outside the drawing border is not a note on the
     # part, however much it reads like one.
     border = detect_drawing_border(page_image)
     for note in note_regions:
-        if border is None or candidate_is_in_table(note["bbox"], [border.to_dict()]):
+        # Only text-aligned tables veto notes here. A ruled box can also be a
+        # legitimate boxed notes block and must not suppress the note merely
+        # because the raster table detector found its border.
+        if candidate_is_in_table(note["bbox"], text_tables):
+            excluded.append(
+                {
+                    "text": note.get("text", ""),
+                    "bbox": note["bbox"],
+                    "rule": "pdf_text_in_table",
+                    "reason": (
+                        "Native PDF text sits inside a table or title block"
+                    ),
+                }
+            )
+        elif border is None or candidate_is_in_table(
+            note["bbox"],
+            [border.to_dict()],
+        ):
             regions.append(note)
         else:
             excluded.append(
@@ -1577,6 +1728,13 @@ def _image_area_notes(
 # What a rescued read must gain over the text layer's own: a mark the drawing
 # wrote as geometry rather than as text.
 _GEOMETRY_MARKS = "×x°Ø⌀±R"
+# A nominal and its deviations, with no unrelated text: ``21+1/0`` or
+# ``22.9±1``. OCR may reveal that all of those numbers were drawn as angles
+# while flattening the exact deviation structure from the PDF text layer.
+_DEVIATION_ANGLE_RE = re.compile(
+    r"\d+(?:\.\d+)?"
+    r"(?:±\d+(?:\.\d+)?|[+-]\d+(?:\.\d+)?/[+-]?\d+(?:\.\d+)?)"
+)
 
 
 def _levelled_crop(
@@ -1827,9 +1985,19 @@ def rescue_geometry_marks(text: str, read: str) -> str | None:
         return None
     if any(mark in text for mark in _GEOMETRY_MARKS):
         return None
-    # Only a plain number may be replaced wholesale. A value that already
-    # carries a sign or a deviation pair has structure the text layer got
-    # right and the recogniser would flatten: "21+1/0" came back "21°+1°0".
+    # Only a plain number may be replaced wholesale. A deviation pair keeps
+    # the exact PDF structure, but an OCR read with the same digits may still
+    # prove that every number in it was drawn with a degree mark.
     if not re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):
+        if (
+            "°" in read
+            and exact_digits == read_digits
+            and _DEVIATION_ANGLE_RE.fullmatch(text.strip())
+        ):
+            return re.sub(
+                r"\d+(?:\.\d+)?",
+                lambda match: match.group() + "°",
+                text.strip(),
+            )
         return None
     return read
