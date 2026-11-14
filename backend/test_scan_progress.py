@@ -6,8 +6,36 @@ from typing import Any
 
 from PIL import Image
 
-from ocr_pipeline import OcrPipeline
+from ocr_pipeline import OcrPipeline, _final_scan_counts
 from page_layout import LayoutBox, LayoutPanel, PageLayout
+
+
+def test_final_scan_counts_use_only_post_consolidation_objects() -> None:
+    counts = _final_scan_counts(
+        regions=[
+            {"text": "25", "recognized": True},
+            # Replacement regions such as a grouped value or note may not
+            # carry the original OCR record's explicit flag.
+            {"text": "4.15 / 3.97"},
+        ],
+        review_candidates=[{"text": "", "recognized": False}],
+        candidate_outcomes=[
+            # These stale pre-consolidation states must not be counted again.
+            {"state": "eligible", "recognized": True},
+            {"state": "review", "recognized": True},
+            {"state": "excluded", "recognized": True},
+            {"state": "excluded", "recognized": False},
+        ],
+    )
+
+    assert counts == {
+        "detected_count": 5,
+        "recognized_count": 3,
+        "eligible_count": 2,
+        "excluded_count": 2,
+        "review_count": 1,
+        "unread_count": 2,
+    }
 
 
 def test_segment_reports_real_stages_and_recognition_counters() -> None:

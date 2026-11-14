@@ -57,3 +57,27 @@ def test_every_value_leaving_the_api_carries_its_rule_label():
     assert out["label_completeness"] == {"values": 6, "labelled": 6, "filled_by_check": 3}
     # The input was not modified in place.
     assert "label" not in seg["regions"][0]
+
+
+def test_scan_result_never_serializes_negative_unread_count() -> None:
+    from main import _serialize_segment_result
+
+    out = _serialize_segment_result(
+        {
+            "coordinate_space": "page",
+            "regions": [{"text": "25", "recognized": True}],
+            "review_candidates": [],
+            "candidate_outcomes": [],
+            "detected_count": 1,
+            # Legacy jobs could retain a pre-deduplication recognized total.
+            "recognized_count": 3,
+            "unread_count": -2,
+            "eligible_count": 1,
+            "excluded_count": 0,
+            "review_count": 0,
+        }
+    )
+
+    assert out["detected_count"] == 1
+    assert out["recognized_count"] == 1
+    assert out["unread_count"] == 0
