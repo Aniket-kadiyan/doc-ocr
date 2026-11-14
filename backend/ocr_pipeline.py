@@ -6947,9 +6947,14 @@ class OcrPipeline:
             operation_label="Stacked-value splitting",
             candidate_count=split_total,
         )
+        from page_scan import is_limit_pair
+
         for split_index, region in enumerate(regions, start=1):
             text = str(region.get("text") or "")
             box = region["bbox"]
+            if is_limit_pair(text):
+                split_regions.append(region)
+                continue
             tall = box["height"] >= 1.6 * _PAGE_SPLIT_LINE_RATIO * max(
                 box["width"], 1.0
             )
@@ -7328,6 +7333,46 @@ class OcrPipeline:
         )
         regions = dedupe_regions(regions)
         detected_count -= before_dedupe - len(regions)
+
+        # The detector boxes lines, not complete callouts: a limit pair such
+        # as "4.15" over "3.97", or a value over its "MAX", is one
+        # inspection requirement rather than two balloons.
+        from page_scan import (
+            drop_cross_direction_fragments,
+            group_stacked_values,
+        )
+
+        regions, absorbed = group_stacked_values(
+            regions,
+            [
+                (str(outcome.get("text") or ""), outcome["bbox"])
+                for outcome in candidate_outcomes
+                if outcome.get("state") == "excluded" and outcome.get("bbox")
+            ],
+        )
+        detected_count -= absorbed
+
+        regions, review_candidates, crossed = drop_cross_direction_fragments(
+            regions,
+            review_candidates,
+        )
+        detected_count -= crossed
+
+        for region in regions:
+            if not region.get("grouped"):
+                continue
+            feature = classify_feature(
+                str(region.get("text") or ""),
+                symbols=(
+                    region.get("symbols_detected")
+                    if isinstance(region.get("symbols_detected"), dict)
+                    else None
+                ),
+            )
+            region["category"] = feature.category
+            region["subtype"] = feature.subtype
+            region["label"] = feature.label
+
         report(
             stage="deduplicating",
             message=f"Prepared {len(regions)} unique results",
