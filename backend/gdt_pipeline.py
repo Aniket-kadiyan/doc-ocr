@@ -69,6 +69,7 @@ from gdt_detect import (
     find_glyph_boxes,
     merge_detections,
 )
+from run_report import step
 
 
 #: Shortest page edge, in pixels, below which the page is enlarged before it
@@ -446,16 +447,18 @@ def analyze_page(
     inverse = None
     skew = None
     progress("Checking GD&T page alignment", 0, 1)
-    if deskew:
-        try:
-            skew = estimate_page_skew(image)
-            if skew is not None:
-                work, inverse = deskew_page(image, skew)
-        except Exception as exc:  # noqa: BLE001 - never fail a page over this
-            result.errors.append(
-                {"stage": "deskew", "error": f"{type(exc).__name__}: {exc}"}
-            )
-            work, inverse, skew = image, None, None
+    with step("Deskew estimate", "Estimate and undo page skew before measuring frames"):
+        if deskew:
+            try:
+                skew = estimate_page_skew(image)
+                if skew is not None:
+                    work, inverse = deskew_page(image, skew)
+            except Exception as exc:  # noqa: BLE001 - never fail a page over this
+                result.errors.append(
+                    {"stage": "deskew", "error": f"{type(exc).__name__}: {exc}"}
+                )
+                work, inverse, skew = image, None, None
+
     progress("Checked GD&T page alignment", 1, 1)
     result.provenance["deskew_deg"] = round(skew, 3) if skew is not None else None
 
@@ -516,44 +519,45 @@ def analyze_page(
     )
     upright: list[tuple[tuple[float, float, float, float], bool]] = []
     turned: list[tuple[tuple[float, float, float, float], bool]] = []
-    for index, (tx, ty, tw, th) in enumerate(frame_tiles):
-        progress(
-            f"Detecting GD&T frames in tile {index + 1} of {frame_tile_total}",
-            index,
-            frame_tile_total,
-        )
-        inner = (tx > 0, ty > 0, tx + tw < work.width, ty + th < work.height)
-        try:
-            binary = fcf_parse.frame_binary(work.crop((tx, ty, tx + tw, ty + th)))
-            for box in fcf_parse.find_frames_in(
-                binary, config=cfg, reference_edge=reference_edge
-            ):
-                upright.append(_tile_proposal(box, tx, ty, tw, th, inner))
-            if read_vertical:
-                for box in fcf_parse.find_frames_in(
-                    _np.rot90(binary, k=-1).copy(),
-                    config=cfg,
-                    reference_edge=reference_edge,
-                ):
-                    box = _turn_back(box, th)
-                    upright_box, cut = _tile_proposal(box, tx, ty, tw, th, inner)
-                    turned.append((_turn(upright_box, work.height), cut))
-        except Exception as exc:  # noqa: BLE001
-            result.errors.append(
-                {
-                    "stage": "feature_control_frames",
-                    "tile": index,
-                    "tile_box": [tx, ty, tw, th],
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(limit=3),
-                }
+    with step("Find frame proposals", "Search each tile (upright and turned) for ruled frame boxes") as found:
+        for index, (tx, ty, tw, th) in enumerate(frame_tiles):
+            progress(
+                f"Detecting GD&T frames in tile {index + 1} of {frame_tile_total}",
+                index,
+                frame_tile_total,
             )
-        progress(
-            f"Completed GD&T frame tile {index + 1} of {frame_tile_total}",
-            index + 1,
-            frame_tile_total,
-        )
-
+            inner = (tx > 0, ty > 0, tx + tw < work.width, ty + th < work.height)
+            try:
+                binary = fcf_parse.frame_binary(work.crop((tx, ty, tx + tw, ty + th)))
+                for box in fcf_parse.find_frames_in(
+                    binary, config=cfg, reference_edge=reference_edge
+                ):
+                    upright.append(_tile_proposal(box, tx, ty, tw, th, inner))
+                if read_vertical:
+                    for box in fcf_parse.find_frames_in(
+                        _np.rot90(binary, k=-1).copy(),
+                        config=cfg,
+                        reference_edge=reference_edge,
+                    ):
+                        box = _turn_back(box, th)
+                        upright_box, cut = _tile_proposal(box, tx, ty, tw, th, inner)
+                        turned.append((_turn(upright_box, work.height), cut))
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(
+                    {
+                        "stage": "feature_control_frames",
+                        "tile": index,
+                        "tile_box": [tx, ty, tw, th],
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "traceback": traceback.format_exc(limit=3),
+                    }
+                )
+            progress(
+                f"Completed GD&T frame tile {index + 1} of {frame_tile_total}",
+                index + 1,
+                frame_tile_total,
+            )
+        found.count(tiles=frame_tile_total, upright=len(upright), turned=len(turned))
     for page_image, proposals, rotation in (
         (work, upright, 0),
         (work.transpose(Image.Transpose.ROTATE_270) if turned else None, turned, -90),
@@ -561,14 +565,16 @@ def analyze_page(
         if not proposals:
             continue
         try:
-            frames = fcf_parse.parse_boxes(
-                page_image,
-                _whole_proposals(proposals),
-                ocr_fn=ocr_fn,
-                page=page,
-                config=cfg,
-                reference_edge=reference_edge,
-            )
+            with step("Read frames", "Parse each proposed frame's symbol, tolerance and datums") as read:
+                frames = fcf_parse.parse_boxes(
+                    page_image,
+                    _whole_proposals(proposals),
+                    ocr_fn=ocr_fn,
+                    page=page,
+                    config=cfg,
+                    reference_edge=reference_edge,
+                )
+                read.count(proposals=len(proposals), frames=len(frames))
         except Exception as exc:  # noqa: BLE001
             result.errors.append(
                 {
@@ -628,9 +634,12 @@ def analyze_page(
         frame_tile_total,
         frame_tile_total,
     )
-    result.frames = fcf_parse.drop_nested_frames(
-        _dedupe_frames(result.frames, config=cfg)
-    )
+    with step("Consolidate frames", "Drop seam duplicates and frames nested in other frames") as merged:
+        before = len(result.frames)
+        result.frames = fcf_parse.drop_nested_frames(
+            _dedupe_frames(result.frames, config=cfg)
+        )
+        merged.count(before=before, after=len(result.frames))
     progress(
         f"Prepared {len(result.frames)} GD&T feature control frames",
         frame_tile_total,
@@ -829,22 +838,17 @@ def _dedupe_frames(
 SCAN_REGION_TYPE = "GD&T"
 
 
-def _written_tolerance(
-    field: fcf_parse.Field,
-    *,
-    modifier_follows: bool,
-) -> str:
-    """Return the tolerance with the decimals printed on the drawing.
+def _written_tolerance(field: fcf_parse.Field, *, modifier_follows: bool) -> str:
+    """The tolerance with the decimals the drawing printed: "0.20", not "0.2".
 
-    Parsed numeric values are floats, so their trailing zeros are lost. The
-    raw compartment text retains the stated precision and is used whenever it
-    represents the same value. When a circled modifier follows, its ring can
-    be mistaken for a trailing zero, so the normalized value is safer.
+    The parsed value is a float, which drops trailing zeros an inspector reads
+    as the required precision. The compartment's raw text still holds the
+    number as written, so it is used whenever it agrees with the value --
+    except when a circled modifier follows it: the ring of a Ⓤ reads as one
+    more zero, and 3015-100-2232F's "0.2 Ⓤ" came back as "0.20".
     """
-
     if modifier_follows:
         return f"{field.value:g}"
-
     for number in re.findall(r"\d+(?:[.,]\d+)?", field.raw or ""):
         written = number.replace(",", ".")
         lost = re.fullmatch(r"0(\d+)", written)
@@ -855,7 +859,6 @@ def _written_tolerance(
                 return written
         except ValueError:
             continue
-
     return f"{field.value:g}"
 
 
@@ -1237,8 +1240,8 @@ def analyze_document(
 #: Prose this close to a frame (in frame heights, above or below) and sharing
 #: its column is taken to annotate it: "OUTWARDS" under a profile frame.
 ADJACENT_TEXT_GAP_FRAMES = 1.0
-# A proposed frame this nearly inside one line of text is the closed counter
-# of a letter rather than a feature-control frame drawn around text.
+#: A "frame" this nearly inside one line of text is the closed counter of a
+#: letter, not a frame drawn around text.
 GLYPH_FRAME_INSIDE_SHARE = 0.95
 
 
@@ -1246,55 +1249,42 @@ def drop_frames_inside_text(
     frame_regions: list[dict[str, Any]],
     text_boxes: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Remove frame proposals that are actually glyphs inside text lines.
-
-    A real frame encloses its text or reaches beyond the text detector's box.
-    The ruled-shape detector can also identify the closed bowl of a letter
-    such as P, O or D; those proposals lie almost completely inside a taller
-    text-line box and contain no text box of their own.
     """
+    Remove frames that are a glyph inside a line of text.
 
+    A real frame is drawn around its text, so it encloses what the text
+    detector boxed or at least reaches past it. The rule finder also boxes the
+    closed bowl of a P, O or D: on 2H-G772 thirteen "frames" (``⌖ 1``,
+    ``? 2`` …) lay wholly inside words like PROPERTY, SHOULD and OPTIONAL,
+    each shorter than the line around it. Every real frame there either held
+    a text box or stuck out of all of them.
+    """
     kept: list[dict[str, Any]] = []
     for region in frame_regions:
         box = region["bbox"]
-        fx = float(box["x"])
-        fy = float(box["y"])
-        fw = float(box["width"])
-        fh = float(box["height"])
+        fx, fy = float(box["x"]), float(box["y"])
+        fw, fh = float(box["width"]), float(box["height"])
         frame_xywh = (fx, fy, fw, fh)
-
         encloses_text = any(
             _mostly_inside(
-                (
-                    float(text["x"]),
-                    float(text["y"]),
-                    float(text["width"]),
-                    float(text["height"]),
-                ),
+                (float(t["x"]), float(t["y"]), float(t["width"]), float(t["height"])),
                 frame_xywh,
                 share=0.8,
             )
-            for text in text_boxes
+            for t in text_boxes
         )
         inside_taller_line = any(
-            float(text["height"]) > fh
+            float(t["height"]) > fh
             and _mostly_inside(
                 frame_xywh,
-                (
-                    float(text["x"]),
-                    float(text["y"]),
-                    float(text["width"]),
-                    float(text["height"]),
-                ),
+                (float(t["x"]), float(t["y"]), float(t["width"]), float(t["height"])),
                 share=GLYPH_FRAME_INSIDE_SHARE,
             )
-            for text in text_boxes
+            for t in text_boxes
         )
-
         if inside_taller_line and not encloses_text:
             continue
         kept.append(region)
-
     return kept
 
 
