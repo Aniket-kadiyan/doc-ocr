@@ -1121,7 +1121,7 @@ export function DrawingViewer() {
       if (bbox.width < MIN_BOX || bbox.height < MIN_BOX) return;
       const source = sourceCanvasRef.current;
       if (!source) {
-        setIsDrawingValue(false);
+        setSelectionError("No drawing is available for value detection.");
         return;
       }
 
@@ -1162,10 +1162,9 @@ export function DrawingViewer() {
         });
       } finally {
         setIsProcessing(false);
-        setIsDrawingValue(false);
       }
     },
-    [currentPage, setPending, setIsDrawingValue, setIsProcessing]
+    [currentPage, setPending, setIsProcessing]
   );
 
   const runAutoBalloon = useCallback(
@@ -2152,6 +2151,27 @@ export function DrawingViewer() {
   const drawingActive =
     isDrawingValue || isSegmenting || activeMetadataField !== null;
 
+  const activateCursor = useCallback(() => {
+    drawStartRef.current = null;
+    currentBoxRef.current = null;
+    setCurrentBox(null);
+    setSelectedScanSections([]);
+    setActiveMetadataField(null);
+    setIsDrawingValue(false);
+    setIsSegmenting(false);
+  }, [setIsDrawingValue, setIsSegmenting]);
+
+  const activateDrawValue = useCallback(() => {
+    drawStartRef.current = null;
+    currentBoxRef.current = null;
+    setCurrentBox(null);
+    setSelectionError(null);
+    setSelectedScanSections([]);
+    setActiveMetadataField(null);
+    setIsSegmenting(false);
+    setIsDrawingValue(true);
+  }, [setIsDrawingValue, setIsSegmenting]);
+
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     const stage = e.target.getStage();
     if (!drawingActive) {
@@ -2268,16 +2288,9 @@ export function DrawingViewer() {
       {isDrawingValue && (
         <div className="flex items-center justify-center gap-3 bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
           <span>
-            ✏️ Drag a box around one value. OCR will read it and open the
-            value/tolerance confirmation.
+            ✏️ Draw Value is active. Drag a box around each value. Choose the
+            Cursor tool when you are finished.
           </span>
-          <button
-            type="button"
-            onClick={() => setIsDrawingValue(false)}
-            className="rounded border border-white/60 px-2 py-0.5 font-medium text-white hover:bg-white/20"
-          >
-            Cancel
-          </button>
         </div>
       )}
       {activeMetadataField && (
@@ -2340,6 +2353,7 @@ export function DrawingViewer() {
         isSelectingScanArea={isSegmenting}
         isScanRunning={scanProgress !== null}
         hasProgressDetails={scanProgress !== null || scanSummary !== null}
+        isCursorMode={!drawingActive}
         isDrawingValue={isDrawingValue}
         isProcessing={isProcessing || isRotatingPage}
         isRotatingPage={isRotatingPage}
@@ -2364,13 +2378,8 @@ export function DrawingViewer() {
         findingReferencePoints={findingReferencePoints}
         onFindGdtSymbols={() => void findGdtSymbols()}
         findingGdtSymbols={findingGdtSymbols}
-        onToggleDrawValue={() => {
-          setSelectionError(null);
-          setSelectedScanSections([]);
-          setActiveMetadataField(null);
-          setIsSegmenting(false);
-          setIsDrawingValue(!isDrawingValue);
-        }}
+        onActivateCursor={activateCursor}
+        onActivateDrawValue={activateDrawValue}
         onToggleBalloons={toggleBalloons}
         onSetOkBalloonsVisible={setOkBalloonVisibility}
         onSetReviewBalloonsVisible={setReviewBalloonVisibility}

@@ -21,6 +21,7 @@ interface ToolbarProps {
   isSelectingScanArea: boolean;
   isScanRunning: boolean;
   hasProgressDetails: boolean;
+  isCursorMode: boolean;
   isDrawingValue: boolean;
   isProcessing: boolean;
   isRotatingPage: boolean;
@@ -39,7 +40,8 @@ interface ToolbarProps {
   findingReferencePoints: boolean;
   onFindGdtSymbols: () => void;
   findingGdtSymbols: boolean;
-  onToggleDrawValue: () => void;
+  onActivateCursor: () => void;
+  onActivateDrawValue: () => void;
   onToggleBalloons: () => void;
   onSetOkBalloonsVisible: (visible: boolean) => void;
   onSetReviewBalloonsVisible: (visible: boolean) => void;
@@ -60,6 +62,7 @@ interface ToolbarProps {
 
 type IconName =
   | "menu"
+  | "cursor"
   | "new"
   | "load"
   | "save"
@@ -91,6 +94,13 @@ function ActionIcon({ name }: { name: IconName }) {
           <path d="M4 6h16" />
           <path d="M4 12h16" />
           <path d="M4 18h16" />
+        </>
+      )}
+
+      {name === "cursor" && (
+        <>
+          <path d="M5 3.5 18.5 12 12 13.5 9 20.5z" />
+          <path d="m12 13.5 4 5" />
         </>
       )}
 
@@ -240,6 +250,7 @@ export function Toolbar({
   isSelectingScanArea,
   isScanRunning,
   hasProgressDetails,
+  isCursorMode,
   isDrawingValue,
   isProcessing,
   isRotatingPage,
@@ -258,7 +269,8 @@ export function Toolbar({
   findingReferencePoints,
   onFindGdtSymbols,
   findingGdtSymbols,
-  onToggleDrawValue,
+  onActivateCursor,
+  onActivateDrawValue,
   onToggleBalloons,
   onSetOkBalloonsVisible,
   onSetReviewBalloonsVisible,
@@ -586,6 +598,23 @@ export function Toolbar({
 
           <button
             type="button"
+            onClick={onActivateCursor}
+            title="Cursor — normal canvas interaction"
+            aria-label="Activate normal canvas cursor"
+            aria-pressed={isCursorMode}
+            className={`qtracx-topbar-square ${
+              isCursorMode
+                ? "border-blue-200 bg-blue-50 text-blue-700"
+                : ""
+            }`}
+          >
+            <ActionIcon name="cursor" />
+          </button>
+
+          <ToolbarDivider />
+
+          <button
+            type="button"
             onClick={onZoomOut}
             title="Zoom out"
             className="qtracx-topbar-square"
@@ -804,13 +833,9 @@ export function Toolbar({
 
           <div className="flex min-w-0 items-center gap-2">
             {isDrawingValue && (
-              <button
-                type="button"
-                onClick={onToggleDrawValue}
-                className="whitespace-nowrap rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-              >
-                Cancel manual balloon
-              </button>
+              <span className="whitespace-nowrap rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800">
+                Draw Value active
+              </span>
             )}
 
             {isSelectingScanArea && (
@@ -937,16 +962,12 @@ export function Toolbar({
             </div>
 
             <DrawerAction
-              label={
-                isDrawingValue
-                  ? "Cancel Manual Balloon"
-                  : "Manual Balloon"
-              }
+              label="Manual Balloon"
               icon="manual"
               expanded={drawerExpanded}
               active={isDrawingValue}
               disabled={isProcessing || !canSaveProject}
-              onClick={onToggleDrawValue}
+              onClick={onActivateDrawValue}
             />
 
             <div className="my-3 border-t border-slate-200" />
